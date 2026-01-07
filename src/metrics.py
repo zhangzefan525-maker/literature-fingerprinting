@@ -109,3 +109,42 @@ def get_pca_coordinates(all_blocks):
     except ValueError:
         # 如果数据为空或不足以计算PCA，返回0列表
         return [0.0] * len(all_blocks)
+    
+    
+# ---------------------------------------------------------
+# 任务 E：高频关键词提取 (Keyword Extraction)
+# ---------------------------------------------------------
+
+def get_top_keywords(text_block, n=5):
+    """
+    找出单个文本块中最具代表性的实词（关键词）。
+    输入：单个文本块字符串
+    输出：List[str] (例如 ['river', 'blood', 'dead', 'fear', 'dark'])
+    """
+    # 1. 引用必要的库（防止前面没引）
+    from nltk.corpus import stopwords
+    from collections import Counter
+    
+    # 2. 复用之前的清洗逻辑拿到单词列表
+    words = _clean_tokens(text_block)
+    
+    # 3. 获取停用词表 (确保数据已下载)
+    try:
+        stop_words = set(stopwords.words('english'))
+    except LookupError:
+        nltk.download('stopwords')
+        stop_words = set(stopwords.words('english'))
+    
+    # 4. 过滤：只保留不在停用词表里的词
+    content_words = [w for w in words if w not in stop_words]
+    
+    # 5. 统计词频
+    if not content_words:
+        return []
+        
+    counter = Counter(content_words)
+    
+    # 6. 获取频率最高的 n 个词
+    top_n = counter.most_common(n)
+    
+    return [word for word, count in top_n]
