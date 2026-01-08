@@ -13,7 +13,7 @@ echo.
 :: 启动 Streamlit
 :: 使用 8502 端口以避免之前的端口占用报错
 echo Opening browser...
-streamlit run app.py --server.port 9999
+streamlit run app.py
 
 :: 如果程序意外退出，暂停显示报错信息，而不是直接闪退
 pause
