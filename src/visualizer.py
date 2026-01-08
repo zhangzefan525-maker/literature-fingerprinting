@@ -3,6 +3,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import math
+import matplotlib
+
+# +++ 设置中文字体 +++
+try:
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+except:
+    pass
 
 def draw_heatmap(data_values, title):
     """
@@ -17,8 +25,9 @@ def draw_heatmap(data_values, title):
     """
     # 如果没有数据，返回空图
     if not data_values:
-        fig, ax = plt.subplots()
-        ax.text(0.5, 0.5, "No Data", ha='center', va='center')
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(0.5, 0.5, "无数据可用", ha='center', va='center', fontsize=12)
+        ax.set_title(title, fontsize=14)
         return fig
 
     # 1. 计算网格尺寸
@@ -42,11 +51,12 @@ def draw_heatmap(data_values, title):
     # 论文中：蓝色代表句长较长(Twain)，红色代表句长较短(London)
     sns.heatmap(matrix, ax=ax, cmap='RdBu', 
                 cbar=True,            # 显示颜色条
+                cbar_kws={'label': '指标值'},  # 颜色条标签
                 square=True,          # 每个单元格为正方形
                 xticklabels=False,    # 隐藏X轴刻度
                 yticklabels=False,    # 隐藏Y轴刻度
                 mask=np.isnan(matrix), # 遮罩 NaN 值
                 linewidths=0.5, linecolor='white') # 增加白色网格线美化
     
-    ax.set_title(title, fontsize=14)
+    ax.set_title(title, fontsize=14, fontweight='bold')
     return fig

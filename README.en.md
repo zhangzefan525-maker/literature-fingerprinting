@@ -6,24 +6,29 @@ This project aims to reproduce the "Literature Fingerprinting" visualization met
 
 We have built an interactive visual analysis system using Python and Streamlit, which successfully distinguishes the writing styles of Jack London and Mark Twain, and reproduces the key finding in the paper regarding the stylistic anomaly in *The Adventures of Huckleberry Finn*.
 
-#### Software Architecture
 
+
+#### Software Architecture
+                        
 ```plaintext
-Literature-Fingerprinting-Master/
+Literature-Fingerprinting/
 ├── data/                               # Stores experimental novel texts (.txt)
 │   ├── The call of the wild.txt        # Jack London
 │   ├── White Fang.txt                  # Jack London
 │   ├── The Adventures of Tom Sawyer.txt      # Mark Twain
-│   └── The Adventures of Huckleberry Finn.txt # Mark Twain (for special case verification)
-├── src/                                # Source code directory
+│   └── The Adventures of Huckleberry Finn.txt # Mark Twain  (for special case verification)
+├── src/                                 # Source code directory
 │   ├── __init__.py
 │   ├── data_loader.py                  # [Member A] Data loading and segmentation
 │   ├── metrics.py                      # [Member B] Metric calculation algorithms
-│   └── visualizer.py                   # [Member C] Plotting logic implementation
+│   ├── visualizer.py                   # [Member C] Plotting logic implementation
+│   └── analyzer.py                     # fingerprint analyzer mod
 ├── app.py                              # [Member C] Streamlit frontend main program
+├── debug_tool.py                       # debug tool
 ├── requirements.txt                    # Project dependency libraries
-├── start.bat                         # Windows one-click startup script
-└── README.md                           # Project description document
+├── start.bat                           # Windows one-click startup script
+├── README.md                           # Project description document (Chinese)
+└── README.en.md                        # Project description document (English)
 ```
 
 #### Installation Tutorial
