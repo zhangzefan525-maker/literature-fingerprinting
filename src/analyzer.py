@@ -234,9 +234,7 @@ class FingerprintAnalyzer:
             return "暂无数据进行分析。"
         
         report_lines = []
-        report_lines.append("=" * 60)
         report_lines.append("📊 文学指纹分析报告")
-        report_lines.append("=" * 60)
         report_lines.append(f"分析指标: {metric_name}")
         report_lines.append(f"分析书籍: {len(all_books_results)} 本")
         report_lines.append("")
@@ -295,7 +293,6 @@ class FingerprintAnalyzer:
                     report_lines.append("   • 非标准语法结构")
                     break
         
-        report_lines.append("=" * 60)
         report_lines.append(f"分析完成: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
         
         return "\n".join(report_lines)
