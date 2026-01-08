@@ -1,4 +1,5 @@
 # 成员C负责写的主逻辑，调用A和B的函数
+# 修改者：成员B (集成了 Task E 关键词提取功能)
 import streamlit as st
 import os
 import tempfile
@@ -6,11 +7,14 @@ import nltk
 
 # --- 自动处理 NLTK 依赖 ---
 # 确保分词和停用词数据包就绪
-for res in ['tokenizers/punkt', 'corpora/stopwords']:
+for res in ['tokenizers/punkt', 'corpora/stopwords', 'tokenizers/punkt_tab']:
     try:
         nltk.data.find(res)
     except LookupError:
-        nltk.download(res.split('/')[-1])
+        try:
+            nltk.download(res.split('/')[-1])
+        except:
+            pass # 防止网络问题卡死
 
 # --- 导入项目模块 ---
 from src.data_loader import load_clean_text, get_blocks
@@ -18,7 +22,8 @@ from src.metrics import (
     calc_sentence_length, 
     calc_simpsons_index, 
     calc_hapax_legomena, 
-    get_pca_coordinates
+    get_pca_coordinates,
+    get_top_keywords  
 )
 from src.visualizer import draw_heatmap
 
@@ -118,8 +123,19 @@ def main():
                     with col_right:
                         st.subheader("🔍 Detailed Block Inspector")
                         selected_idx = st.slider(f"Select Block Index", 0, len(data['blocks'])-1, 0)
+                        
+                        # 获取当前选中的文本块
+                        current_block_text = data['blocks'][selected_idx]
+
                         st.metric(label="Metric Value", value=f"{data['values'][selected_idx]:.4f}")
-                        st.text_area("Original Text Snippet", data['blocks'][selected_idx][:1000] + "...", height=450)
+
+                        # --- Task E: 关键词显示 ---
+                        st.markdown("#### 🔑 High-Frequency Keywords (Task E)")
+                        keywords = get_top_keywords(current_block_text, n=5)
+                        st.success(" | ".join(keywords))
+                        # ----------------------------------
+
+                        st.text_area("Original Text Snippet", current_block_text[:1000] + "...", height=400)
 
                 # 情况 2: 上传了多本书 -> 实现并排对比模式
                 else:
@@ -140,14 +156,24 @@ def main():
                     inspect_data = all_books_results[target_book]
                     selected_idx = st.slider(f"Select Block Index for {target_book}", 0, len(inspect_data['blocks'])-1, 0)
                     
+                    # 获取当前选中的文本块
+                    current_block_text = inspect_data['blocks'][selected_idx]
+
                     col_m1, col_m2 = st.columns(2)
                     col_m1.metric(label="Metric Value", value=f"{inspect_data['values'][selected_idx]:.4f}")
                     col_m2.info(f"Currently inspecting: {target_book}")
 
-                    st.text_area("Original Text Snippet", inspect_data['blocks'][selected_idx][:1000] + "...", height=300)
+                    # --- Task E: 关键词显示 ---
+                    st.markdown("#### 🔑 High-Frequency Keywords")
+                    keywords = get_top_keywords(current_block_text, n=5)
+                    st.success(" | ".join(keywords))
+                    # ----------------------------------
+
+                    st.text_area("Original Text Snippet", current_block_text[:1000] + "...", height=300)
 
         except Exception as e:
             st.error(f"An error occurred: {e}")
+            st.warning("提示：如果遇到 NLTK 错误，请尝试重新运行程序或检查网络。")
             
     else:
         st.info("👈 Please upload one or more text files from the sidebar to start comparison.")
