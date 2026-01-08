@@ -5,10 +5,19 @@
 
 我们利用 Python 和 Streamlit 搭建了一个交互式的可视分析系统，成功区分了 Jack London 和 Mark Twain 的写作风格，并复现了论文中关于《哈克贝利・费恩历险记》（*The Adventures of Huckleberry Finn*）风格异常的关键发现。
 
+我们成功实现了：
+
+多维度指标分析：平均句长、Simpson指数、Hapax Legomena、功能词PCA
+
+交互式可视化：实时调整参数、块级详细查看、多书对比
+
+深度分析功能：风格分类、异常检测、相似性比较
+
+美观的Web界面：使用Streamlit构建，支持响应式设计
+
 #### 软件架构
 
-```plaintext
-Literature-Fingerprinting-Master/
+Literature-Fingerprinting/
 ├── data/                               # 存放实验用小说文本 (.txt)
 │   ├── The call of the wild.txt        # Jack London
 │   ├── White Fang.txt                  # Jack London
@@ -18,12 +27,14 @@ Literature-Fingerprinting-Master/
 │   ├── __init__.py
 │   ├── data_loader.py                  # [成员A] 数据加载与切分
 │   ├── metrics.py                      # [成员B] 指标计算算法
-│   └── visualizer.py                   # [成员C] 绘图逻辑实现
-├── app.py                              # [成员C] Streamlit 前端主程序
+│   ├── visualizer.py                   # [成员C] 绘图逻辑实现
+│   └── analyzer.py                     # [新增] 指纹分析模块
+├── app.py                              # [成员C] Streamlit前端主程序
+├── debug_tool.py                       # 调试工具
 ├── requirements.txt                    # 项目依赖库
-├── 启动程序.bat                         # Windows 一键启动脚本
-└── README.md                           # 项目说明文档
-```
+├── start.bat                           # Windows一键启动脚本
+├── README.md                           # 项目说明文档（中文）
+└── README.en.md                        # 项目说明文档（英文）
 
 
 #### 安装教程

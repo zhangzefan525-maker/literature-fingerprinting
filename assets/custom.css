@@ -1,0 +1,240 @@
+/* assets/custom.css */
+/* 全局样式优化 */
+
+/* 1. 字体优化 */
+* {
+    font-family: 'Segoe UI', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* 2. 主标题美化 */
+h1 {
+    color: #2c3e50;
+    font-weight: 700;
+    border-bottom: 3px solid #3498db;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+/* 3. 次级标题美化 */
+h2, h3 {
+    color: #34495e;
+    font-weight: 600;
+    margin-top: 20px;
+}
+
+/* 4. Streamlit容器美化 */
+.stApp {
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+}
+
+/* 5. 侧边栏美化 */
+section[data-testid="stSidebar"] {
+    background-color: #2c3e50;
+    color: white;
+}
+
+section[data-testid="stSidebar"] .stButton button {
+    background-color: #e74c3c;
+    color: white;
+    border-radius: 8px;
+    font-weight: bold;
+    border: none;
+    transition: all 0.3s ease;
+}
+
+section[data-testid="stSidebar"] .stButton button:hover {
+    background-color: #c0392b;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+/* 6. 上传文件区域美化 */
+section[data-testid="stFileUploader"] {
+    background-color: rgba(255,255,255,0.1);
+    border-radius: 10px;
+    padding: 15px;
+    border: 2px dashed #3498db;
+}
+
+/* 7. 选择框和滑块美化 */
+.stSelectbox, .stSlider, .stCheckbox {
+    background-color: rgba(255,255,255,0.9);
+    border-radius: 8px;
+    padding: 10px;
+    margin: 5px 0;
+}
+
+/* 8. 卡片样式美化 */
+.stMetric {
+    background-color: white;
+    border-radius: 10px;
+    padding: 15px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    border-left: 5px solid #3498db;
+    transition: transform 0.3s ease;
+}
+
+.stMetric:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 15px rgba(0,0,0,0.2);
+}
+
+/* 9. 按钮美化 */
+.stButton button {
+    background-color: #3498db;
+    color: white;
+    border-radius: 8px;
+    border: none;
+    font-weight: bold;
+    padding: 10px 20px;
+    transition: all 0.3s ease;
+}
+
+.stButton button:hover {
+    background-color: #2980b9;
+    transform: scale(1.05);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+/* 10. 成功/警告/错误消息美化 */
+.stSuccess {
+    background-color: #d5f4e6;
+    border-left: 5px solid #2ecc71;
+    padding: 15px;
+    border-radius: 8px;
+    color: #27ae60;
+}
+
+.stWarning {
+    background-color: #fff3cd;
+    border-left: 5px solid #f39c12;
+    padding: 15px;
+    border-radius: 8px;
+    color: #d35400;
+}
+
+.stError {
+    background-color: #f8d7da;
+    border-left: 5px solid #e74c3c;
+    padding: 15px;
+    border-radius: 8px;
+    color: #c0392b;
+}
+
+.stInfo {
+    background-color: #d6eaf8;
+    border-left: 5px solid #3498db;
+    padding: 15px;
+    border-radius: 8px;
+    color: #2980b9;
+}
+
+/* 11. 文本区域美化 */
+.stTextArea textarea {
+    border-radius: 8px;
+    border: 2px solid #ddd;
+    padding: 10px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    background-color: #f8f9fa;
+}
+
+.stTextArea textarea:focus {
+    border-color: #3498db;
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
+/* 12. 标签美化 */
+label {
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 5px;
+}
+
+/* 13. 分隔线美化 */
+hr {
+    border: 0;
+    height: 2px;
+    background: linear-gradient(to right, transparent, #3498db, transparent);
+    margin: 30px 0;
+}
+
+/* 14. 展开/折叠区域美化 */
+.streamlit-expanderHeader {
+    background-color: #34495e;
+    color: white;
+    border-radius: 8px;
+    font-weight: bold;
+}
+
+.streamlit-expanderHeader:hover {
+    background-color: #2c3e50;
+}
+
+/* 15. 图表容器美化 */
+.element-container {
+    background-color: white;
+    border-radius: 10px;
+    padding: 15px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    margin: 10px 0;
+}
+
+/* 16. 列布局美化 */
+.stColumn {
+    padding: 10px;
+}
+
+/* 17. 进度条美化 */
+.stProgress .st-bd {
+    background-color: #3498db;
+}
+
+/* 18. 徽章样式 */
+.badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: bold;
+    margin-right: 5px;
+}
+
+.badge-primary {
+    background-color: #3498db;
+    color: white;
+}
+
+.badge-success {
+    background-color: #2ecc71;
+    color: white;
+}
+
+.badge-warning {
+    background-color: #f39c12;
+    color: white;
+}
+
+.badge-danger {
+    background-color: #e74c3c;
+    color: white;
+}
+
+/* 19. 代码块样式 */
+code {
+    background-color: #2c3e50;
+    color: #ecf0f1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Consolas', monospace;
+}
+
+/* 20. 响应式调整 */
+@media (max-width: 768px) {
+    .stMetric {
+        margin-bottom: 15px;
+    }
+    
+    .stColumn {
+        padding: 5px;
+    }
+}
