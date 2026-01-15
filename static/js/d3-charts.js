@@ -13,7 +13,7 @@ let currentMetric = 'sentenceLength';
 let currentBook = null;
 let comparisonMode = false;
 let smoothness = 3;
-
+let chartType = 'line';
 // 初始化
 document.addEventListener('DOMContentLoaded', function() {
     initEventListeners();
@@ -49,6 +49,23 @@ function initEventListeners() {
     
     // 导出图像
     document.getElementById('exportBtn').addEventListener('click', exportChart);
+
+    // 新增：图表类型切换监听
+    document.getElementById('chartTypeSelect').addEventListener('change', function(e) {
+        chartType = e.target.value;
+        if (realData) {
+            initChart();
+        }
+        
+        // 热力图模式下，隐藏多书对比按钮（热力图通常只看一本书）
+        const compareBtn = document.getElementById('toggleComparison');
+        if (chartType === 'heatmap') {
+            compareBtn.style.display = 'none';
+            comparisonMode = false; // 强制单书模式
+        } else {
+            compareBtn.style.display = 'block';
+        }
+    });
 }
 
 // 加载书籍列表
@@ -162,27 +179,158 @@ async function loadRealData() {
         showError('无法加载数据，请检查API服务器是否运行在 http://localhost:5000');
     }
 }
-// 初始化图表
+
 function initChart() {
     const svg = d3.select("#main-chart");
-    svg.selectAll("*").remove();
+    svg.selectAll("*").remove(); // 清空画布
+
+    if (!realData) return;
+
+    // 根据选择的类型绘制
+    if (chartType === 'heatmap') {
+        drawHeatmap(svg);
+    } else {
+        drawLineChart(svg); // 原来的绘图逻辑封装到这里
+    }
+}
+
+function drawHeatmap(svg) {
+    // 确保有选中的书
+    if (!currentBook || !realData[currentBook]) {
+        showNoDataMessage();
+        return;
+    }
+
+    const data = realData[currentBook][currentMetric] || [];
+    if (data.length === 0) return;
+
+    // --- 1. 计算网格布局 ---
+    const n = data.length;
+    // 计算列数：取平方根向上取整，让它接近正方形
+    const cols = Math.ceil(Math.sqrt(n));
+    const rows = Math.ceil(n / cols);
+
+    // --- 2. 设置尺寸 ---
+    const containerWidth = svg.node().parentNode.getBoundingClientRect().width;
+    const margin = { top: 40, right: 30, bottom: 20, left: 30 };
+    
+    // 计算每个方块的大小 (根据宽度自适应)
+    const blockSize = Math.floor((containerWidth - margin.left - margin.right) / cols);
+    const width = cols * blockSize + margin.left + margin.right;
+    const height = rows * blockSize + margin.top + margin.bottom;
+
+    // 调整 SVG 大小
+    svg.attr("viewBox", `0 0 ${width} ${height}`)
+       .style("height", height + "px"); // 强制高度适应
+
+    const g = svg.append("g")
+        .attr("transform", `translate(${margin.left},${margin.top})`);
+
+    // --- 3. 颜色比例尺 (RdBu) ---
+    // 提取所有值来确定最大最小值
+    const values = data.map(d => d.value);
+    const extent = d3.extent(values);
+    
+    // 使用 Red-White-Blue 插值器 (类似于 Seaborn 的 RdBu)
+    // 注意：d3.interpolateRdBu 通常 0 是红，1 是蓝。
+    // 如果想要 低值=红，高值=蓝，直接映射即可。
+    const colorScale = d3.scaleSequential()
+        .interpolator(d3.interpolateRdBu)
+        .domain([extent[0], extent[1]]); // domain 对应 min -> max
+
+    // --- 4. 绘制方块 ---
+    g.selectAll("rect")
+        .data(data)
+        .enter()
+        .append("rect")
+        .attr("class", "heatmap-rect")
+        .attr("x", (d, i) => (i % cols) * blockSize)
+        .attr("y", (d, i) => Math.floor(i / cols) * blockSize)
+        .attr("width", blockSize)
+        .attr("height", blockSize)
+        .attr("fill", d => colorScale(d.value))
+        .on("mouseover", function(event, d) {
+            // 鼠标悬停变色 (CSS处理了边框，这里处理Tooltip)
+            showTooltip(event, d, currentBook);
+        })
+        .on("mouseout", function() {
+            hideTooltip();
+        })
+        .on("click", function(event, d) {
+            showDetail(d, currentBook);
+        });
+
+    // --- 5. 添加标题 ---
+    g.append("text")
+        .attr("x", (width - margin.left - margin.right) / 2)
+        .attr("y", -15)
+        .attr("text-anchor", "middle")
+        .style("font-size", "16px")
+        .style("font-weight", "bold")
+        .style("fill", "#2c3e50")
+        .text(`${currentBook} - ${getMetricLabel(currentMetric)} (指纹图)`);
+        
+    // --- 6. 简单的图例 (Gradient Bar) ---
+    const legendWidth = 200;
+    const legendHeight = 10;
+    
+    // 创建线性渐变定义
+    const defs = svg.append("defs");
+    const linearGradient = defs.append("linearGradient")
+        .attr("id", "linear-gradient");
+    
+    // 渐变色停止点
+    linearGradient.selectAll("stop")
+        .data([
+            {offset: "0%", color: colorScale(extent[0])},
+            {offset: "50%", color: colorScale((extent[0]+extent[1])/2)},
+            {offset: "100%", color: colorScale(extent[1])}
+        ])
+        .enter().append("stop")
+        .attr("offset", d => d.offset)
+        .attr("stop-color", d => d.color);
+
+    // 绘制图例矩形
+    const legendG = g.append("g")
+        .attr("transform", `translate(${(width - margin.left - margin.right)/2 - legendWidth/2}, ${rows * blockSize + 10})`);
+        
+    legendG.append("rect")
+        .attr("width", legendWidth)
+        .attr("height", legendHeight)
+        .style("fill", "url(#linear-gradient)");
+        
+    // 图例文本 (Min / Max)
+    legendG.append("text")
+        .attr("x", -10)
+        .attr("y", 10)
+        .style("text-anchor", "end")
+        .style("font-size", "10px")
+        .text(extent[0].toFixed(2));
+        
+    legendG.append("text")
+        .attr("x", legendWidth + 10)
+        .attr("y", 10)
+        .style("text-anchor", "start")
+        .style("font-size", "10px")
+        .text(extent[1].toFixed(2));
+}
+
+// 初始化图表
+function drawLineChart(svg) {
     
     // 获取当前数据
-    let chartData;
+      let chartData;
     if (comparisonMode) {
-        // 多书对比模式
         chartData = Object.keys(realData).map(book => ({
             book: book,
             values: realData[book][currentMetric] || []
         })).filter(d => d.values.length > 0);
     } else if (currentBook && realData[currentBook]) {
-        // 单书模式
         chartData = [{
             book: currentBook,
             values: realData[currentBook][currentMetric] || []
         }];
     } else {
-        // 没有数据
         showNoDataMessage();
         return;
     }
@@ -317,7 +465,7 @@ function initChart() {
     });
     
     // 更新图例
-    updateLegend(chartData.map(d => d.book), colorScale);
+  const legend = document.getElementById('legend');
 }
 
 // 工具函数

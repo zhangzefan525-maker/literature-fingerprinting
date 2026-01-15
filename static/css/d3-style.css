@@ -218,3 +218,18 @@ button:hover {
     margin-bottom: 20px;
     cursor: pointer;
 }
+
+/* 添加到 static/css/d3-style.css 末尾 */
+
+.heatmap-rect {
+    stroke: white;
+    stroke-width: 1px;
+    transition: all 0.2s;
+    cursor: pointer;
+}
+
+.heatmap-rect:hover {
+    stroke: #f1c40f; /* 悬停时边框变黄 */
+    stroke-width: 2px;
+    z-index: 10;
+}
