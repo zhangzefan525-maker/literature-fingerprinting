@@ -233,3 +233,54 @@ button:hover {
     stroke-width: 2px;
     z-index: 10;
 }
+
+
+/* --- 修复样式 --- */
+
+/* 确保图表容器固定，防止被子元素撑大 */
+.dash-chart-body {
+    flex: 1;
+    width: 100%;
+    height: 100%;       /* 强制占满父容器 */
+    min-height: 0;      /* Flexbox 嵌套滚动的关键 */
+    position: relative;
+    overflow: hidden;   /* 防止 SVG 溢出 */
+}
+
+/* 坐标轴文字优化 */
+.axis text {
+    font-size: 10px;
+    fill: #666;
+}
+
+/* 增加底部空间给旋转的文字 */
+.dash-card {
+    padding-bottom: 20px; 
+}
+
+/* --- 在 style 标签内添加 --- */
+
+.sort-control {
+    float: right;
+    font-size: 11px;
+    font-weight: normal;
+    color: #666;
+    background: #f1f2f6;
+    padding: 2px 8px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.sort-control:hover {
+    background: #e1e2e6;
+    color: #3498db;
+}
+
+.sort-control i {
+    font-size: 10px;
+}
