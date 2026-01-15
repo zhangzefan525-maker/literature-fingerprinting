@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文印 - 文学指纹交互分析</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <link rel="stylesheet" href="static/css/d3-style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>文印 - 文学指纹交互分析</h1>
+            <p>基于 Python 计算与 D3.js 可视化的多维度文本特征分析系统</p>
+        </div>
+        
+        <div class="book-selector" id="bookSelector">
+            <!-- 书籍选择按钮将通过JS动态生成 -->
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label>分析指标：</label>
+                <select id="metricSelect">
+                    <option value="sentenceLength">平均句长</option>
+                    <option value="simpsonIndex">Simpson指数</option>
+                    <option value="hapaxLegomena">Hapax Legomena</option>
+                    <option value="functionWords">功能词PCA</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label>平滑度：</label>
+                <input type="range" id="smoothness" min="1" max="10" value="3">
+            </div>
+            
+            <div class="control-group">
+                <button id="loadRealData">加载真实数据</button>
+                <button id="toggleView">切换视图</button>
+                <button id="exportBtn">导出图像</button>
+            </div>
+        </div>
+        
+        <div class="comparison-mode" id="toggleComparison">
+            🆚 点击切换到多书对比模式
+        </div>
+        
+        <div class="visualization-container">
+            <div id="chart-container">
+                <svg id="main-chart" width="100%" height="400"></svg>
+            </div>
+            
+            <div class="detail-panel" id="detailPanel">
+                <h3>📊 数据详情</h3>
+                <p>请先加载数据，然后点击或悬停图表中的点查看详细信息</p>
+            </div>
+        </div>
+        
+        <div class="legend" id="legend">
+            <!-- 图例将通过JS动态生成 -->
+        </div>
+        
+        <div class="footer">
+            <p>📚 基于 Literature Fingerprinting 理论 | 🔬 可视语言与信息可视化实验</p>
+            <p>© 2024 文印分析系统 | 技术支持: Python, Flask, D3.js</p>
+            <p>数据源: http://localhost:5000/api/fingerprint-data</p>
+        </div>
+    </div>
+
+    <script src="static/js/d3-charts.js"></script>
+</body>
+</html>

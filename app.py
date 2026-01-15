@@ -33,6 +33,29 @@ from src.metrics import (
 from src.visualizer import draw_heatmap
 from src.analyzer import FingerprintAnalyzer
 
+import streamlit as st
+import streamlit.components.v1 as components
+
+def show_d3_visualization():
+    # 方法1：直接嵌入代码
+    html_code = """
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    ...（您的完整HTML代码）...
+    </html>
+    """
+    components.html(html_code, height=800, scrolling=True)
+    
+    # 或方法2：读取外部HTML文件
+    # with open("d3_visualization.html", "r", encoding="utf-8") as f:
+    #     html_content = f.read()
+    # components.html(html_content, height=800, scrolling=True)
+
+# 在合适的地方调用
+if st.sidebar.checkbox("📊 显示D3.js交互图表"):
+    st.markdown("## 🔬 D3.js交互式可视化分析")
+    show_d3_visualization()
+
 # --- 自定义CSS样式 ---
 def load_custom_css():
     """加载自定义CSS样式"""

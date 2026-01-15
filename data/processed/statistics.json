@@ -1,0 +1,29 @@
+{
+  "totalBooks": 4,
+  "books": {
+    "The Adventures of Huckleberry Finn": {
+      "totalBlocks": 102,
+      "totalWords": 1020000,
+      "avgSentenceLength": 24.97,
+      "avgSimpsonIndex": 0.0114
+    },
+    "The Adventures of Tom Sawyer": {
+      "totalBlocks": 61,
+      "totalWords": 610000,
+      "avgSentenceLength": 19.38,
+      "avgSimpsonIndex": 0.0097
+    },
+    "The call of the wild": {
+      "totalBlocks": 22,
+      "totalWords": 220000,
+      "avgSentenceLength": 18.97,
+      "avgSimpsonIndex": 0.0124
+    },
+    "White Fang": {
+      "totalBlocks": 63,
+      "totalWords": 630000,
+      "avgSentenceLength": 15.77,
+      "avgSimpsonIndex": 0.0134
+    }
+  }
+}
