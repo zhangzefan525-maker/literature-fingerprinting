@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="static/css/d3-style.css">
     
-    <!-- 新增仪表盘样式 -->
     <style>
         /* 分隔线 */
         .section-divider {
@@ -139,13 +138,11 @@
 </head>
 <body>
     <div class="container">
-        <!-- 原有头部 -->
         <div class="header">
             <h1>文印 - 文学指纹交互分析</h1>
             <p>基于 Python 计算与 D3.js 可视化的多维度文本特征分析系统</p>
         </div>
-        
-        <!-- 原有控制区 -->
+
         <div class="book-selector" id="bookSelector"></div>
         
         <div class="controls">
@@ -211,12 +208,9 @@
             </div>
 
             <div class="dashboard-grid">
-                <!-- 左侧四个小图 -->
                 <div class="charts-area">
-                 <!-- 修改前两个 dash-card 的 h4 标签 -->
 
 <div class="dash-card">
-    <!-- 修改了这里：增加了 span id="sort-btn-mean" -->
     <h4>
         📊 均值对比
         <span class="sort-control" onclick="advCycleSort('mean')" title="点击切换：数值大小 / 书名首字母">
@@ -228,7 +222,6 @@
 </div>
 
 <div class="dash-card">
-    <!-- 修改了这里：增加了 span id="sort-btn-std" -->
     <h4>
         📉 波动性
         <span class="sort-control" onclick="advCycleSort('std')" title="点击切换：数值大小 / 书名首字母">
@@ -248,7 +241,6 @@
                     </div>
                 </div>
 
-                <!-- 右侧钻取详情 -->
                 <div class="drill-panel">
                     <h4 style="margin:0; border-bottom:1px solid #eee; padding-bottom:10px;">🔍 钻取详情</h4>
                     <div id="adv-drill-content" class="drill-content">
@@ -263,15 +255,9 @@
             <p>© 2026 文印分析系统 | 技术支持: Python, Flask, D3.js</p>
         </div>
     </div>
-
-    <!-- 原有脚本 -->
     <script src="static/js/d3-charts.js"></script>
 <script>
-        // ==========================================
         // 1. 全局配置与状态
-        // ==========================================
-        // 核心修复：显著增加 bottom (50 -> 100) 以容纳旋转后的长书名
-        // 稍微增加 left (40 -> 50) 以防Y轴数值被切
         const advMargin = {top: 35, right: 20, bottom: 100, left: 50};
         
         const advState = {
@@ -313,9 +299,7 @@
             }
         };
 
-        // ==========================================
         // 2. 数据处理与初始化
-        // ==========================================
         function initAdvancedData() {
             const metric = currentMetric;
             advState.data = [];
@@ -342,7 +326,6 @@
                 advState.data.push({
                     id: bookName.replace(/[^a-zA-Z0-9]/g, '_'),
                     name: bookName,
-                    // 修复：这里只存一个短名用于Filter显示，图表轴标签单独处理
                     shortName: bookName.length > 15 ? bookName.substring(0, 12) + "..." : bookName,
                     color: colorScale(bookName),
                     fullData: trendData
@@ -415,10 +398,7 @@
             updateHighlightVisuals(); 
         }
 
-        // ==========================================
-        // 3. 渲染逻辑 (修复轴标签显示)
-        // ==========================================
-        
+        // 3. 渲染逻辑
         function renderAdvMean(data) {
             const { g, w, h } = charts['mean'];
             const config = advState.sortConfig.mean;
@@ -430,7 +410,6 @@
             const x = d3.scaleBand().range([0, w]).domain(sortedData.map(d=>d.name)).padding(0.3);
             const y = d3.scaleLinear().range([h, 0]).domain([0, d3.max(data, d=>d.currentMean)*1.1 || 10]);
 
-            // 修复：放宽截断限制 (substring(0, 16))，并保持旋转
             g.select(".x-axis").transition().duration(500).call(d3.axisBottom(x))
                 .selectAll("text")
                 .style("text-anchor", "end")
@@ -467,7 +446,6 @@
             const x = d3.scaleBand().range([0, w]).domain(sortedData.map(d=>d.name)).padding(0.3);
             const y = d3.scaleLinear().range([h, 0]).domain([0, d3.max(data, d=>d.currentStd)*1.1 || 1]);
 
-            // 修复：波动性图也显示X轴文字
             g.select(".x-axis").transition().duration(500).call(d3.axisBottom(x))
                 .selectAll("text")
                 .style("text-anchor", "end")
@@ -499,7 +477,6 @@
             const x = d3.scaleBand().range([0, w]).domain(sortedData.map(d=>d.name)).padding(0.4);
             const y = d3.scaleLinear().range([h, 0]).domain([d3.min(data, d=>d.box.min)*0.9 || 0, d3.max(data, d=>d.box.max)*1.1 || 10]);
 
-            // 修复：箱线图X轴文字优化
             g.select(".x-axis").transition().duration(500).call(d3.axisBottom(x))
                 .selectAll("text")
                 .style("text-anchor", "end")
@@ -571,10 +548,7 @@
             if (!advState.brushRange) g.select(".brush").call(brush.move, null);
         }
 
-        // ==========================================
         // 4. 交互核心
-        // ==========================================
-
         function updateDrillPanel() {
             const panel = document.getElementById('adv-drill-content');
             if (advState.selectedIds.length === 0) {
