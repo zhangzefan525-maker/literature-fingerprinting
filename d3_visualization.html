@@ -1,3 +1,5 @@
+<!-- d3_visualization.html -->
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -18,6 +20,7 @@
             <!-- 书籍选择按钮将通过JS动态生成 -->
         </div>
         
+        <!-- --- 修改开始：合并后的 Controls 区域 --- -->
         <div class="controls">
             <div class="control-group">
                 <label>分析指标：</label>
@@ -35,11 +38,19 @@
             </div>
             
             <div class="control-group">
+                <!-- 图表类型切换 -->
+                <select id="chartTypeSelect" style="margin-right: 10px;">
+                    <option value="line">📈 折线趋势图</option>
+                    <option value="heatmap">▦ 指纹热力图</option>
+                </select>
+
+                <!-- 操作按钮 (只保留一组) -->
                 <button id="loadRealData">加载真实数据</button>
                 <button id="toggleView">切换视图</button>
                 <button id="exportBtn">导出图像</button>
             </div>
         </div>
+        <!-- --- 修改结束 --- -->
         
         <div class="comparison-mode" id="toggleComparison">
             🆚 点击切换到多书对比模式
