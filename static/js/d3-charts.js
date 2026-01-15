@@ -602,25 +602,78 @@ function toggleComparisonMode() {
     }
 }
 
+// static/js/d3-charts.js
+
+// --- 替换原有的 exportChart 函数 ---
+
 function exportChart() {
     const svg = document.getElementById('main-chart');
-    const svgData = new XMLSerializer().serializeToString(svg);
+    if (!svg) {
+        showError("找不到图表元素");
+        return;
+    }
+
+    // 1. 获取 SVG 的 XML 字符串
+    const serializer = new XMLSerializer();
+    let source = serializer.serializeToString(svg);
+
+    // 2. 补全命名空间（防止某些浏览器解析失败）
+    if(!source.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)){
+        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+
+    // 3. 处理 CSS 样式丢失问题 (将 d3-style.css 中的关键样式内联进去)
+    // 主要是针对热力图的白色边框效果
+    const styleString = `
+        <style>
+            text { font-family: 'Microsoft YaHei', sans-serif; }
+            .heatmap-rect { stroke: white; stroke-width: 1px; }
+            .axis path, .axis line { fill: none; stroke: #000; shape-rendering: crispEdges; }
+        </style>`;
+    source = source.replace('</svg>', styleString + '</svg>');
+
+    // 4. 关键修复：解决中文乱码导致 btoa 报错的问题
+    // 使用 encodeURIComponent 而不是 btoa
+    const imageSrc = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(source);
+
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    const context = canvas.getContext('2d');
     const img = new Image();
-    
-    canvas.width = svg.clientWidth;
-    canvas.height = svg.clientHeight;
-    
+
+    // 5. 提高导出图片的分辨率 (2倍清晰度)
+    const svgRect = svg.getBoundingClientRect();
+    const scaleFactor = 2; 
+    canvas.width = svgRect.width * scaleFactor;
+    canvas.height = svgRect.height * scaleFactor;
+
     img.onload = function() {
-        ctx.drawImage(img, 0, 0);
+        // 6. 绘制白色背景 (防止 PNG 透明背景变黑)
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // 绘制图像
+        context.drawImage(img, 0, 0, canvas.width, canvas.height);
+        
+        // 7. 触发下载
         const link = document.createElement('a');
-        link.download = `文印分析_${currentBook || '对比'}_${currentMetric}.png`;
+        // 生成带时间戳的文件名
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const bookName = currentBook ? currentBook.replace(/\s+/g, '_') : 'Comparison';
+        
+        link.download = `文印_${bookName}_${chartType}_${timestamp}.png`;
         link.href = canvas.toDataURL('image/png');
+        
+        document.body.appendChild(link); // 兼容 Firefox
         link.click();
+        document.body.removeChild(link);
     };
-    
-    img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
+
+    img.onerror = function(e) {
+        console.error("图像导出失败:", e);
+        showError("图像生成失败，请查看控制台详情。");
+    };
+
+    img.src = imageSrc;
 }
 
 // UI辅助函数
