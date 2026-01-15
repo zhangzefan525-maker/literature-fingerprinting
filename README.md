@@ -1,51 +1,67 @@
-# Literature Fingerprinting
+# Literature Fingerprinting Program
 
 #### 介绍
 
-本项目旨在复现 Keim 和 Oelke 提出的 “文学指纹”（Literature Fingerprinting）可视化方法。该方法通过将文本分割为固定大小的文本块，计算每个块的统计特征（如平均句长、词汇丰富度等），并将其映射为像素网格（Pixel Map），从而直观地展示不同作家的写作风格差异。
+本项目旨在复现并增强 Keim 和 Oelke 提出的 “文学指纹”（Literature Fingerprinting）可视化方法。该方法通过将文本分割为固定大小的文本块，计算每个块的统计特征（如平均句长、词汇丰富度等），并将其映射为像素网格（Pixel Map）或交互式图表，从而直观地展示不同作家的写作风格差异。
 
-**v2.0 更新：** 我们在原有的 Streamlit 分析系统基础上，新增了基于 **D3.js + Flask** 的 Web 可视化模块。这使得系统不仅具备 Python 的强大计算能力，还拥有了 D3.js 带来的极致前端交互体验（平滑过渡、动态热力图/折线图切换、SVG 导出等）。
+**核心升级：**
+我们在原有的 Python 分析引擎之上，全新构建了一套 **基于 D3.js + Flask 的全交互式 Web 可视化系统**。这使得系统不仅具备 Python 强大的数据处理能力，更拥有了 Web 端流畅、精细、多维联动的探索式分析体验。
 
-我们成功实现了：
+#### 功能亮点
 
-- **多维度指标分析**：平均句长、Simpson指数、Hapax Legomena、功能词PCA
-- **双模态可视化**：
-  - **Streamlit 版**：适合快速验证、参数调试和深度统计分析。
-  - **D3.js 版（新增）**：提供 Web 级的高性能交互，支持鼠标悬停探针（Tooltip）、图表平滑过渡、视图动态切换。
-- **深度分析功能**：风格分类、异常检测、相似性比较
-- **RESTful API 支持**：实现了前后端分离的数据服务架构。
+我们成功实现了从数据处理到交互展示的完整闭环：
+
+- **多维度指标分析**：
+  - **Average Sentence Length**: 平均句长（风格复杂度）
+  - **Simpson's Index**: 辛普森指数（词汇丰富度）
+  - **Hapax Legomena**: 孤词率（词汇独特性）
+  - **Function Words PCA**: 功能词主成分分析（语法习惯）
+- **深度综合分析仪表盘 (Advanced Dashboard)**：
+  - **2x2 联动视图**：同步展示均值（Bar）、波动性（Bar）、分布（Box Plot）和趋势（Line Chart）。
+  - **刷选联动 (Brushing & Linking)**：在趋势图上拖拽选区，所有其他图表实时更新，仅展示选中片段的统计特征（实现从宏观到微观的动态聚焦）。
+  - **多图高亮 (Linked Highlighting)**：悬停任意元素，所有视图中对应的书籍同步高亮。
+  - **深度钻取 (Details-on-Demand)**：点击图表元素，侧边栏展示该书在当前选区内的**Top 3 峰值文本块**及其**原文预览**。
+- **灵活的对比模式**：支持单选查看详情，或多选进行并排对比（Small Multiples 热力图 / 多线折线图）。
+- **RESTful API 架构**：前后端分离，数据通过 API 动态传输。
 
 #### 软件架构
 
+```
 Literature-Fingerprinting/
-├── data/ # 存放实验用小说文本
-│ ├── raw/ # 原始文本 (.txt)
-│ └── processed/ # [新增] 预处理后的 JSON 数据 (供 D3 使用)
-├── src/ # 源代码目录
-│ ├── **init**.py
-│ ├── data_loader.py # [成员A] 数据加载与切分
-│ ├── metrics.py # [成员B] 指标计算算法
-│ ├── visualizer.py # [成员C] Matplotlib/Seaborn 绘图逻辑
-│ └── analyzer.py # [新增] 指纹统计分析模块
-├── static/ # [新增] D3.js 前端静态资源
-│ ├── css/
-│ │ └── d3-style.css # 可视化样式表
-│ └── js/
-│ └── d3-charts.js # D3.js 核心绘图逻辑
-├── app.py # [成员C] Streamlit 前端主程序
-├── api_server.py # [新增] Flask API 服务器 (为 D3 提供数据)
-├── generate_data.py # [新增] 数据预处理脚本 (生成 JSON)
-├── d3_visualization.html # [新增] D3 可视化入口页面
-├── requirements.txt # 项目依赖库
-└── README.md # 项目说明文档
+├── data/                               # 数据存储
+│   ├── raw/                            # 原始小说文本 (.txt)
+│   └── processed/                      # 预处理后的 JSON 数据 (供前端 API 调用)
+├── src/                                # Python 核心逻辑
+│   ├── __init__.py
+│   ├── data_loader.py                  # 文本清洗与滑动窗口切分
+│   ├── metrics.py                      # 核心指标计算 (均值、Simpson、PCA等)
+│   ├── visualizer.py                   # Matplotlib 静态绘图 (用于 Streamlit)
+│   └── analyzer.py                     # 统计分析与异常检测模块
+├── static/                             # D3.js 前端资源
+│   ├── css/
+│   │   └── d3-style.css                # 仪表盘样式表
+│   └── js/
+│       └── d3-charts.js                # D3.js 核心绘图与交互逻辑 (含 Dashboard)
+├── app.py                              # Streamlit 经典版入口
+├── api_server.py                       # Flask API 服务器 (D3 版入口)
+├── generate_data.py                    # 批处理脚本 (Raw Text -> JSON)
+├── d3_visualization.html               # D3 可视化主页面 HTML
+├── requirements.txt  					# 项目依赖
+├── start.bat                           # 快速启动
+├── README.en.md                        # 项目文档(英文)
+└── README.md                           # 项目文档(中文)
+```
 
 #### 安装教程
 
-本项目基于 Python 3.8+ 开发。请确保已安装 Python 环境。
+本项目基于 Python 3.8+ 开发。
 
 ```
-# 1. 克隆或下载本项目
-# 2. 安装依赖库
+# 1. 克隆项目
+git clone [repository_url]
+cd Literature-Fingerprinting
+
+# 2. 安装依赖
 pip install -r requirements.txt
 
 # 3. (可选) NLTK 数据包会自动下载，如遇网络问题可手动运行：
@@ -54,100 +70,73 @@ pip install -r requirements.txt
 
 #### 启动方式
 
-本项目支持两种启动模式，可根据需求选择。
+**推荐：使用 D3.js 交互模式**
 
-### 模式一：D3.js 交互可视化（推荐体验）
+1. **数据预处理**（首次运行或文本更新后需要执行）：
+   计算所有书籍的指纹数据并生成 JSON 文件。
 
-这是新增的高级可视化模式，支持平滑动画和更精细的交互。
+   ```
+   python generate_data.py
+   ```
 
-**第一步：生成数据**
-运行数据预处理脚本，计算所有指标并生成 JSON 文件：
+2. **启动 API 服务器**：
+   开启 Flask 后端服务。
 
-```
-python generate_data.py
-```
+   ```
+   python api_server.py
+   ```
 
-**第二步：启动 API 服务器**
-启动 Flask 后端，提供数据接口：
-
-```
-python api_server.py
-```
-
-**第三步：访问**
-浏览器访问：http://localhost:5000/visualization
+3. **访问系统**：
+   打开浏览器访问：http://localhost:5000/visualization
 
 ------
 
 
 
-### 模式二：Streamlit 分析仪表盘（经典模式）
-
-适合进行参数调试（如调节 Block Size）和查看详细的统计报告。
+**备选：使用 Streamlit 经典模式**
+适合快速查看参数影响。
 
 ```
 streamlit run app.py
 ```
 
-#### 使用说明
+#### 交互操作指南
 
-### 5.1 D3.js 新特性说明
+1. **全局筛选与对比**：
+   - 顶部点击书籍按钮（支持多选），下方图表自动切换为 **并列热力图** 或 **多线趋势图**。
+   - 仪表盘顶部点击 "Jack London" / "Mark Twain" 胶囊，快速按作者筛选显示。
+2. **区间刷选 (Brushing)**：
+   - 在右下角 **“趋势演变”** 图表上，按住鼠标左键**水平拖拽**。
+   - **效果**：创建一个灰色选区（如选择小说的高潮章节），左侧的均值图、波动图和箱线图将**实时重算**，只展示该选区内的数据。
+3. **深度钻取 (Drill-down)**：
+   - 点击任意柱状图或线条。
+   - **效果**：右侧 **“钻取详情”** 面板弹出，列出该书在当前选区内数值最高的 3 个文本块，并显示其原文片段和关键词。支持多次点击不同书籍进行**多书详情堆叠对比**。
+4. **排序与高亮**：
+   - 点击均值/波动图标题旁的排序图标，切换 **数值降序** / **书名升序**。
+   - 鼠标悬停在任意图表元素上，触发**全局联动高亮**，其他非相关元素自动变暗。
 
-- **视图切换**：点击界面上的下拉框，可以在 **"📈 折线趋势图"** 和 **"▦ 指纹热力图"** 之间无缝切换。
-- **智能交互**：
-  - **Tooltip**：鼠标悬停在数据点或色块上，实时显示文本块编号、指标具体数值及关键词。
-  - **点击详情**：点击任意数据点，右侧面板会展示该文本块的**原文预览**及**高频关键词**。
-- **平滑控制**：拖动 "平滑度" 滑块，可以对折线图进行移动平均处理，更清晰地观察风格趋势。
-- **图像导出**：支持一键将当前 SVG 图表导出为 PNG 图片。
+#### 实验结果验证
 
-### 5.2 数据处理策略
+我们选取了 Jack London (*The Call of the Wild*, *White Fang*) 和 Mark Twain (*Tom Sawyer*, *Huckleberry Finn*) 的四本代表作进行验证。
 
-- **切分策略**：遵循原论文标准，将整本小说切分为包含 10,000 个单词的文本块（Block），步长（Step）为 1,000 单词。
-- **可视化映射**：
-  - **热力图**：使用 D3 的 interpolateRdBu 双极色谱（自动归一化），红色代表低值，蓝色代表高值。
-  - **自适应布局**：前端自动计算最佳网格行列数（接近正方形布局）。
+1. **风格差异**：
+   - **Jack London** (黄色/绿色)：在均值图中明显较低（~15-18词/句），波动性小，体现了其简洁有力的硬汉派风格。
+   - **Mark Twain** (蓝色/红色)：在均值图中较高（~20-25词/句），体现了其描述性强的特点。
+2. **特例复现 (\*Huckleberry Finn\* Anomaly)**：
+   - 在 D3 仪表盘中，*Huckleberry Finn* (红色) 的均值虽然接近 Twain 的水平，但在 **热力图** 模式下，其色调分布与 *Tom Sawyer* (蓝色) 有显著差异，更偏向暖色调。
+   - **解释**：这成功复现了论文结论——由于该书采用第一人称孩童视角和口语方言，其微观层面的“指纹”特征发生了偏移。
 
-## 6. 实验结果与验证 (Results & Validation)
+#### 团队分工
 
-我们选取了 Jack London 和 Mark Twain 的四本代表作进行验证。
+- **王屹坤 (数据工程)**：构建 data_loader.py，实现符合论文标准的滑动窗口切分算法；协助 JSON 数据结构设计。
+- **张泽凡(算法实现)**：开发 metrics.py，实现 Simpson 指数、Hapax Legomena 等核心文学统计算法；优化关键词提取逻辑。
+- **孙翌程(全栈可视分析)**：
+  - 搭建 Flask + D3.js 架构。
+  - 实现 d3-charts.js 中的**多视图联动**、**刷选重算**、**动态钻取**等高级交互逻辑。
+  - 设计并美化前端 UI/UX。
 
-### 6.1 风格差异验证
+#### 参考资料
 
-| 作家        | 作品                           | 可视化表现     | 风格分析                                        |
-| ----------- | ------------------------------ | -------------- | ----------------------------------------------- |
-| Jack London | *The Call of the Wild*         | 整体呈红色色调 | 简洁、有力的短句风格（平均句长约 15-18 词）     |
-| Mark Twain  | *The Adventures of Tom Sawyer* | 整体呈蓝色色调 | 复杂、描述性强的长句风格（平均句长约 20-25 词） |
-
-### 6.2 关键特例复现 (The "Huckleberry Finn" Anomaly)
-
-- **对象**：Mark Twain 的 *The Adventures of Huckleberry Finn*
-- **结果**：在 D3 热力图中，该书呈现出明显的暖色调（红色/浅色），与 Twain 的另一部作品 *Tom Sawyer* 形成鲜明对比。
-- **结论**：完美复现了论文发现 —— 孩童视角与口语方言的使用，使得这部作品的“指纹”更接近于简洁风格。
-
-#### 参与贡献
-
-本项目由三人小组协作完成：
-
-### 成员 A（数据处理）
-
-- 负责 data_loader.py，实现了滑动窗口切分算法。
-- **新增**：协助适配 JSON 数据格式，确保前后端数据对接。
-
-### 成员 B（核心算法）
-
-- 负责 metrics.py，实现了平均句长、Simpson指数、PCA 等核心算法。
-- **新增**：优化了关键词提取算法，为前端 Tooltip 提供数据支持。
-
-### 成员 C（全栈开发与集成）
-
-- 负责 visualizer.py (Matplotlib) 和 app.py (Streamlit)。
-- **新增**：引入 **Flask + D3.js** 技术栈。
-- **新增**：编写 api_server.py 构建 RESTful API。
-- **新增**：开发前端页面 (.html, .css, .js)，实现了动态热力图与交互逻辑。
-
-## 8. 参考资料 (References)
-
-1. Keim, D. A., & Oelke, D. (2007). *Literature Fingerprinting: A New Method for Visual Literary Analysis*. IEEE Symposium on Information Visualization.
-2. D3.js Documentation: [https://d3js.org/](https://www.google.com/url?sa=E&q=https%3A%2F%2Fd3js.org%2F)
-3. Flask Documentation: [https://flask.palletsprojects.com/](https://www.google.com/url?sa=E&q=https%3A%2F%2Fflask.palletsprojects.com%2F)
-4. Streamlit Documentation: [https://docs.streamlit.io/](https://www.google.com/url?sa=E&q=https%3A%2F%2Fdocs.streamlit.io%2F)
+1. Keim, D. A., & Oelke, D. (2007). *Literature Fingerprinting: A New Method for Visual Literary Analysis*.
+2. D3.js Gallery & Documentation.
+3. Project Gutenberg (Text Source).

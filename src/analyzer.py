@@ -9,14 +9,11 @@ from typing import Dict, List, Tuple
 import matplotlib.pyplot as plt
 import matplotlib
 
-# +++ 设置中文字体，防止中文显示为方格 +++
 try:
-    # 尝试使用系统中常见的中文字体
     plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
-    plt.rcParams['axes.unicode_minus'] = False  # 正确显示负号
+    plt.rcParams['axes.unicode_minus'] = False 
     matplotlib.font_manager.fontManager.addfont("SimHei.ttf")
 except:
-    # 如果找不到中文字体，使用默认字体
     pass
 
 class FingerprintAnalyzer:

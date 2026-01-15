@@ -1,158 +1,142 @@
-# Literature Fingerprinting
+# Literature Fingerprinting Program
 
 #### Introduction
 
-This project aims to replicate the "Literature Fingerprinting" visualization method proposed by Keim and Oelke. This method involves segmenting text into fixed-size blocks, calculating statistical features for each block (e.g., average sentence length, vocabulary richness), and mapping them onto a pixel grid (Pixel Map) to visually demonstrate the stylistic differences between different authors.
+This project aims to reproduce and enhance the "Literature Fingerprinting" visualization method proposed by Keim and Oelke. This method segments text into fixed-size blocks, calculates statistical features for each block (e.g., average sentence length, vocabulary richness), and maps them to a pixel grid (Pixel Map) or interactive charts to intuitively display the stylistic differences between different authors.
 
-**v2.0 Update:** Building upon our original Streamlit analysis system, we have added a new Web visualization module based on **D3.js + Flask**. This enhancement combines Python's powerful computational capabilities with the superior frontend interactive experience of D3.js (smooth transitions, dynamic heatmap/line chart switching, SVG export, etc.).
+**Core Upgrade:**
+Building upon the original Python analysis engine, we have constructed a new **fully interactive Web visualization system based on D3.js + Flask**. This system not only retains Python's powerful data processing capabilities but also provides a fluid, precise, and multi-dimensional interactive exploratory analysis experience on the Web.
 
-We have successfully implemented:
+#### Feature Highlights
 
-- **Multi-dimensional Metric Analysis:** Average Sentence Length, Simpson's Index, Hapax Legomena, and Function Words PCA.
-- **Dual-mode Visualization:**
-  - **Streamlit Version:** Ideal for rapid verification, parameter tuning, and deep statistical analysis.
-  - **D3.js Version (New):** Provides web-scale high-performance interaction, supporting mouse-hover tooltips, smooth chart transitions, and dynamic view switching.
-- **Deep Analysis Functions:** Style classification, anomaly detection, similarity comparison.
-- **RESTful API Support:** Implemented a decoupled architecture with a separate data service backend.
+We have successfully implemented a complete loop from data processing to interactive display:
+
+- **Multi-dimensional Metric Analysis**:
+  - **Average Sentence Length**: Measures stylistic complexity.
+  - **Simpson's Index**: Measures vocabulary richness.
+  - **Hapax Legomena**: Measures vocabulary uniqueness (ratio of words occurring only once).
+  - **Function Words PCA**: Principal Component Analysis of function words to reflect grammatical habits.
+- **Advanced Comprehensive Analysis Dashboard**:
+  - **2x2 Linked Views**: Synchronously displays Mean (Bar), Volatility (Bar), Distribution (Box Plot), and Trend (Line Chart).
+  - **Brushing & Linking**: Dragging to select a range on the trend chart updates all other charts in real-time to show statistical features for only the selected segment (enabling dynamic focus from macro to micro).
+  - **Linked Highlighting**: Hovering over any element highlights the corresponding book across all views.
+  - **Details-on-Demand (Drill-down)**: Clicking on chart elements opens a sidebar displaying the **Top 3 peak text blocks** and their **original text previews** within the current selection.
+- **Flexible Comparison Modes**: Supports single selection for details or multi-selection for side-by-side comparison (Small Multiples Heatmap / Multi-line Chart).
+- **RESTful API Architecture**: Decoupled frontend and backend, with dynamic data transmission via API.
 
 #### Software Architecture
 
-Code
-
 ```
 Literature-Fingerprinting/
-├── data/                               # Directory for novel text files
-│   ├── raw/                            # Original text files (.txt)
-│   └── processed/                      # [New] Preprocessed JSON data (for D3)
-├── src/                                # Source code directory
+├── data/                               # Data storage
+│   ├── raw/                            # Raw novel text files (.txt)
+│   └── processed/                      # Preprocessed JSON data (for frontend API calls)
+├── src/                                # Python core logic
 │   ├── __init__.py
-│   ├── data_loader.py                  # [Member A] Data loading and segmentation
-│   ├── metrics.py                      # [Member B] Metric calculation algorithms
-│   ├── visualizer.py                   # [Member C] Matplotlib/Seaborn plotting logic
-│   └── analyzer.py                     # [New] Fingerprint statistical analysis module
-├── static/                             # [New] D3.js frontend static resources
+│   ├── data_loader.py                  # Text cleaning and sliding window segmentation
+│   ├── metrics.py                      # Core metric calculations (Mean, Simpson, PCA, etc.)
+│   ├── visualizer.py                   # Matplotlib static plotting (for Streamlit)
+│   └── analyzer.py                     # Statistical analysis and anomaly detection module
+├── static/                             # D3.js frontend resources
 │   ├── css/
-│   │   └── d3-style.css                # Visualization stylesheet
+│   │   └── d3-style.css                # Dashboard stylesheet
 │   └── js/
-│       └── d3-charts.js                # D3.js core plotting logic
-├── app.py                              # [Member C] Streamlit main application
-├── api_server.py                       # [New] Flask API server (Provides data for D3)
-├── generate_data.py                    # [New] Data preprocessing script (Generates JSON)
-├── d3_visualization.html               # [New] D3 Visualization entry page
+│       └── d3-charts.js                # D3.js core plotting and interaction logic (includes Dashboard)
+├── app.py                              # Streamlit classic version entry point
+├── api_server.py                       # Flask API server (D3 version entry point)
+├── generate_data.py                    # Batch processing script (Raw Text -> JSON)
+├── d3_visualization.html               # D3 visualization main page HTML
 ├── requirements.txt                    # Project dependencies
-└── README.md                           # Project documentation
+├── start.bat                           # Quick start script
+├── README.en.md                        # Project documentation (English)
+└── README.md                           # Project documentation (Chinese)
 ```
 
 #### Installation
 
-This project is developed based on Python 3.8+. Please ensure a Python environment is installed.
+This project is based on Python 3.8+.
 
 ```
-# 1. Clone or download this project
+# 1. Clone the project
+git clone [repository_url]
+cd Literature-Fingerprinting
+
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. (Optional) NLTK data packages will download automatically. 
-# If network issues occur, run manually:
+# 3. (Optional) NLTK data packages will download automatically. If network issues occur, run manually:
 # python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
 ```
 
-#### Usage / Start-up
+#### Startup Instructions
 
-The project supports two start-up modes depending on your needs.
+**Recommended: Use D3.js Interactive Mode**
 
-### Mode 1: D3.js Interactive Visualization (Recommended Experience)
+1. **Data Preprocessing** (Required for the first run or after updating text files):
+   Calculate fingerprint data for all books and generate JSON files.
 
-This is the new advanced visualization mode, supporting smooth animations and finer interactions.
+   ```
+   python generate_data.py
+   ```
 
-**Step 1: Generate Data**
-Run the preprocessing script to calculate all metrics and generate JSON files:
+2. **Start API Server**:
+   Start the Flask backend service.
 
-```
-python generate_data.py
-```
+   ```
+   python api_server.py
+   ```
 
-**Step 2: Start API Server**
-Start the Flask backend to provide data interfaces:
-
-```
-python api_server.py
-```
-
-**Step 3: Access**
-Open your browser and visit: http://localhost:5000/visualization
+3. **Access the System**:
+   Open your browser and visit: [http://localhost:5000/visualization](https://www.google.com/url?sa=E&q=http%3A%2F%2Flocalhost%3A5000%2Fvisualization)
 
 ------
 
 
 
-### Mode 2: Streamlit Analysis Dashboard (Classic Mode)
-
-Suitable for parameter tuning (e.g., adjusting Block Size) and viewing detailed statistical reports.
+**Alternative: Use Streamlit Classic Mode**
+Suitable for quickly checking parameter impacts.
 
 ```
 streamlit run app.py
 ```
 
-#### Feature Description
+#### Interaction Guide
 
-### 5.1 D3.js New Features
+1. **Global Filtering & Comparison**:
+   - Click book buttons at the top (supports multi-selection); charts below automatically switch to **Small Multiples Heatmap** or **Multi-line Trend Chart**.
+   - Click "Jack London" / "Mark Twain" capsules at the top of the dashboard to quickly filter by author.
+2. **Brushing**:
+   - On the bottom-right **"Trend Evolution"** chart, hold the left mouse button and **drag horizontally**.
+   - **Effect**: Creates a gray selection area (e.g., selecting the climax chapters). The Mean, Volatility, and Box Plot charts on the left will **recalculate in real-time** to show data only for that selection.
+3. **Drill-down**:
+   - Click any bar or line.
+   - **Effect**: The right-side **"Drill-down Details"** panel pops up, listing the 3 text blocks with the highest values within the current selection, displaying their original text snippets and keywords. Supports clicking multiple books for **stacked multi-book detail comparison**.
+4. **Sorting & Highlighting**:
+   - Click the sort icon next to the Mean/Volatility chart titles to switch between **Value Descending** / **Name Ascending**.
+   - Hover over any chart element to trigger **global linked highlighting**, dimming other unrelated elements automatically.
 
-- **View Switching:** Seamlessly switch between **"📈 Line Chart"** and **"▦ Fingerprint Heatmap"** via the dropdown menu.
-- **Smart Interaction:**
-  - **Tooltip:** Hover over data points or color blocks to see the text block number, specific metric value, and keywords in real-time.
-  - **Click Details:** Click on any data point to reveal the **text preview** and **top keywords** in the right-hand panel.
-- **Smoothing Control:** Drag the "Smoothness" slider to apply a moving average to the line chart for clearer trend observation.
-- **Image Export:** Support one-click export of the current SVG chart as a PNG image.
+#### Experimental Results & Validation
 
-### 5.2 Data Processing Strategy
+We selected four representative works by Jack London (*The Call of the Wild*, *White Fang*) and Mark Twain (*Tom Sawyer*, *Huckleberry Finn*) for validation.
 
-- **Segmentation Strategy:** Following the original paper's standard, the entire novel is sliced into text blocks containing 10,000 words each, with a step size of 1,000 words (i.e., an overlap of 9,000 words).
-- **Visualization Mapping:**
-  - **Heatmap:** Uses D3's interpolateRdBu diverging color scale (auto-normalized). Red represents low values, and Blue represents high values.
-  - **Adaptive Layout:** The frontend automatically calculates the optimal number of grid rows and columns (approximating a square layout).
+1. **Style Differences**:
+   - **Jack London** (Yellow/Green): Significantly lower in the Mean chart (~15-18 words/sentence) with low volatility, reflecting his concise, forceful, hard-boiled style.
+   - **Mark Twain** (Blue/Red): Higher in the Mean chart (~20-25 words/sentence), reflecting his descriptive characteristics.
+2. **Anomaly Reproduction (\*Huckleberry Finn\* Anomaly)**:
+   - In the D3 dashboard, although the mean value for *Huckleberry Finn* (Red) is close to Twain's level, in **Heatmap** mode, its hue distribution differs significantly from *Tom Sawyer* (Blue), leaning more towards warmer tones.
+   - **Explanation**: This successfully reproduces the paper's conclusion—due to the use of a first-person child perspective and oral dialect, the "fingerprint" features of this book shift at the microscopic level.
 
-## 6. Results & Validation
+#### Team Contributions
 
-We selected four representative works by Jack London and Mark Twain for validation.
+- **Yikun Wang (Data Engineering)**: Built data_loader.py, implemented the sliding window segmentation algorithm compliant with the paper's standards; assisted in JSON data structure design.
+- **Zefan Zhang (Algorithm Implementation)**: Developed metrics.py, implemented core literary statistical algorithms such as Simpson's Index and Hapax Legomena; optimized keyword extraction logic.
+- **Yicheng Sun (Full Stack Visual Analysis)**:
+  - Built the Flask + D3.js architecture.
+  - Implemented advanced interaction logic in d3-charts.js such as **multi-view linking**, **brushing recalculation**, and **dynamic drill-down**.
+  - Designed and beautified the frontend UI/UX.
 
-### 6.1 Style Difference Verification
+#### References
 
-| Author      | Work                           | Visualization Appearance | Style Analysis                                               |
-| ----------- | ------------------------------ | ------------------------ | ------------------------------------------------------------ |
-| Jack London | *The Call of the Wild*         | Predominantly Red        | Concise, punchy short sentences (Avg length ~15-18 words)    |
-| Mark Twain  | *The Adventures of Tom Sawyer* | Predominantly Blue       | Complex, descriptive long sentences (Avg length ~20-25 words) |
-
-### 6.2 The "Huckleberry Finn" Anomaly
-
-- **Subject:** *The Adventures of Huckleberry Finn* by Mark Twain
-- **Result:** In the D3 Heatmap, this book displays distinct warm tones (Red/Light colors), contrasting sharply with Twain's other work, *Tom Sawyer*.
-- **Conclusion:** This perfectly replicates the paper's finding — the use of a child's first-person perspective and extensive oral dialect causes the "fingerprint" of this work to deviate from Twain's usual style, appearing closer to a concise style.
-
-#### Contribution
-
-This project was completed through the collaboration of a three-person team:
-
-### Member A (Data Processing)
-
-- Responsible for data_loader.py, implemented the sliding window segmentation algorithm.
-- **New:** Assisted in adapting JSON data formats to ensure backend-frontend data compatibility.
-
-### Member B (Core Algorithms)
-
-- Responsible for metrics.py, implemented core algorithms including Average Sentence Length, Simpson's Index, and PCA.
-- **New:** Optimized keyword extraction algorithms to provide data support for frontend Tooltips.
-
-### Member C (Full Stack & Integration)
-
-- Responsible for visualizer.py (Matplotlib) and app.py (Streamlit).
-- **New:** Introduced the **Flask + D3.js** tech stack.
-- **New:** Wrote api_server.py to build the RESTful API.
-- **New:** Developed frontend pages (.html, .css, .js), implementing dynamic heatmaps and interaction logic.
-
-## 8. References
-
-1. Keim, D. A., & Oelke, D. (2007). *Literature Fingerprinting: A New Method for Visual Literary Analysis*. IEEE Symposium on Information Visualization.
-2. D3.js Documentation: [https://d3js.org/](https://www.google.com/url?sa=E&q=https%3A%2F%2Fd3js.org%2F)
-3. Flask Documentation: [https://flask.palletsprojects.com/](https://www.google.com/url?sa=E&q=https%3A%2F%2Fflask.palletsprojects.com%2F)
-4. Streamlit Documentation: [https://docs.streamlit.io/](https://www.google.com/url?sa=E&q=https%3A%2F%2Fdocs.streamlit.io%2F)
+1. Keim, D. A., & Oelke, D. (2007). *Literature Fingerprinting: A New Method for Visual Literary Analysis*.
+2. D3.js Gallery & Documentation.
+3. Project Gutenberg (Text Source).
