@@ -10,7 +10,7 @@ const API_ENDPOINTS = {
 // 全局变量
 let realData = null;
 let currentMetric = 'sentenceLength';
-let currentBook = null;
+let selectedBooks = new Set(); 
 let comparisonMode = false;
 let smoothness = 3;
 let chartType = 'line';
@@ -90,57 +90,58 @@ async function loadBooksList() {
 
 function updateBookSelector(books) {
     const selector = document.getElementById('bookSelector');
-    
     if (!books || books.length === 0) {
-        selector.innerHTML = '<p style="color: #e74c3c;">⚠️ 没有找到任何书籍，请确保已将文本文件放置在 data/raw/ 目录下</p>';
+        selector.innerHTML = '<p style="color: #e74c3c;">⚠️ 没有找到任何书籍...</p>';
         return;
     }
     
-    // --- 修改开始 ---
-    // 这里的改动是添加了 data-id="${book.id}"
     const buttons = books.map(book => `
         <div class="book-btn" data-id="${book.id}" onclick="selectBook('${book.id}')">
             ${book.name}
         </div>
     `).join('');
-    // --- 修改结束 ---
     
     selector.innerHTML = buttons;
     
-    // 默认选择第一本书
+    // 默认选中第一本书
     if (books.length > 0) {
-        selectBook(books[0].id);
+        selectBook(books[0].id); 
     }
 }
 
 // static/js/d3-charts.js
 
 function selectBook(bookId) {
-    currentBook = bookId;
-    comparisonMode = false;
+    const btn = document.querySelector(`.book-btn[data-id='${bookId}']`);
     
-    // --- 修改开始 ---
-    // 更新UI：不再使用 event.target，而是通过 data-id 匹配
-    document.querySelectorAll('.book-btn').forEach(btn => {
-        // 先移除所有按钮的激活状态
-        btn.classList.remove('active');
-        
-        // 如果当前按钮的 data-id 等于传入的 bookId，则添加激活状态
-        if (btn.getAttribute('data-id') === bookId) {
-            btn.classList.add('active');
+    if (selectedBooks.has(bookId)) {
+        // 如果已经选中，且不是唯一选中的书，则取消选中
+        if (selectedBooks.size > 1) {
+            selectedBooks.delete(bookId);
+            btn.classList.remove('active');
         }
-    });
-    // 删除这行导致报错的代码: event.target.classList.add('active');
-    // --- 修改结束 ---
+    } else {
+        // 如果未选中，则添加
+        selectedBooks.add(bookId);
+        btn.classList.add('active');
+    }
+
+    // 更新对比模式提示文字
+    const compareBtn = document.getElementById('toggleComparison');
+    if (selectedBooks.size > 1) {
+        compareBtn.innerHTML = `📚 当前对比模式：已选 ${selectedBooks.size} 本书`;
+        comparisonMode = true;
+    } else {
+        compareBtn.innerHTML = '🆚 点击上方按钮可多选进行对比';
+        comparisonMode = false;
+    }
     
-    document.getElementById('toggleComparison').innerHTML = '🆚 点击切换到多书对比模式';
-    
-    // 如果已有数据，更新图表
-    if (realData && realData[bookId]) {
+    // 刷新图表
+    if (realData) {
         initChart();
     }
+    // 如果还没加载数据，这里不操作，等点击“加载真实数据”时会读取 selectedBooks
 }
-// static/js/d3-charts.js
 
 async function loadRealData() {
     try {
@@ -149,29 +150,18 @@ async function loadRealData() {
         const response = await fetch(API_ENDPOINTS.fingerprintData);
         const data = await response.json();
         
-        if (data.status === 'success') {
-            realData = data.data;
-            showSuccess(`成功加载 ${Object.keys(realData).length} 本书籍的数据`);
-            
-            // --- 修复代码开始：自动切换到有效书籍 ---
-            const availableBooks = Object.keys(realData);
-            
-            // 如果当前没有选书，或者当前选中的书(currentBook)在加载的数据(realData)里找不到
-            if (availableBooks.length > 0) {
-                if (!currentBook || !realData[currentBook]) {
-                    console.warn(`当前书籍 ${currentBook} 无数据，自动切换到 ${availableBooks[0]}`);
-                    // 强制选中数据中存在的第一本书
-                    selectBook(availableBooks[0]);
-                } else {
-                    // 如果当前书籍有效，直接刷新图表
-                    initChart();
-                }
-            } else {
-                showError('加载的数据为空');
-            }
-            // --- 修复代码结束 ---
-            
-        } else {
+            if (data.status === 'success') {
+        realData = data.data;
+        showSuccess(`成功加载 ${Object.keys(realData).length} 本书籍的数据`);
+        
+        // 确保 selectedBooks 中的书在数据中存在
+        const availableBooks = Object.keys(realData);
+        if (selectedBooks.size === 0 && availableBooks.length > 0) {
+            selectBook(availableBooks[0]); // 如果没选，默认选第一本
+        }
+        
+        initChart();
+    } else {
             showError('加载数据失败: ' + data.message);
         }
     } catch (error) {
@@ -182,17 +172,208 @@ async function loadRealData() {
 
 function initChart() {
     const svg = d3.select("#main-chart");
-    svg.selectAll("*").remove(); // 清空画布
+    svg.selectAll("*").remove();
 
-    if (!realData) return;
+    if (!realData || selectedBooks.size === 0) return;
 
-    // 根据选择的类型绘制
+    // 准备绘图数据：提取所有被选中的书的数据
+    const booksArray = Array.from(selectedBooks);
+    
     if (chartType === 'heatmap') {
-        drawHeatmap(svg);
+        drawMultiHeatmap(svg, booksArray); // 新增的多图绘制函数
     } else {
-        drawLineChart(svg); // 原来的绘图逻辑封装到这里
+        drawMultiLineChart(svg, booksArray); // 新增的多线绘制函数
     }
 }
+
+// --- 修改 6: 绘制多条折线图 ---
+function drawMultiLineChart(svg, booksArray) {
+    // 1. 数据准备
+    const chartData = booksArray.map(bookId => ({
+        book: bookId,
+        values: realData[bookId][currentMetric] || []
+    })).filter(d => d.values.length > 0);
+
+    if (chartData.length === 0) { showNoDataMessage(); return; }
+
+    // 2. 设置尺寸
+    const containerWidth = svg.node().parentNode.getBoundingClientRect().width;
+    const height = 400;
+    const margin = { top: 40, right: 120, bottom: 50, left: 60 }; // 右侧留出图例空间
+    const width = containerWidth - margin.left - margin.right;
+
+    svg.attr("viewBox", `0 0 ${containerWidth} ${height}`);
+    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+    // 3. 计算全局比例尺 (所有书的最大最小值)
+    const maxBlocks = d3.max(chartData, d => d.values.length - 1);
+    const allValues = chartData.flatMap(d => d.values.map(v => v.value));
+    const yMin = d3.min(allValues) * 0.95;
+    const yMax = d3.max(allValues) * 1.05;
+
+    const xScale = d3.scaleLinear().domain([0, maxBlocks]).range([0, width]);
+    const yScale = d3.scaleLinear().domain([yMin, yMax]).range([height - margin.top - margin.bottom, 0]);
+
+    // 颜色比例尺
+    const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(booksArray);
+
+    // 4. 绘制坐标轴
+    const chartHeight = height - margin.top - margin.bottom;
+    g.append("g").attr("transform", `translate(0,${chartHeight})`).call(d3.axisBottom(xScale));
+    g.append("g").call(d3.axisLeft(yScale));
+    
+    // 添加网格线
+    g.append("g").attr("class", "grid").call(d3.axisLeft(yScale).tickSize(-width).tickFormat("")).attr("stroke-opacity", 0.1);
+
+    // 5. 绘制线条
+    const line = d3.line()
+        .x((d, i) => xScale(i))
+        .y(d => yScale(d.value))
+        .curve(d3.curveMonotoneX); // 平滑曲线
+
+    chartData.forEach(bookData => {
+        // 数据平滑
+        const smoothed = smoothData(bookData.values, smoothness);
+        
+        // 画线
+        g.append("path")
+            .datum(smoothed)
+            .attr("fill", "none")
+            .attr("stroke", colorScale(bookData.book))
+            .attr("stroke-width", 2.5)
+            .attr("d", line)
+            .style("opacity", 0.8)
+            // 鼠标悬停加粗效果
+            .on("mouseover", function() { d3.select(this).attr("stroke-width", 5); })
+            .on("mouseout", function() { d3.select(this).attr("stroke-width", 2.5); });
+            
+        // (可选) 可以在这里添加散点，但多条线时点会很乱，建议省略或只在Hover时显示
+    });
+
+    // 6. 绘制右侧图例
+    const legend = svg.append("g").attr("transform", `translate(${width + 20}, ${margin.top})`);
+    chartData.forEach((d, i) => {
+        const row = legend.append("g").attr("transform", `translate(0, ${i * 25})`);
+        row.append("rect").attr("width", 15).attr("height", 15).attr("fill", colorScale(d.book));
+        row.append("text").attr("x", 20).attr("y", 12).text(d.book).style("font-size", "12px").style("fill", "#333");
+    });
+    
+    // 标题
+    svg.append("text")
+        .attr("x", containerWidth / 2)
+        .attr("y", 25)
+        .attr("text-anchor", "middle")
+        .style("font-size", "16px")
+        .style("font-weight", "bold")
+        .text(`${getMetricLabel(currentMetric)} - 对比分析`);
+}
+
+// --- 修改 7: 绘制并列热力图 (Small Multiples) ---
+// --- 修改 7: 绘制并列热力图 (修复版：自适应高度 + 修复重叠) ---
+function drawMultiHeatmap(svg, booksArray) {
+    const containerWidth = svg.node().parentNode.getBoundingClientRect().width;
+    const padding = 20; // 图表左右间距
+    const topMargin = 80; // 增加顶部边距，给主标题和子标题留出空间
+    const bottomMargin = 50; // 底部边距
+    
+    // 1. 计算每个小图的宽度
+    // (总宽 - 左边距 - 右边距 - 中间间隙) / 数量
+    const chartWidth = (containerWidth - 60 - (booksArray.length - 1) * padding) / booksArray.length;
+    
+    // 2. 预计算最大行数和块大小，以确定 SVG 的总高度
+    let maxRows = 0;
+    let finalBlockSize = 0;
+    
+    booksArray.forEach(bookId => {
+        const data = realData[bookId][currentMetric];
+        const n = data.length;
+        const cols = Math.ceil(Math.sqrt(n)); 
+        const rows = Math.ceil(n / cols);
+        const blockSize = Math.floor(chartWidth / cols);
+        
+        if (rows > maxRows) maxRows = rows;
+        // 取第一本书计算出的块大小作为参考（或者取最小的以适应所有）
+        if (finalBlockSize === 0) finalBlockSize = blockSize; 
+    });
+    
+    // 动态计算 SVG 高度：顶部边距 + (行数 * 块大小) + 底部边距
+    // 至少保证有 400px 高度
+    const totalHeight = Math.max(400, topMargin + (maxRows * finalBlockSize) + bottomMargin);
+    
+    // 设置 SVG 尺寸
+    svg.attr("viewBox", `0 0 ${containerWidth} ${totalHeight}`)
+       .style("height", totalHeight + "px"); // 显式设置 CSS 高度
+    
+    // 3. 计算全局颜色映射范围 (Unified Scale)
+    let globalMin = Infinity, globalMax = -Infinity;
+    booksArray.forEach(bookId => {
+        const vals = realData[bookId][currentMetric].map(d => d.value);
+        globalMin = Math.min(globalMin, Math.min(...vals));
+        globalMax = Math.max(globalMax, Math.max(...vals));
+    });
+    
+    const colorScale = d3.scaleSequential()
+        .interpolator(d3.interpolateRdBu)
+        .domain([globalMin, globalMax]); 
+
+    // 4. 循环绘制每个子图
+    booksArray.forEach((bookId, index) => {
+        const data = realData[bookId][currentMetric];
+        
+        // 创建子图组，向下移动 topMargin 的距离
+        const g = svg.append("g")
+            .attr("transform", `translate(${30 + index * (chartWidth + padding)}, ${topMargin})`);
+            
+        // 计算网格
+        const n = data.length;
+        const cols = Math.ceil(Math.sqrt(n)); 
+        const blockSize = Math.floor(chartWidth / cols);
+        
+        // 绘制方块
+        g.selectAll("rect")
+            .data(data)
+            .enter()
+            .append("rect")
+            .attr("class", "heatmap-rect")
+            .attr("x", (d, i) => (i % cols) * blockSize)
+            .attr("y", (d, i) => Math.floor(i / cols) * blockSize)
+            .attr("width", blockSize)
+            .attr("height", blockSize)
+            .attr("fill", d => colorScale(d.value))
+            // 交互
+            .on("mouseover", function(event, d) { 
+                // 热力图特殊处理：稍微调亮边框
+                d3.select(this).style("stroke", "#f1c40f").style("stroke-width", "2px");
+                showTooltip(event, d, bookId); 
+            })
+            .on("mouseout", function() {
+                d3.select(this).style("stroke", "white").style("stroke-width", "1px");
+                hideTooltip();
+            })
+            .on("click", function(event, d) { showDetail(d, bookId); });
+
+        // 子图标题 (书名) - 放在热力图上方 20px 处
+        g.append("text")
+            .attr("x", (cols * blockSize) / 2)
+            .attr("y", -20) 
+            .attr("text-anchor", "middle")
+            .style("font-size", "14px")
+            .style("font-weight", "bold")
+            .style("fill", "#333")
+            .text(bookId.length > 18 ? bookId.substring(0, 15) + "..." : bookId); 
+    });
+
+    // 5. 绘制主标题 - 放在最顶部 (y=30)
+    svg.append("text")
+        .attr("x", containerWidth / 2)
+        .attr("y", 30) 
+        .attr("text-anchor", "middle")
+        .style("font-size", "18px")
+        .style("font-weight", "bold")
+        .style("fill", "#2c3e50")
+        .text(`${getMetricLabel(currentMetric)} - 指纹对比 (统一色标: ${globalMin.toFixed(1)} ~ ${globalMax.toFixed(1)})`);
+}
+
 
 function drawHeatmap(svg) {
     // 确保有选中的书
