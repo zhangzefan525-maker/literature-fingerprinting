@@ -72,7 +72,8 @@ def process_all_books():
                 keywords_list.append(get_top_keywords(block, n=3))
             
             # 计算功能词PCA
-            print(f"    计算功能词PCA...")
+             # 计算功能词PCA (现在返回的是字典列表 [{'x':..., 'y':...}])
+            print(f"    计算功能词PCA (2D)...")
             pca_coords = get_pca_coordinates(blocks)
             
             # 构建数据结构
@@ -107,15 +108,25 @@ def process_all_books():
                     }
                     for i, val in enumerate(hapax_values)
                 ],
+                # --- 修改 functionWords 的存储方式 ---
                 "functionWords": [
                     {
                         "block": i,
-                        "value": round(val, 4),
+                        "value": item['x'],
+                        "value_y": item['y'],
                         "keywords": keywords_list[i],
+                        
+                        # --- 修改开始 ---
+                        # 1. 原有的 preview 保持短小 (用于侧边栏和Tooltip)
                         "preview": blocks[i][:150] + "..." if len(blocks[i]) > 150 else blocks[i],
+                        
+                        # 2. 新增 extended_preview (用于星系图悬浮详情页，长度设为 1200 或更长)
+                        "extended_preview": blocks[i][:1200] + "..." if len(blocks[i]) > 1200 else blocks[i],
+                        # --- 修改结束 ---
+                        
                         "wordCount": len(blocks[i].split())
                     }
-                    for i, val in enumerate(pca_coords)
+                    for i, item in enumerate(pca_coords)
                 ],
                 "metadata": {
                     "totalBlocks": len(blocks),

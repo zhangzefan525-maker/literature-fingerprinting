@@ -16,7 +16,8 @@ body {
 .container {
     max-width: 1200px;
     margin: 0 auto;
-    background: white;
+    /* 修复：容器需要略微透明才能看到背后的文字雨 */
+    background: rgba(255, 255, 255, 0.95);
     border-radius: 15px;
     box-shadow: 0 10px 30px rgba(0,0,0,0.1);
     padding: 30px;
@@ -279,4 +280,295 @@ button:hover {
 
 .sort-control i {
     font-size: 10px;
+}
+
+/* 模态框背景遮罩 */
+.galaxy-modal-overlay {
+    position: fixed;
+    z-index: 9999;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6); /* 半透明黑背景 */
+    backdrop-filter: blur(5px); /* 背景模糊效果 */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+/* 模态框主体 */
+.galaxy-modal-content {
+    background: linear-gradient(145deg, #1e2a38, #111620);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+    color: #ecf0f1;
+    width: 60%;
+    max-width: 800px;
+    max-height: 85vh;
+    border-radius: 12px;
+    padding: 30px;
+    position: relative;
+    transform: scale(0.9);
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.27);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 显示状态 */
+.galaxy-modal-overlay.show {
+    opacity: 1;
+}
+
+.galaxy-modal-overlay.show .galaxy-modal-content {
+    transform: scale(1);
+}
+
+/* 关闭按钮 */
+.galaxy-modal-close {
+    color: #aaa;
+    position: absolute;
+    top: 15px;
+    right: 25px;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.galaxy-modal-close:hover {
+    color: #fff;
+}
+
+/* 内容样式 */
+.modal-header {
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    padding-bottom: 15px;
+    margin-bottom: 20px;
+}
+
+.modal-header h2 {
+    margin: 0 0 10px 0;
+    background: linear-gradient(90deg, #3498db, #2ecc71);
+    background-clip: text;  
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.modal-badges .badge {
+    background: rgba(255,255,255,0.1);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    margin-right: 10px;
+}
+
+.modal-badges .badge-highlight {
+    background: rgba(243, 156, 18, 0.2);
+    color: #f1c40f;
+    border: 1px solid rgba(243, 156, 18, 0.4);
+}
+
+.modal-section {
+    margin-bottom: 20px;
+}
+
+.modal-section h4 {
+    color: #bdc3c7;
+    margin-bottom: 10px;
+    border-left: 3px solid #3498db;
+    padding-left: 10px;
+}
+
+.keyword-container span {
+    display: inline-block;
+    background: rgba(52, 152, 219, 0.2);
+    color: #3498db;
+    padding: 5px 10px;
+    border-radius: 15px;
+    margin: 0 5px 5px 0;
+    font-size: 13px;
+}
+
+/* 长文本滚动区域 */
+.text-scroll-area {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 15px;
+    border-radius: 8px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: 'Georgia', serif;
+    line-height: 1.6;
+    font-size: 15px;
+    color: #dcdde1;
+    border: 1px solid rgba(255,255,255,0.05);
+}
+
+/* 滚动条美化 */
+.text-scroll-area::-webkit-scrollbar {
+    width: 8px;
+}
+.text-scroll-area::-webkit-scrollbar-thumb {
+    background: #4b6584;
+    border-radius: 4px;
+}
+.text-scroll-area::-webkit-scrollbar-track {
+    background: rgba(0,0,0,0.1);
+}
+
+/* 星系 HUD 面板 */
+.galaxy-hud {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    width: 260px;
+    background: rgba(16, 20, 30, 0.85); /* 深色半透明 */
+    border: 1px solid rgba(52, 152, 219, 0.3);
+    border-left: 4px solid #3498db;
+    border-radius: 4px;
+    padding: 15px;
+    color: #ecf0f1;
+    pointer-events: none; /* 让鼠标可以穿透面板操作下方的球 */
+    z-index: 10;
+    box-shadow: 0 0 20px rgba(52, 152, 219, 0.1);
+    backdrop-filter: blur(4px);
+    transition: all 0.3s ease;
+}
+
+.hud-title {
+    font-size: 14px;
+    font-weight: bold;
+    color: #3498db;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    padding-bottom: 5px;
+}
+
+.hud-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-size: 12px;
+}
+
+.hud-label {
+    color: #95a5a6;
+}
+
+.hud-value {
+    font-family: 'Consolas', monospace;
+    font-weight: bold;
+}
+
+.hud-bar-bg {
+    width: 100%;
+    height: 4px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 2px;
+    margin-top: 2px;
+    overflow: hidden;
+}
+
+.hud-bar-fill {
+    height: 100%;
+    background: #2ecc71;
+    width: 0%;
+    transition: width 0.3s;
+}
+
+.hud-tags {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.hud-tag {
+    background: rgba(255,255,255,0.1);
+    padding: 2px 6px;
+    border-radius: 2px;
+    font-size: 10px;
+    color: #bdc3c7;
+}
+
+/* 深空背景容器 */
+#galaxy-container {
+    box-shadow: inset 0 0 50px rgba(0,0,0,0.8); /* 内阴影增加深邃感 */
+    border: 1px solid #333;
+}
+
+/* 霓虹 HUD 面板 */
+.galaxy-hud {
+    background: rgba(10, 15, 30, 0.7) !important; /* 更深、更透 */
+    backdrop-filter: blur(10px); /* 磨砂玻璃 */
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-left: 3px solid #00f2ff; /* 赛博蓝 */
+    border-radius: 8px;
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+}
+
+.hud-title {
+    color: #00f2ff !important;
+    text-shadow: 0 0 10px rgba(0, 242, 255, 0.5);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.hud-value {
+    color: #fff !important;
+    text-shadow: 0 0 5px rgba(255,255,255,0.3);
+}
+
+.hud-tag {
+    background: rgba(0, 242, 255, 0.15) !important;
+    color: #a8fffb !important;
+    border: 1px solid rgba(0, 242, 255, 0.3);
+}
+
+/* ========================================== */
+/* 🌧️ 顶部悬浮开关样式 */
+/* ========================================== */
+
+.cyber-btn-float {
+    position: fixed;      /* 固定定位：不随页面滚动 */
+    top: 20px;            /* 距离顶部 20px */
+    right: 20px;          /* 距离右侧 20px (如果想放左边改成 left: 20px) */
+    z-index: 9999;        /* 确保在所有元素最上层 */
+    
+    background: rgba(0, 0, 0, 0.6); /* 半透明黑底 */
+    border: 1px solid #0F0;         /* 绿色描边 */
+    color: #0F0;                    /* 绿色文字 */
+    
+    /* 修复：调整大小 */
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: bold;
+    border-radius: 30px;            /* 圆角胶囊形状 */
+    cursor: pointer;
+    
+    box-shadow: 0 0 10px rgba(0, 255, 0, 0.2); /* 绿色微光 */
+    backdrop-filter: blur(5px);     /* 背景磨砂效果 */
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    
+    font-family: 'Consolas', 'Monaco', monospace; /* 代码字体 */
+}
+
+/* 悬停效果 */
+.cyber-btn-float:hover {
+    background: rgba(0, 255, 0, 0.15);
+    box-shadow: 0 0 20px rgba(0, 255, 0, 0.6);
+    transform: translateY(2px); /* 轻微下压感 */
+    text-shadow: 0 0 8px #0F0;
+}
+
+/* 激活状态 (JS会添加 .active 类) */
+.cyber-btn-float.active {
+    background: #0F0;       /* 变成实心绿 */
+    color: #000;            /* 文字变黑 */
+    box-shadow: 0 0 30px #0F0; /* 强烈发光 */
+    border-color: #0F0;
 }

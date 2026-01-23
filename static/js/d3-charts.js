@@ -18,6 +18,11 @@ let chartType = 'line';
 document.addEventListener('DOMContentLoaded', function() {
     initEventListeners();
     loadBooksList();
+    
+    // 修复：自动启动文本雨
+    setTimeout(() => {
+        toggleMatrixRain();
+    }, 500);
 });
 
 // 初始化事件监听器
@@ -247,7 +252,57 @@ function drawMultiLineChart(svg, booksArray) {
             .on("mouseover", function() { d3.select(this).attr("stroke-width", 5); })
             .on("mouseout", function() { d3.select(this).attr("stroke-width", 2.5); });
             
-        // (可选) 可以在这里添加散点，但多条线时点会很乱，建议省略或只在Hover时显示
+         // 添加数据点 (交互核心)
+        // 这里的 safeBookID 是为了防止书名中有空格导致选择器报错
+        const safeBookID = bookData.book.replace(/[^a-zA-Z0-9]/g, '_');
+
+        g.selectAll(`.point-${safeBookID}`)
+            .data(bookData.values) // 使用未平滑的原始数据，保证点击数据的准确性
+            .enter()
+            .append("circle")
+            .attr("class", `data-point point-${safeBookID}`)
+            .attr("cx", (d, i) => xScale(i))
+            .attr("cy", d => yScale(d.value))
+            .attr("r", 3) // 默认半径小一点，不遮挡线条
+            .attr("fill", colorScale(bookData.book))
+            .attr("stroke", "white")
+            .attr("stroke-width", 1.5)
+            .style("cursor", "pointer")
+            .style("opacity", 0) // 默认隐藏点，只显示线，鼠标放上去再显示点，或者保持 opacity: 1 也可以
+            // --- 鼠标悬停事件 ---
+            .on("mouseover", function(event, d) {
+                // 放大高亮
+                d3.select(this)
+                    .style("opacity", 1)
+                    .transition().duration(100)
+                    .attr("r", 6)
+                    .attr("stroke", "#f1c40f")
+                    .attr("stroke-width", 2);
+                
+                showTooltip(event, d, bookData.book);
+            })
+            // --- 鼠标移出事件 ---
+            .on("mouseout", function(event, d) {
+                d3.select(this)
+                    .transition().duration(200)
+                    .attr("r", 3)
+                    .attr("stroke", "white")
+                    .attr("stroke-width", 1.5)
+                    .style("opacity", 0); // 如果默认隐藏，这里恢复0；如果默认显示，设为1
+                
+                hideTooltip();
+            })
+            // --- 核心新增：点击事件 ---
+            .on("click", function(event, d) {
+                event.stopPropagation(); // 阻止冒泡
+                
+                // 视觉反馈：点击时产生一个波纹效果或者保持高亮
+                d3.selectAll(".data-point").attr("r", 3).style("opacity", 0); // 重置其他点
+                d3.select(this).style("opacity", 1).attr("r", 8).attr("stroke", "#000");
+
+                // 调用侧边栏显示函数
+                showDetail(d, bookData.book);
+            });
     });
 
     // 6. 绘制右侧图例
@@ -268,7 +323,6 @@ function drawMultiLineChart(svg, booksArray) {
         .text(`${getMetricLabel(currentMetric)} - 对比分析`);
 }
 
-// --- 修改 7: 绘制并列热力图 (Small Multiples) ---
 // --- 修改 7: 绘制并列热力图 (修复版：自适应高度 + 修复重叠) ---
 function drawMultiHeatmap(svg, booksArray) {
     const containerWidth = svg.node().parentNode.getBoundingClientRect().width;
@@ -907,6 +961,611 @@ function showNoDataMessage() {
         </div>
     `;
 }
+// ==========================================
+// 🌌 风格星系 (Style Galaxy) - 完整功能版
+// ==========================================
+
+let galaxySimulation = null;
+
+function initStyleGalaxy() {
+    // 0. 基础检查
+    const books = Array.from(selectedBooks);
+    if (books.length === 0) {
+        const loadingEl = document.getElementById('galaxy-loading');
+        if(loadingEl) loadingEl.innerText = "请先在上方选择书籍";
+        return;
+    }
+
+    const container = document.getElementById('galaxy-container');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    // 清理旧画布
+    d3.select("#galaxy-container").selectAll("svg").remove();
+    const loadingEl = document.getElementById('galaxy-loading');
+    if(loadingEl) loadingEl.style.display = 'none';
+
+    // 创建 SVG
+    const svg = d3.select("#galaxy-container").append("svg")
+        .attr("width", width)
+        .attr("height", height)
+        .style("background", "radial-gradient(ellipse at center, #1b2735 0%, #090a0f 100%)"); // 深空背景
+
+    // 1. 定义滤镜和渐变 (渲染引擎核心)
+    const defs = svg.append("defs");
+
+    // A. 定义发光滤镜 (Glow Filter)
+    const filter = defs.append("filter").attr("id", "glow");
+    filter.append("feGaussianBlur")
+        .attr("stdDeviation", "2.5")
+        .attr("result", "coloredBlur");
+    const feMerge = filter.append("feMerge");
+    feMerge.append("feMergeNode").attr("in", "coloredBlur");
+    feMerge.append("feMergeNode").attr("in", "SourceGraphic");
+
+    // B. 颜色比例尺
+    const colorScale = d3.scaleOrdinal()
+        .domain(books)
+        .range(['#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c']);
+
+    // C. 动态生成每本书的 3D 渐变球纹理
+    books.forEach((book) => {
+        const baseColor = d3.color(colorScale(book));
+        const highlight = baseColor.brighter(1.5); // 高光颜色
+        const shadow = baseColor.darker(1.2);      // 阴影颜色
+        
+        // 创建 ID (移除特殊字符作为ID)
+        const gradId = "grad-" + book.replace(/[^a-zA-Z0-9]/g, '');
+        
+        const gradient = defs.append("radialGradient")
+            .attr("id", gradId)
+            .attr("cx", "30%")  // 光源在左上角
+            .attr("cy", "30%")
+            .attr("r", "70%");
+
+        // 光源中心（高光）
+        gradient.append("stop")
+            .attr("offset", "0%")
+            .attr("stop-color", highlight.formatHex())
+            .attr("stop-opacity", 1);
+        
+        // 中间色
+        gradient.append("stop")
+            .attr("offset", "50%")
+            .attr("stop-color", baseColor.formatHex())
+            .attr("stop-opacity", 1);
+
+        // 边缘（阴影）
+        gradient.append("stop")
+            .attr("offset", "100%")
+            .attr("stop-color", shadow.formatHex())
+            .attr("stop-opacity", 1);
+    });
+
+    // 2. 准备数据并计算范围
+    let allNodes = [];
+    let minMetric = Infinity;
+    let maxMetric = -Infinity;
+
+    books.forEach(bookName => {
+        // 数据源 A: PCA位置数据 + 长文本 (来自 generate_data.py 修改后的 functionWords)
+        const positionData = realData[bookName]['functionWords'];
+        // 数据源 B: 显示数值 (来自用户当前选择的指标)
+        const displayData = realData[bookName][currentMetric];
+
+        if (positionData && displayData) {
+            positionData.forEach((d, i) => {
+                const metricItem = displayData[i];
+                if (metricItem) {
+                    const val = metricItem.value;
+                    // 更新最大最小值，用于计算半径
+                    if (val < minMetric) minMetric = val;
+                    if (val > maxMetric) maxMetric = val;
+
+                    allNodes.push({
+                        id: `${bookName}_${d.block}`,
+                        book: bookName,
+                        blockIndex: d.block,
+                        
+                        // 位置数据
+                        pcaX: d.value,
+                        pcaY: d.value_y || (Math.random() - 0.5),
+                        
+                        // 真实指标数据
+                        realValue: val,
+                        
+                        // 文本数据
+                        preview: metricItem.preview, // 短文本 (给Tooltip)
+                        // 核心：尝试获取长文本，如果没有则回退到短文本
+                        extendedPreview: d.extended_preview || metricItem.preview, 
+                        
+                        keywords: metricItem.keywords,
+                        
+                        // 初始位置设为画布中心，产生“大爆炸”效果
+                        x: width / 2 + (Math.random() - 0.5) * 50,
+                        y: height / 2 + (Math.random() - 0.5) * 50
+                    });
+                }
+            });
+        }
+    });
+
+    // 3. 半径比例尺：将指标值映射到球体大小
+    const radiusScale = d3.scaleSqrt()
+        .domain([minMetric, maxMetric])
+        .range([4, 18]); // 最小半径 4px，最大 18px
+
+    // 为每个节点计算最终半径
+    allNodes.forEach(d => {
+        d.r = radiusScale(d.realValue);
+    });
+
+    // 4. 坐标比例尺
+    const xExtent = d3.extent(allNodes, d => d.pcaX);
+    const yExtent = d3.extent(allNodes, d => d.pcaY);
+    const padding = 60;
+    const xScale = d3.scaleLinear().domain(xExtent).range([padding, width - padding]);
+    const yScale = d3.scaleLinear().domain(yExtent).range([padding, height - padding]);
+
+    // 5. 缩放容器
+    const g = svg.append("g");
+    svg.call(d3.zoom()
+        .scaleExtent([0.5, 5]) // 限制缩放范围
+        .on("zoom", (event) => {
+            g.attr("transform", event.transform);
+        }));
+
+    // 6. 物理引擎配置
+    if (galaxySimulation) galaxySimulation.stop();
+
+    galaxySimulation = d3.forceSimulation(allNodes)
+        // 牵引力
+        .force("x", d3.forceX(d => xScale(d.pcaX)).strength(0.8))
+        .force("y", d3.forceY(d => yScale(d.pcaY)).strength(0.8))
+        // 碰撞力
+        .force("collide", d3.forceCollide(d => d.r + 1).strength(1))
+        // 电荷力
+        .force("charge", d3.forceManyBody().strength(-15))
+        .alphaTarget(0)
+        .on("tick", ticked);
+
+    // 7. 绘制星球 (Circles)
+    const circles = g.selectAll("circle")
+        .data(allNodes)
+        .enter().append("circle")
+        .attr("r", d => d.r)
+        // 3D 渐变填充
+        .attr("fill", d => `url(#grad-${d.book.replace(/[^a-zA-Z0-9]/g, '')})`)
+        .attr("stroke", d => d3.color(colorScale(d.book)).darker(0.5))
+        .attr("stroke-width", 0.5)
+        .attr("stroke-opacity", 0.8)
+        .style("cursor", "pointer")
+        .call(d3.drag()
+            .on("start", dragstarted)
+            .on("drag", dragged)
+            .on("end", dragended));
+
+    // 8. 交互事件 (Updated with Probe Logic)
+    circles.on("mouseover", function(event, d) {
+        // A. 自身高亮
+        d3.select(this)
+            .transition().duration(100)
+            .attr("r", d.r * 1.5)
+            .style("filter", "url(#glow)")
+            .attr("stroke", "#fff")
+            .attr("stroke-width", 2);
+        
+        // B. 探针逻辑：寻找邻居
+        // 使用 svg.selectAll 获取所有节点数据
+        const allCircles = g.selectAll("circle");
+        const allNodeData = allCircles.data();
+        // 搜索半径 120 像素
+        const neighbors = findNeighbors(d, allNodeData, 120); 
+
+        // C. 高亮邻居 (视觉连线效果太卡，改用边框高亮)
+        allCircles.filter(node => neighbors.includes(node))
+            .transition().duration(100)
+            .attr("stroke", "#f1c40f")
+            .attr("stroke-width", 1.5)
+            .attr("stroke-opacity", 1);
+
+        // D. 数据分析并更新 HUD
+        const analysis = analyzeCluster(neighbors);
+        // 获取当前指标的中文名，如果没有 getMetricLabel 函数，就直接用 currentMetric
+        const label = window.getMetricLabel ? getMetricLabel(currentMetric) : currentMetric;
+        updateHUD(analysis, label);
+
+        // E. 原有 Tooltip
+        showTooltip(event, {
+            block: d.blockIndex,
+            value: typeof d.realValue === 'number' ? d.realValue.toFixed(4) : d.realValue,
+            keywords: d.keywords,
+            preview: d.preview 
+        }, d.book);
+    })
+    .on("mouseout", function(event, d) {
+        // A. 恢复自身
+        d3.select(this)
+            .transition().duration(200)
+            .attr("r", d.r)
+            .style("filter", null)
+            .attr("stroke", d3.color(colorScale(d.book)).darker(0.5))
+            .attr("stroke-width", 0.5);
+
+        // B. 恢复邻居
+        g.selectAll("circle")
+             .transition().duration(200)
+             .attr("stroke", node => d3.color(colorScale(node.book)).darker(0.5))
+             .attr("stroke-width", 0.5)
+             .attr("stroke-opacity", 0.8);
+        
+        // C. 重置 HUD
+        const hud = document.getElementById('galaxy-hud');
+        if(hud) {
+            hud.querySelector('.hud-title').innerText = "📡 星系探针：待机";
+            hud.querySelector('.hud-content').innerHTML = '<p style="color:#7f8c8d; font-size:12px;">鼠标漫游以探测区域风格...</p>';
+        }
+        
+        hideTooltip();
+    })
+    .on("click", (event, d) => {
+        event.stopPropagation(); // 阻止冒泡
+        // 打开悬浮详情页 (使用长文本)
+        openGalaxyModal(d);
+    });
+
+    function ticked() {
+        circles
+            .attr("cx", d => d.x)
+            .attr("cy", d => d.y);
+    }
+
+    function dragstarted(event, d) {
+        if (!event.active) galaxySimulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+        d3.select(this).style("cursor", "grabbing");
+    }
+
+    function dragged(event, d) {
+        d.fx = event.x;
+        d.fy = event.y;
+    }
+
+    function dragended(event, d) {
+        if (!event.active) galaxySimulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+        d3.select(this).style("cursor", "pointer");
+    }
+}
+
+// ==========================================
+// 📜 悬浮页控制函数 (Modal Logic)
+// ==========================================
+
+function openGalaxyModal(d) {
+    const modal = document.getElementById('galaxy-modal');
+    if(!modal) return;
+
+    // 填充数据
+    const titleEl = document.getElementById('modal-book-title');
+    if(titleEl) titleEl.innerText = d.book;
+    
+    const blockEl = document.getElementById('modal-block-id');
+    if(blockEl) blockEl.innerText = `Block #${d.blockIndex}`;
+    
+    // 格式化数值显示
+    let valDisplay = typeof d.realValue === 'number' ? d.realValue.toFixed(4) : d.realValue;
+    const metricEl = document.getElementById('modal-metric-val');
+    if(metricEl) metricEl.innerText = `${getMetricLabel(currentMetric)}: ${valDisplay}`;
+    
+    // 填充关键词
+    const keywordContainer = document.getElementById('modal-keywords');
+    if(keywordContainer) {
+        keywordContainer.innerHTML = '';
+        if (d.keywords && d.keywords.length > 0) {
+            d.keywords.forEach(kw => {
+                const span = document.createElement('span');
+                span.innerText = kw;
+                keywordContainer.appendChild(span);
+            });
+        } else {
+            keywordContainer.innerHTML = '<span style="color:#666">无关键词</span>';
+        }
+    }
+
+    // 填充长文本 (使用 extendedPreview)
+    const textContainer = document.getElementById('modal-long-text');
+    if(textContainer) {
+        textContainer.innerText = d.extendedPreview || d.preview || "暂无详细文本内容...";
+    }
+
+    // 显示动画
+    modal.style.display = 'flex';
+    setTimeout(() => {
+        modal.classList.add('show');
+    }, 10);
+}
+
+function closeGalaxyModal() {
+    const modal = document.getElementById('galaxy-modal');
+    if(!modal) return;
+    
+    modal.classList.remove('show');
+    setTimeout(() => {
+        modal.style.display = 'none';
+    }, 300);
+}
+
+// 点击遮罩层空白处关闭
+document.addEventListener('DOMContentLoaded', function() {
+    const modal = document.getElementById('galaxy-modal');
+    if(modal) {
+        modal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeGalaxyModal();
+            }
+        });
+    }
+});
+
+// 绑定重置按钮
+window.restartGalaxy = function() {
+    initStyleGalaxy();
+};
+
+// 挂载到主初始化流程
+const _prevInit = window.initChart;
+window.initChart = function() {
+    if (_prevInit) _prevInit();
+    // 只有在数据加载后才初始化星系
+    if (realData) {
+        // 延迟一点执行，避免阻塞UI
+        setTimeout(initStyleGalaxy, 500); 
+    }
+};
 
 // 使函数全局可用
 window.selectBook = selectBook;
+
+// ... (保留之前的代码) ...
+
+// ==========================================
+// 📡 星系探针分析逻辑 (新增核心)
+// ==========================================
+
+// 1. 查找邻居节点 (根据屏幕距离)
+function findNeighbors(centerNode, allNodes, radius = 80) {
+    // 简单的欧几里得距离计算
+    return allNodes.filter(node => {
+        const dx = node.x - centerNode.x;
+        const dy = node.y - centerNode.y;
+        return Math.sqrt(dx*dx + dy*dy) < radius;
+    });
+}
+
+// 2. 分析邻居并生成报告
+function analyzeCluster(neighbors) {
+    if (neighbors.length === 0) return null;
+
+    // A. 统计主要作者 (Dominant Book)
+    const bookCounts = {};
+    neighbors.forEach(n => {
+        bookCounts[n.book] = (bookCounts[n.book] || 0) + 1;
+    });
+    // 找出数量最多的书
+    const dominantBook = Object.keys(bookCounts).reduce((a, b) => bookCounts[a] > bookCounts[b] ? a : b);
+    const dominanceRate = (bookCounts[dominantBook] / neighbors.length) * 100;
+
+    // B. 计算平均指标 (Average Metric)
+    const totalMetric = neighbors.reduce((sum, n) => sum + (n.realValue || 0), 0);
+    const avgMetric = totalMetric / neighbors.length;
+
+    // C. 提取高频关键词 (Top Keywords)
+    const keywordMap = {};
+    neighbors.forEach(n => {
+        if(n.keywords) {
+            n.keywords.forEach(kw => {
+                keywordMap[kw] = (keywordMap[kw] || 0) + 1;
+            });
+        }
+    });
+    // 排序并取前5
+    const topKeywords = Object.keys(keywordMap)
+        .sort((a, b) => keywordMap[b] - keywordMap[a])
+        .slice(0, 5);
+
+    return {
+        count: neighbors.length,
+        dominantBook: dominantBook,
+        dominanceRate: dominanceRate,
+        avgMetric: avgMetric,
+        topKeywords: topKeywords
+    };
+}
+
+// 3. 更新 HUD 界面
+function updateHUD(analysisData, metricLabel) {
+    const hud = document.getElementById('galaxy-hud');
+    const content = hud.querySelector('.hud-content');
+    const title = hud.querySelector('.hud-title');
+
+    if (!analysisData) {
+        title.innerText = "📡 星系探针：扫描中...";
+        content.innerHTML = `<p style="color:#7f8c8d; font-size:12px;">正在分析区域引力场...</p>`;
+        return;
+    }
+
+    title.innerHTML = `📡 区域扫描 (包含 ${analysisData.count} 个节点)`;
+    
+    // 生成动态 HTML
+    let html = `
+        <div class="hud-row">
+            <span class="hud-label">主要归属:</span>
+            <span class="hud-value" style="color:white">${analysisData.dominantBook.substring(0, 15)}...</span>
+        </div>
+        <div class="hud-bar-bg" title="该作者占比 ${analysisData.dominanceRate.toFixed(0)}%">
+            <div class="hud-bar-fill" style="width: ${analysisData.dominanceRate}%;"></div>
+        </div>
+        <div class="hud-row" style="margin-top:8px;">
+            <span class="hud-label">区域平均 ${metricLabel}:</span>
+            <span class="hud-value" style="color:#f1c40f">${analysisData.avgMetric.toFixed(2)}</span>
+        </div>
+        <div class="hud-row" style="margin-top:8px;">
+            <span class="hud-label">区域共性话题:</span>
+        </div>
+        <div class="hud-tags">
+            ${analysisData.topKeywords.map(k => `<span class="hud-tag">${k}</span>`).join('')}
+        </div>
+        <div style="margin-top:10px; padding-top:5px; border-top:1px dashed rgba(255,255,255,0.1); font-size:10px; color:#7f8c8d;">
+            * 此区域节点因由 PCA (功能词使用习惯) 相近而聚集。
+        </div>
+    `;
+
+    content.innerHTML = html;
+}
+
+// ==========================================
+// 🌧️ 黑客帝国文本雨 (Matrix Keyword Rain)
+// ==========================================
+
+let matrixInterval = null;
+let isMatrixOn = false;
+
+function initMatrixRain() {
+    const canvas = document.getElementById('matrix-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    // 1. 设置画布全屏
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    // 2. 提取关键词池 (Keyword Pool)
+    let words = [];
+    if (typeof realData !== 'undefined' && realData) {
+        // 遍历所有书，提取关键词
+        Object.values(realData).forEach(bookData => {
+            // 假设我们用 sentenceLength 这个指标下的数据来提取关键词
+            const metricData = bookData[currentMetric] || Object.values(bookData)[0];
+            if (Array.isArray(metricData)) {
+                metricData.forEach(block => {
+                    if (block.keywords && Array.isArray(block.keywords)) {
+                        // 过滤掉太长的词，保持视觉整洁
+                        const shortKws = block.keywords.filter(w => w.length < 10);
+                        words.push(...shortKws);
+                    }
+                });
+            }
+        });
+    }
+    
+    // 如果没有数据或数据太少，使用默认词库
+    if (words.length < 50) {
+        words = [
+            'Literature', 'Style', 'Twain', 'London', 'Data', 'Visual', 
+            'Python', 'Analysis', 'Fingerprint', 'Novel', 'Text', 'Code',
+            'Stream', 'Galaxy', 'Emotion', 'Plot', 'Character'
+        ];
+    }
+    
+    // 去重
+    words = [...new Set(words)];
+
+    // 3. 配置参数
+    const fontSize = 14;
+    const fontFamily = 'Consolas, monospace';
+    // 计算列数 (屏幕宽度 / 字体大小)
+    const columns = Math.floor(canvas.width / fontSize);
+    
+    // 记录每一列当前下落到的 Y 轴位置 (初始化为随机高度，造成参差感)
+    const drops = [];
+    for (let i = 0; i < columns; i++) {
+        drops[i] = Math.random() * -100; // 负数表示从屏幕上方外开始
+    }
+
+    // 颜色池
+    const colors = ['#3498db', '#e74c3c', '#2ecc71', '#9b59b6', '#f1c40f', '#34495e'];
+
+    // 4. 绘图循环
+    function draw() {
+        // A. 绘制半透明背景 (制造拖尾效果的核心)
+        // 修复：改用白色淡出，因为网页背景是浅色的
+        // alpha = 0.1 意味着每一帧只覆盖 10% 的白色，旧的文字会慢慢变淡
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // B. 设置文字样式
+        // 修复：随机颜色
+        ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+        
+        ctx.font = `${fontSize}px ${fontFamily}`;
+        ctx.textAlign = 'center';
+
+        // C. 遍历每一列
+        for (let i = 0; i < drops.length; i++) {
+            // 随机取一个词
+            const text = words[Math.floor(Math.random() * words.length)];
+            
+            // 绘制文字
+            // x = 列索引 * 字体宽度
+            // y = 当前下落进度 * 字体高度
+            const x = i * fontSize;
+            const y = drops[i] * fontSize;
+
+            // 只有在屏幕范围内才绘制，节省性能
+            if (y > 0 && y < canvas.height) {
+                ctx.fillText(text, x, y);
+            }
+
+            // D. 重置逻辑
+            // 如果超出了屏幕底部，且随机触发 (让雨滴不是同时回到顶部)
+            if (y > canvas.height && Math.random() > 0.975) {
+                drops[i] = 0;
+            }
+
+            // E. 下落
+            drops[i]++;
+        }
+    }
+
+    // 5. 启动动画循环 (30FPS 左右即可，太快看不清)
+    if (matrixInterval) clearInterval(matrixInterval);
+    matrixInterval = setInterval(draw, 50); // 50ms 一帧
+    
+    // 6. 窗口大小改变时重置
+    window.onresize = () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    };
+}
+
+// 开关控制函数
+function toggleMatrixRain() {
+    const canvas = document.getElementById('matrix-canvas');
+    const btn = document.getElementById('btn-matrix');
+    
+    isMatrixOn = !isMatrixOn;
+
+    if (isMatrixOn) {
+        // 开启
+        initMatrixRain(); // 初始化并开始绘图
+        canvas.classList.add('active'); // CSS 渐显
+        btn.classList.add('active');
+        btn.innerHTML = "🛑 停止文本雨";
+    } else {
+        // 关闭
+        canvas.classList.remove('active'); // CSS 渐隐
+        btn.classList.remove('active');
+        btn.innerHTML = "🌧️ 激活文本雨";
+        
+        // 延时清除定时器，等渐隐动画播完
+        setTimeout(() => {
+            if (matrixInterval) clearInterval(matrixInterval);
+            // 清空画布
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }, 1000);
+    }
+}
