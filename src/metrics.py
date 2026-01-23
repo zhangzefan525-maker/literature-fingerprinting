@@ -81,34 +81,35 @@ def calc_hapax_legomena(text_block):
     R = (100 * math.log(N)) / (1 - (V1 / V))
     return R
 
+# src/metrics.py
+
 def get_pca_coordinates(all_blocks):
     """
-    4. 计算 PCA 投影 (Function Words Analysis)
+    4. 计算 PCA 投影 (Function Words Analysis) - 升级版 (2D)
     输入：整本书的所有文本块列表 List[str]
-    输出：每个文本块在第一主成分上的投影值列表 List[float]
+    输出：每个文本块的坐标列表 List[{x, y}]
     """
-    # 使用 NLTK 的英文停用词作为虚词表 (Function Words)
-    # 因为你刚才已经运行成功了下载脚本，这里直接调用肯定没问题
-    function_words = stopwords.words('english')
+    from nltk.corpus import stopwords
+    from sklearn.feature_extraction.text import CountVectorizer
+    from sklearn.decomposition import PCA
     
-    # 仅统计这些虚词的频率
+    function_words = stopwords.words('english')
     vectorizer = CountVectorizer(vocabulary=function_words)
     
     try:
-        # 生成文档-词频矩阵
         X = vectorizer.fit_transform(all_blocks)
         X_array = X.toarray()
         
-        # PCA 降维到 1 维
-        pca = PCA(n_components=1)
+        # --- 修改关键点：降维到 2 维 ---
+        pca = PCA(n_components=2) 
         X_pca = pca.fit_transform(X_array)
         
-        # 展平结果
-        return [float(x[0]) for x in X_pca]
+        # 返回字典列表，包含 x 和 y
+        # x 用于原来的热力图（依然可以用第一主成分），x,y 联合用于星系图
+        return [{"x": float(v[0]), "y": float(v[1])} for v in X_pca]
         
     except ValueError:
-        # 如果数据为空或不足以计算PCA，返回0列表
-        return [0.0] * len(all_blocks)
+        return [{"x": 0.0, "y": 0.0} for _ in all_blocks]
     
     
 # ---------------------------------------------------------

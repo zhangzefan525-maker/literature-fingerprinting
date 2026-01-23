@@ -137,6 +137,15 @@
     </style>
 </head>
 <body>
+    <!-- 1. 背景画布 (放在 body 刚开始的地方) -->
+    <!-- 修复：添加 style 让它默认位于底层 -->
+    <canvas id="matrix-canvas" style="position: fixed; top: 0; left: 0; z-index: -1;"></canvas>
+
+    <!-- 2. 全局悬浮开关 -->
+    <button id="btn-matrix" onclick="toggleMatrixRain()" class="cyber-btn-float active">
+        🛑 停止文本雨
+    </button>
+    
     <div class="container">
         <div class="header">
             <h1>文印 - 文学指纹交互分析</h1>
@@ -162,6 +171,7 @@
             </div>
             
             <div class="control-group">
+                
                 <select id="chartTypeSelect" style="margin-right: 10px;">
                     <option value="line">📈 折线趋势图</option>
                     <option value="heatmap">▦ 指纹热力图</option>
@@ -188,6 +198,35 @@
         </div>
         
         <div class="legend" id="legend"></div>
+
+
+        <!-- d3_visualization.html -->
+
+<hr class="section-divider">
+<div class="galaxy-section">
+    <div class="adv-header">
+        <div>
+            <h2 style="margin:0; color:#2c3e50; font-size: 18px;">🌌 风格星系 (Style Galaxy)</h2>
+            <small style="color:#7f8c8d">物理仿真视图：拖拽泡泡以探索风格聚类</small>
+        </div>
+        <div>
+            <button onclick="restartGalaxy()" style="padding:5px 15px;">💥 重聚星系</button>
+        </div>
+    </div>
+    <!-- 星系图容器 -->
+    <div id="galaxy-container" style="width: 100%; height: 600px; background: #1a1a2e; border-radius: 10px; position: relative; overflow: hidden; cursor: grab;">
+          <!-- 新增：HUD 风格分析面板 -->
+    <div id="galaxy-hud" class="galaxy-hud">
+        <div class="hud-title">📡 星系探针：未激活</div>
+        <div class="hud-content">
+            <p style="color:#7f8c8d; font-size:12px;">请将鼠标悬停在星球上，探测该区域的风格特征。</p>
+        </div>
+    </div>
+        <div id="galaxy-loading" style="color:white; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">加载数据以开始...</div>
+    </div>
+</div>
+
+
 
         <!-- ============================================ -->
         <!--  新增：综合分析仪表盘 (Advanced Dashboard)   -->
@@ -249,6 +288,36 @@
                 </div>
             </div>
         </div>
+
+<!-- 悬浮详情页模态框 -->
+<div id="galaxy-modal" class="galaxy-modal-overlay" style="display: none;">
+    <div class="galaxy-modal-content">
+        <span class="galaxy-modal-close" onclick="closeGalaxyModal()">&times;</span>
+        
+        <!-- 头部信息 -->
+        <div class="modal-header">
+            <h2 id="modal-book-title">书籍标题</h2>
+            <div class="modal-badges">
+                <span id="modal-block-id" class="badge">Block #0</span>
+                <span id="modal-metric-val" class="badge badge-highlight">Value: 0.00</span>
+            </div>
+        </div>
+
+        <!-- 关键词 -->
+        <div class="modal-section">
+            <h4>🔑 核心关键词</h4>
+            <div id="modal-keywords" class="keyword-container"></div>
+        </div>
+
+        <!-- 长原文展示 -->
+        <div class="modal-section">
+            <h4>📜 原文深度阅读</h4>
+            <div class="text-scroll-area">
+                <p id="modal-long-text">正在加载文本...</p>
+            </div>
+        </div>
+    </div>
+</div>
 
         <div class="footer">
             <p>📚 基于 Literature Fingerprinting 理论 | 🔬 可视语言与信息可视化实验</p>
