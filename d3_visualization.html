@@ -3,142 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>文印 - 文学指纹交互分析</title>
+    <title>文印 - 文学指纹交互分析系统</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="static/css/d3-style.css">
-    
-    <style>
-        /* 分隔线 */
-        .section-divider {
-            margin: 40px 0;
-            border: 0;
-            height: 1px;
-            background-image: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(52, 152, 219, 0.75), rgba(0, 0, 0, 0));
-        }
-
-        /* 仪表盘容器 */
-        #advanced-dashboard-wrapper {
-            display: none; /* 默认隐藏，有数据时显示 */
-            margin-top: 20px;
-        }
-
-        .adv-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 5px solid #2c3e50;
-        }
-
-        .adv-controls .filter-chip {
-            display: inline-block;
-            padding: 5px 12px;
-            margin-left: 5px;
-            background: #e0e0e0;
-            border-radius: 15px;
-            font-size: 12px;
-            cursor: pointer;
-            user-select: none;
-            transition: all 0.2s;
-        }
-        .adv-controls .filter-chip.active {
-            background: #3498db;
-            color: white;
-        }
-
-        /* 2x2 图表网格 */
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: 3fr 1fr; /* 左图表 右详情 */
-            gap: 20px;
-            height: 600px;
-        }
-
-        .charts-area {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            grid-template-rows: 1fr 1fr;
-            gap: 15px;
-        }
-
-        .dash-card {
-            background: #fff;
-            border: 1px solid #eee;
-            border-radius: 8px;
-            padding: 10px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.02);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .dash-card h4 {
-            margin: 0 0 10px 0;
-            font-size: 13px;
-            color: #555;
-            border-bottom: 1px solid #f0f0f0;
-            padding-bottom: 5px;
-            display: flex;
-            justify-content: space-between;
-        }
-
-        .dash-chart-body {
-            flex: 1;
-            width: 100%;
-            position: relative;
-        }
-
-        /* 钻取面板 */
-        .drill-panel {
-            background: #fff;
-            border-radius: 8px;
-            border: 1px solid #eee;
-            border-top: 3px solid #e67e22;
-            padding: 15px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .drill-content {
-            flex: 1;
-            overflow-y: auto;
-            margin-top: 10px;
-        }
-
-        .drill-item {
-            background: #fdfdfd;
-            border-left: 3px solid #ccc;
-            padding: 8px;
-            margin-bottom: 8px;
-            font-size: 12px;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        }
-
-        /* D3 交互状态类 */
-        .book-el { transition: all 0.3s; cursor: pointer; }
-        .book-el.dimmed { opacity: 0.1; }
-        .book-el.highlighted { opacity: 1; stroke-width: 2px; }
-        
-        .selection { fill: rgba(52, 152, 219, 0.1); stroke: #3498db; }
-        
-        .annotation-point { fill: #e74c3c; stroke: #fff; cursor: help; }
-        
-        .empty-tip {
-            text-align: center;
-            color: #999;
-            margin-top: 50%;
-            font-size: 12px;
-        }
-    </style>
 </head>
 <body>
-    <!-- 1. 背景画布 (放在 body 刚开始的地方) -->
-    <!-- 修复：添加 style 让它默认位于底层 -->
+    <!-- 1. 背景画布 -->
     <canvas id="matrix-canvas" style="position: fixed; top: 0; left: 0; z-index: -1;"></canvas>
 
     <!-- 2. 全局悬浮开关 -->
@@ -148,184 +19,194 @@
     
     <div class="container">
         <div class="header">
-            <h1>文印 - 文学指纹交互分析</h1>
-            <p>基于 Python 计算与 D3.js 可视化的多维度文本特征分析系统</p>
+            <h1>文印 - 文学指纹交互分析系统</h1>
         </div>
 
+        <!-- 全局书籍选择器 -->
         <div class="book-selector" id="bookSelector"></div>
+
+        <!-- 新增：顶部 Tab 切换导航 -->
+        <div class="tab-navigation">
+            <button class="tab-btn active" onclick="switchTab('view-main')">
+                <i class="fas fa-chart-line"></i> 基础趋势分析
+            </button>
+            <button class="tab-btn" onclick="switchTab('view-galaxy')">
+                <i class="fas fa-atom"></i> 风格星系探针
+            </button>
+            <button class="tab-btn" onclick="switchTab('view-dashboard')">
+                <i class="fas fa-tachometer-alt"></i> 综合仪表盘
+            </button>
+        </div>
         
-        <div class="controls">
-            <div class="control-group">
-                <label>分析指标：</label>
-                <select id="metricSelect">
-                    <option value="sentenceLength">平均句长</option>
-                    <option value="simpsonIndex">Simpson指数</option>
-                    <option value="hapaxLegomena">Hapax Legomena</option>
-                    <option value="functionWords">功能词PCA</option>
-                </select>
-            </div>
-            
-            <div class="control-group">
-                <label>平滑度：</label>
-                <input type="range" id="smoothness" min="1" max="10" value="3">
-            </div>
-            
-            <div class="control-group">
+        <!-- ============================================ -->
+        <!--  视图 1: 基础图表 (Main Chart View)          -->
+        <!-- ============================================ -->
+        <div id="view-main" class="view-section active">
+            <div class="controls">
+                <div class="control-group">
+                    <label>分析指标：</label>
+                    <select id="metricSelect">
+                        <option value="sentenceLength">平均句长</option>
+                        <option value="simpsonIndex">Simpson指数</option>
+                        <option value="hapaxLegomena">Hapax Legomena</option>
+                        <option value="functionWords">功能词PCA</option>
+                    </select>
+                </div>
                 
-                <select id="chartTypeSelect" style="margin-right: 10px;">
-                    <option value="line">📈 折线趋势图</option>
-                    <option value="heatmap">▦ 指纹热力图</option>
-                </select>
-                <button id="loadRealData">加载真实数据</button>
-                <button id="toggleView">切换视图</button>
-                <button id="exportBtn">导出图像</button>
+                <div class="control-group">
+                    <label>平滑度：</label>
+                    <input type="range" id="smoothness" min="1" max="10" value="3">
+                </div>
+                
+                <div class="control-group">
+                    <select id="chartTypeSelect" style="margin-right: 10px;">
+                        <option value="line">📈 折线趋势图</option>
+                        <option value="heatmap">▦ 指纹热力图</option>
+                    </select>
+                    <button id="loadRealData">加载数据</button>
+                    <button id="toggleView">切换视图</button>
+                    <button id="exportBtn">导出图像</button>
+                </div>
             </div>
-        </div>
-        
-        <div class="comparison-mode" id="toggleComparison">
-            🆚 点击切换到多书对比模式
-        </div>
-        
-        <!-- 原有图表容器 -->
-        <div class="visualization-container">
-            <div id="chart-container">
-                <svg id="main-chart" width="100%" height="400"></svg>
+            
+            <div class="comparison-mode" id="toggleComparison">
+                🆚 点击切换到多书对比模式
             </div>
-            <div class="detail-panel" id="detailPanel">
-                <h3>📊 数据详情</h3>
-                <p>请先加载数据，然后点击或悬停图表中的点查看详细信息</p>
+            
+            <div class="visualization-container">
+                <div id="chart-container">
+                    <svg id="main-chart" width="100%" height="400"></svg>
+                </div>
+                <div class="detail-panel" id="detailPanel">
+                    <h3>📊 数据详情</h3>
+                    <p>请先加载数据，然后点击或悬停图表中的点查看详细信息</p>
+                </div>
             </div>
+            
+            <div class="legend" id="legend"></div>
         </div>
-        
-        <div class="legend" id="legend"></div>
-
-
-        <!-- d3_visualization.html -->
-
-<hr class="section-divider">
-<div class="galaxy-section">
-    <div class="adv-header">
-        <div>
-            <h2 style="margin:0; color:#2c3e50; font-size: 18px;">🌌 风格星系 (Style Galaxy)</h2>
-            <small style="color:#7f8c8d">物理仿真视图：拖拽泡泡以探索风格聚类</small>
-        </div>
-        <div>
-            <button onclick="restartGalaxy()" style="padding:5px 15px;">💥 重聚星系</button>
-        </div>
-    </div>
-    <!-- 星系图容器 -->
-    <div id="galaxy-container" style="width: 100%; height: 600px; background: #1a1a2e; border-radius: 10px; position: relative; overflow: hidden; cursor: grab;">
-          <!-- 新增：HUD 风格分析面板 -->
-    <div id="galaxy-hud" class="galaxy-hud">
-        <div class="hud-title">📡 星系探针：未激活</div>
-        <div class="hud-content">
-            <p style="color:#7f8c8d; font-size:12px;">请将鼠标悬停在星球上，探测该区域的风格特征。</p>
-        </div>
-    </div>
-        <div id="galaxy-loading" style="color:white; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">加载数据以开始...</div>
-    </div>
-</div>
-
-
 
         <!-- ============================================ -->
-        <!--  新增：综合分析仪表盘 (Advanced Dashboard)   -->
+        <!--  视图 2: 风格星系 (Galaxy View)              -->
         <!-- ============================================ -->
-        <hr class="section-divider">
+        <div id="view-galaxy" class="view-section">
+            <div class="galaxy-section">
+                <div class="adv-header">
+                    <div>
+                        <h2 style="margin:0; color:#2c3e50; font-size: 18px;">🌌 风格星系 (Style Galaxy)</h2>
+                        <small style="color:#7f8c8d">物理仿真视图：拖拽泡泡以探索风格聚类</small>
+                    </div>
+                    <div>
+                        <button onclick="restartGalaxy()" style="padding:5px 15px;">💥 重聚星系</button>
+                    </div>
+                </div>
+                <!-- 星系图容器 -->
+                <div id="galaxy-container" style="width: 100%; height: 600px; background: #1a1a2e; border-radius: 10px; position: relative; overflow: hidden; cursor: grab;">
+                    <!-- HUD 风格分析面板 -->
+                    <div id="galaxy-hud" class="galaxy-hud">
+                        <div class="hud-title">📡 星系探针：未激活</div>
+                        <div class="hud-content">
+                            <p style="color:#7f8c8d; font-size:12px;">请将鼠标悬停在星球上，探测该区域的风格特征。</p>
+                        </div>
+                    </div>
+                    <div id="galaxy-loading" style="color:white; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">加载数据以开始...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================ -->
+        <!--  视图 3: 综合仪表盘 (Dashboard View)         -->
+        <!-- ============================================ -->
+        <div id="view-dashboard" class="view-section">
+            <div id="advanced-dashboard-wrapper" style="display: block;">
+                <div class="adv-header">
+                    <div>
+                        <h2 style="margin:0; color:#2c3e50; font-size: 18px;">🧠 深度综合分析仪表盘</h2>
+                        <small style="color:#7f8c8d">联动筛选 · 区间刷选 · 对比分析</small>
+                    </div>
+                    <div class="adv-controls">
+                        <span>显示书籍: </span>
+                        <span id="adv-filters"></span>
+                        <button onclick="advReset()" style="margin-left:10px; padding:4px 8px; font-size:12px;">重置视图</button>
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <div class="charts-area">
+                        <div class="dash-card">
+                            <h4>
+                                📊 均值对比
+                                <span class="sort-control" onclick="advCycleSort('mean')" title="点击切换：数值大小 / 书名首字母">
+                                    <span id="sort-text-mean">数值</span>
+                                    <i id="sort-icon-mean" class="fas fa-sort-amount-down"></i>
+                                </span>
+                            </h4>
+                            <div id="adv-mean" class="dash-chart-body"></div>
+                        </div>
+
+                        <div class="dash-card">
+                            <h4>
+                                📉 波动性
+                                <span class="sort-control" onclick="advCycleSort('std')" title="点击切换：数值大小 / 书名首字母">
+                                    <span id="sort-text-std">数值</span>
+                                    <i id="sort-icon-std" class="fas fa-sort-amount-down"></i>
+                                </span>
+                            </h4>
+                            <div id="adv-std" class="dash-chart-body"></div>
+                        </div>
+                        <div class="dash-card">
+                            <h4>📦 分布箱线图</h4>
+                            <div id="adv-box" class="dash-chart-body"></div>
+                        </div>
+                        <div class="dash-card">
+                            <h4>📈 趋势演变 (支持刷选) <span style="font-size:10px;color:#e67e22">拖拽选区</span></h4>
+                            <div id="adv-line" class="dash-chart-body"></div>
+                        </div>
+                    </div>
+
+                    <div class="drill-panel">
+                        <h4 style="margin:0; border-bottom:1px solid #eee; padding-bottom:10px;">🔍 钻取详情</h4>
+                        <div id="adv-drill-content" class="drill-content">
+                            <div class="empty-tip">点击左侧图表中的书籍<br>或拖拽趋势图查看详情</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 悬浮详情页模态框 (公用) -->
+        <div id="galaxy-modal" class="galaxy-modal-overlay" style="display: none;">
+            <div class="galaxy-modal-content">
+                <span class="galaxy-modal-close" onclick="closeGalaxyModal()">&times;</span>
+                
+                <div class="modal-header">
+                    <h2 id="modal-book-title">书籍标题</h2>
+                    <div class="modal-badges">
+                        <span id="modal-block-id" class="badge">Block #0</span>
+                        <span id="modal-metric-val" class="badge badge-highlight">Value: 0.00</span>
+                    </div>
+                </div>
+
+                <div class="modal-section">
+                    <h4>🔑 核心关键词</h4>
+                    <div id="modal-keywords" class="keyword-container"></div>
+                </div>
+
+                <div class="modal-section">
+                    <h4>📜 原文深度阅读</h4>
+                    <div class="text-scroll-area">
+                        <p id="modal-long-text">正在加载文本...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         
-        <div id="advanced-dashboard-wrapper">
-            <div class="adv-header">
-                <div>
-                    <h2 style="margin:0; color:#2c3e50; font-size: 18px;">🧠 深度综合分析仪表盘</h2>
-                    <small style="color:#7f8c8d">联动筛选 · 区间刷选 · 对比分析</small>
-                </div>
-                <div class="adv-controls">
-                    <span>显示书籍: </span>
-                    <span id="adv-filters"></span>
-                    <button onclick="advReset()" style="margin-left:10px; padding:4px 8px; font-size:12px;">重置视图</button>
-                </div>
-            </div>
-
-            <div class="dashboard-grid">
-                <div class="charts-area">
-
-<div class="dash-card">
-    <h4>
-        📊 均值对比
-        <span class="sort-control" onclick="advCycleSort('mean')" title="点击切换：数值大小 / 书名首字母">
-            <span id="sort-text-mean">数值</span>
-            <i id="sort-icon-mean" class="fas fa-sort-amount-down"></i>
-        </span>
-    </h4>
-    <div id="adv-mean" class="dash-chart-body"></div>
-</div>
-
-<div class="dash-card">
-    <h4>
-        📉 波动性
-        <span class="sort-control" onclick="advCycleSort('std')" title="点击切换：数值大小 / 书名首字母">
-            <span id="sort-text-std">数值</span>
-            <i id="sort-icon-std" class="fas fa-sort-amount-down"></i>
-        </span>
-    </h4>
-    <div id="adv-std" class="dash-chart-body"></div>
-</div>
-                    <div class="dash-card">
-                        <h4>📦 分布箱线图</h4>
-                        <div id="adv-box" class="dash-chart-body"></div>
-                    </div>
-                    <div class="dash-card">
-                        <h4>📈 趋势演变 (支持刷选) <span style="font-size:10px;color:#e67e22">拖拽选区</span></h4>
-                        <div id="adv-line" class="dash-chart-body"></div>
-                    </div>
-                </div>
-
-                <div class="drill-panel">
-                    <h4 style="margin:0; border-bottom:1px solid #eee; padding-bottom:10px;">🔍 钻取详情</h4>
-                    <div id="adv-drill-content" class="drill-content">
-                        <div class="empty-tip">点击左侧图表中的书籍<br>或拖拽趋势图查看详情</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-<!-- 悬浮详情页模态框 -->
-<div id="galaxy-modal" class="galaxy-modal-overlay" style="display: none;">
-    <div class="galaxy-modal-content">
-        <span class="galaxy-modal-close" onclick="closeGalaxyModal()">&times;</span>
-        
-        <!-- 头部信息 -->
-        <div class="modal-header">
-            <h2 id="modal-book-title">书籍标题</h2>
-            <div class="modal-badges">
-                <span id="modal-block-id" class="badge">Block #0</span>
-                <span id="modal-metric-val" class="badge badge-highlight">Value: 0.00</span>
-            </div>
-        </div>
-
-        <!-- 关键词 -->
-        <div class="modal-section">
-            <h4>🔑 核心关键词</h4>
-            <div id="modal-keywords" class="keyword-container"></div>
-        </div>
-
-        <!-- 长原文展示 -->
-        <div class="modal-section">
-            <h4>📜 原文深度阅读</h4>
-            <div class="text-scroll-area">
-                <p id="modal-long-text">正在加载文本...</p>
-            </div>
-        </div>
     </div>
-</div>
-
-        <div class="footer">
-            <p>📚 基于 Literature Fingerprinting 理论 | 🔬 可视语言与信息可视化实验</p>
-            <p>© 2026 文印分析系统 | 技术支持: Python, Flask, D3.js</p>
-        </div>
-    </div>
+    
     <script src="static/js/d3-charts.js"></script>
-<script>
+    <script>
+        // 挂载综合仪表盘的初始化逻辑 (从原文件底部移入，保持模块化)
         // 1. 全局配置与状态
         const advMargin = {top: 35, right: 20, bottom: 100, left: 50};
         
@@ -358,18 +239,10 @@
                 .style("box-shadow", "0 2px 8px rgba(0,0,0,0.2)");
         }
 
-        // 挂载入口
-        const originalInitChart = window.initChart;
-        window.initChart = function() {
-            if (typeof originalInitChart === 'function') originalInitChart();
-            if (realData) {
-                document.getElementById('advanced-dashboard-wrapper').style.display = 'block';
-                initAdvancedData();
-            }
-        };
-
-        // 2. 数据处理与初始化
-        function initAdvancedData() {
+        // 注意：原 initChart 被 d3-charts.js 中的覆盖逻辑接管
+        // 此处函数仅供 d3-charts.js 内部调用
+        window.initAdvancedData = function() {
+            if (!realData) return;
             const metric = currentMetric;
             advState.data = [];
             advState.activeBooks.clear();
@@ -403,10 +276,9 @@
 
             renderFilters();
             
-            if (!advState.chartsInitDone) {
-                initD3Structures();
-                advState.chartsInitDone = true;
-            }
+            // 每次调用都重新初始化结构，以适应可能的容器尺寸变化 (Tab切换)
+            initD3Structures();
+            advState.chartsInitDone = true;
             updateAdvCharts();
         }
 
@@ -415,8 +287,12 @@
         function initD3Structures() {
             ['mean', 'std', 'box', 'line'].forEach(id => {
                 const el = document.getElementById(`adv-${id}`);
-                const w = el.clientWidth;
-                const h = el.clientHeight;
+                // 确保容器可见，否则宽度为0
+                if (!el) return;
+                
+                const w = el.clientWidth || 300; // 后备宽度
+                const h = el.clientHeight || 200;
+                
                 d3.select(el).selectAll("*").remove();
                 const svg = d3.select(el).append("svg").attr("width", w).attr("height", h);
                 const innerW = w - advMargin.left - advMargin.right;
@@ -427,7 +303,7 @@
                 g.append("g").attr("class", "content-area");
                 charts[id] = { svg, g, w: innerW, h: innerH };
             });
-            charts['line'].g.append("g").attr("class", "brush");
+            if(charts['line']) charts['line'].g.append("g").attr("class", "brush");
         }
 
         function getAdvComputed() {
@@ -458,6 +334,7 @@
         }
 
         function updateAdvCharts() {
+            if (Object.keys(charts).length === 0) return;
             const data = getAdvComputed();
             updateSortUI();
             renderAdvMean(data);
@@ -469,6 +346,7 @@
 
         // 3. 渲染逻辑
         function renderAdvMean(data) {
+            if (!charts['mean']) return;
             const { g, w, h } = charts['mean'];
             const config = advState.sortConfig.mean;
             const sortedData = [...data].sort((a, b) => {
@@ -484,9 +362,9 @@
                 .style("text-anchor", "end")
                 .attr("dx", "-.8em")
                 .attr("dy", ".15em")
-                .attr("transform", "rotate(-30)") // 旋转角度加大一点，防止重叠
-                .style("font-size", "10px")       // 字体稍微调小
-                .text(d => d.length > 18 ? d.substring(0, 16) + "..." : d); // 显示更多字符
+                .attr("transform", "rotate(-30)") 
+                .style("font-size", "10px")       
+                .text(d => d.length > 18 ? d.substring(0, 16) + "..." : d); 
                 
             g.select(".y-axis").transition().duration(500).call(d3.axisLeft(y).ticks(5));
 
@@ -505,6 +383,7 @@
         }
 
         function renderAdvStd(data) {
+            if (!charts['std']) return;
             const { g, w, h } = charts['std'];
             const config = advState.sortConfig.std;
             const sortedData = [...data].sort((a, b) => {
@@ -541,6 +420,7 @@
         }
 
         function renderAdvBox(data) {
+            if (!charts['box']) return;
             const { g, w, h } = charts['box'];
             const sortedData = [...data].sort((a,b) => a.name.localeCompare(b.name));
             const x = d3.scaleBand().range([0, w]).domain(sortedData.map(d=>d.name)).padding(0.4);
@@ -582,6 +462,7 @@
         }
 
         function renderAdvLine(data) {
+            if (!charts['line']) return;
             const { g, w, h } = charts['line'];
             const x = d3.scaleLinear().domain([0, 1]).range([0, w]);
             let allY = []; data.forEach(b => b.activeSegment.forEach(d => allY.push(d.value)));
@@ -731,7 +612,7 @@
             }
         }
 
-        function advReset() {
+        window.advReset = function() {
             advState.brushRange = null; advState.selectedIds = [];
             advState.activeBooks = new Set(advState.data.map(d=>d.name));
             d3.select(".brush").call(d3.brushX().move, null);
@@ -761,10 +642,15 @@
             advTooltip.style("opacity", 1).html(html).style("left", (e.pageX+10)+"px").style("top", (e.pageY-10)+"px");
         }
         function hideAdvTooltip() { advTooltip.style("opacity", 0); }
-        function moveAdvTooltip(e) { advTooltip.style("left", (e.pageX+10)+"px").style("top", (e.pageY-10)+"px"); }
-
+        
+        // 窗口大小变化时重绘（仅当仪表盘可见时）
         window.addEventListener('resize', () => {
-            if(advState.data.length) { advState.chartsInitDone = false; initD3Structures(); updateAdvCharts(); }
+            const dashboard = document.getElementById('view-dashboard');
+            if(dashboard && dashboard.classList.contains('active') && advState.data.length) { 
+                advState.chartsInitDone = false; 
+                initD3Structures(); 
+                updateAdvCharts(); 
+            }
         });
     </script>
 </body>
