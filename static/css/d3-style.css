@@ -286,10 +286,8 @@ button:hover {
     z-index: 10;
 }
 
-/* Advanced Dashboard Styles */
-#advanced-dashboard-wrapper {
-    /* controlled by tab logic now */
-}
+
+
 
 .adv-header {
     display: flex;
