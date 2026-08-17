@@ -259,7 +259,12 @@
                 .range(['#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d', '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72']);
             
             books.forEach(bookName => {
-                advState.activeBooks.add(bookName);
+                // 默认只展示主视图已选中的书（通常 1 本），其余在筛选栏由用户自行点开，避免首屏过载
+                if (typeof selectedBooks !== 'undefined' && selectedBooks.size > 0) {
+                    if (selectedBooks.has(bookName)) advState.activeBooks.add(bookName);
+                } else if (bookName === books[0]) {
+                    advState.activeBooks.add(bookName);
+                }
                 const rawMetricData = realData[bookName][metric];
                 if (!rawMetricData) return;
 
@@ -386,6 +391,22 @@
                 lines.push(`《${highest.name}》${cfg.high}（${highest.currentMean.toFixed(2)}），《${lowest.name}》${cfg.low}（${lowest.currentMean.toFixed(2)}）。`);
             } else if (data.length === 1) {
                 lines.push(`《${data[0].name}》的「${mLabel}」整体水平为 ${data[0].currentMean.toFixed(2)}。`);
+                // 单书时给出基准参照：与其他已加载书籍的平均水平对比，让裸数字有意义
+                if (realData && Object.keys(realData).length > 1) {
+                    const otherMeans = Object.entries(realData)
+                        .filter(([name]) => name !== data[0].name)
+                        .map(([, bookData]) => {
+                            const arr = (bookData[currentMetric] || []).map(d => d.value);
+                            return arr.length ? d3.mean(arr) : null;
+                        })
+                        .filter(v => v != null);
+                    if (otherMeans.length) {
+                        const benchmark = d3.mean(otherMeans);
+                        const diff = data[0].currentMean - benchmark;
+                        const dir = diff > 0 ? '高于' : (diff < 0 ? '低于' : '接近');
+                        lines.push(`作为参照，其他 ${otherMeans.length} 本书的平均值为 ${benchmark.toFixed(2)}，本书${dir}基准 ${Math.abs(diff).toFixed(2)}。`);
+                    }
+                }
             } else {
                 lines.push(`所选书籍的「${mLabel}」风格走向各有不同，详见走势图。`);
             }
@@ -685,7 +706,7 @@
             const container = d3.select("#adv-filters");
             container.html("");
             advState.data.forEach(book => {
-                container.append("span").attr("class", "filter-chip active")
+                container.append("span").attr("class", `filter-chip${advState.activeBooks.has(book.name) ? ' active' : ''}`)
                     .style("border-left", `3px solid ${book.color}`).text(book.shortName)
                     .on("click", function() {
                         const el = d3.select(this);

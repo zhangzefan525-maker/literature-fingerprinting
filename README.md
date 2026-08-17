@@ -75,7 +75,7 @@ Literature-Fingerprinting/
 │       └── d3-charts.js                # D3.js 核心绘图与交互逻辑 (含 Dashboard)
 ├── tests/                              # 单元测试
 │   └── test_metrics.py                 # 指标计算测试
-├── app.py                              # Streamlit 经典版入口 (参数调优工作台)
+├── app.py                              # Streamlit 经典版入口 (参数调优工作台，已归档/实验性)
 ├── api_server.py                       # Flask API 服务器 (D3 版入口)
 ├── generate_data.py                    # 批处理脚本 (Raw Text -> JSON)
 ├── d3_visualization.html               # D3 可视化主页面 HTML
@@ -117,7 +117,7 @@ python api_server.py
 python tests/test_metrics.py
 ```
 
-**Streamlit 经典模式**（参数调优工作台，同样支持上传文本）：
+**Streamlit 经典模式**（⚠️ 已归档，仅作实验性参考；正式产品为上方 D3 版，新用户无需关注）：
 
 ```bash
 streamlit run app.py
