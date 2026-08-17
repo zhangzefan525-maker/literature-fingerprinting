@@ -68,17 +68,17 @@
         <!-- ============================================ -->
         <div id="view-main" class="view-section active">
             <div class="controls">
-                <div class="control-group" id="smoothnessGroup">
-                    <label>曲线平滑：</label>
-                    <input type="range" id="smoothness" min="1" max="10" value="3" title="数值越大，趋势曲线越平滑">
-                </div>
-                
                 <div class="control-group">
-                    <select id="chartTypeSelect" aria-label="图表类型" style="margin-right: 10px;">
+                    <select id="chartTypeSelect" aria-label="图表类型">
                         <option value="heatmap" selected>▦ 指纹热力图</option>
                         <option value="line">〰 折线趋势图</option>
                     </select>
-                    <button id="exportBtn">导出图像</button>
+                    <button id="exportBtn" type="button">导出图像</button>
+                </div>
+
+                <div class="control-group" id="smoothnessGroup">
+                    <label>曲线平滑：</label>
+                    <input type="range" id="smoothness" min="1" max="10" value="3" title="数值越大，趋势曲线越平滑">
                 </div>
             </div>
             
