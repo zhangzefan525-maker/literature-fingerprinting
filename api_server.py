@@ -55,58 +55,20 @@ def _ensure_demo_data():
     return _demo_data_ready
 
 
+def _serve_visualization():
+    """返回 D3.js 可视化页面（优先项目根目录，其次 static 目录）。"""
+    try:
+        return send_file('d3_visualization.html')
+    except Exception:
+        return send_from_directory('static', 'd3_visualization.html')
+
+
 @app.route('/')
 def index():
     """
-    主页面
+    主页面：打开即进入 D3.js 可视化界面（不再展示 API 说明页）
     """
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>文印 - 文学指纹分析系统 API</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 40px; }
-            h1 { color: #333; }
-            .endpoint { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
-            code { background: #e0e0e0; padding: 2px 5px; border-radius: 3px; }
-            .btn { display: inline-block; background: #3498db; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 10px 0; }
-            .btn:hover { background: #2980b9; }
-        </style>
-    </head>
-    <body>
-        <h1>文印 - 文学指纹分析系统 API</h1>
-        <p>基于 Python 和 Flask 的数据接口服务器</p>
-        
-        <a class="btn" href="/visualization" target="_blank">🎨 打开 D3.js 可视化界面</a>
-        
-        <div class="endpoint">
-            <h3>📚 获取所有书籍数据</h3>
-            <code>GET /api/fingerprint-data</code>
-            <p>返回所有书籍的完整指纹数据</p>
-            <a href="/api/fingerprint-data" target="_blank">测试接口</a>
-        </div>
-        
-        <div class="endpoint">
-            <h3>📖 获取特定书籍数据</h3>
-            <code>GET /api/book/&lt;book_name&gt;</code>
-            <p>返回指定书籍的指纹数据</p>
-            <p>示例: <a href="/api/book/The%20Adventures%20of%20Tom%20Sawyer" target="_blank">/api/book/The Adventures of Tom Sawyer</a></p>
-        </div>
-        
-        <div class="endpoint">
-            <h3>📋 列出所有书籍</h3>
-            <code>GET /api/books</code>
-            <p>返回可用书籍列表</p>
-            <a href="/api/books" target="_blank">测试接口</a>
-        </div>
-        
-        <p style="margin-top: 30px; color: #666;">
-            &copy; 2024 文印分析系统 | 技术支持: Python, Flask, D3.js
-        </p>
-    </body>
-    </html>
-    """
+    return _serve_visualization()
 
 @app.route('/visualization')
 def visualization():
