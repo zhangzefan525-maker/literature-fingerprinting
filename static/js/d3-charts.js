@@ -1,7 +1,7 @@
 // static/js/d3-charts.js
 
-// API配置
-const API_BASE_URL = 'http://localhost:5000';
+// API配置（同源部署：本地与 Render 均使用空路径，自动指向当前站点）
+const API_BASE_URL = '';
 const API_ENDPOINTS = {
     fingerprintData: `${API_BASE_URL}/api/fingerprint-data`,
     books: `${API_BASE_URL}/api/books`

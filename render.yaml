@@ -1,0 +1,12 @@
+# Render 一键部署配置（Blueprint）
+# 使用方式：render.com → New → Blueprint → 连接本仓库，即可自动创建 Web 服务。
+services:
+  - type: web
+    name: literature-fingerprinting
+    runtime: python
+    plan: free
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab'); nltk.download('stopwords')" &&
+      python generate_data.py
+    startCommand: gunicorn api_server:app --bind 0.0.0.0:$PORT

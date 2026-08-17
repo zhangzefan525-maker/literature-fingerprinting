@@ -1,8 +1,8 @@
 # 文学指纹分析系统 - 依赖清单（版本已锁定）
 # 安装：pip install -r requirements.txt
 #
-# 说明：gunicorn 已移除——它是 Unix 专属部署服务器，
-# 本项目在 Windows 下通过 start.bat / streamlit 直接运行，无需安装。
+# 说明：本地 Windows 通过 start.bat 直接运行；部署到 Render/Linux 时
+# 使用 gunicorn 作为 WSGI 服务器（见 render.yaml）。
 
 streamlit==1.52.2
 flask==3.1.2
@@ -14,3 +14,4 @@ scikit-learn==1.8.0
 matplotlib==3.10.8
 seaborn==0.13.2
 scipy==1.16.3
+gunicorn==23.0.0
