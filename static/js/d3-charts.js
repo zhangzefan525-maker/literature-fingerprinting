@@ -330,6 +330,22 @@ function drawMultiLineChart(svg, booksArray) {
     
     g.append("g").attr("class", "grid").call(d3.axisLeft(yScale).tickSize(-width).tickFormat("")).attr("stroke-opacity", 0.1);
 
+    // 坐标轴标签：X 为阅读进度（文本块），Y 为当前指标中文名
+    g.append("text")
+        .attr("class", "axis-label")
+        .attr("x", width / 2)
+        .attr("y", chartHeight + 38)
+        .attr("text-anchor", "middle")
+        .text("阅读进度（文本块，约 1 万词 / 块）");
+
+    g.append("text")
+        .attr("class", "axis-label")
+        .attr("transform", "rotate(-90)")
+        .attr("x", -chartHeight / 2)
+        .attr("y", -46)
+        .attr("text-anchor", "middle")
+        .text(getMetricLabel(currentMetric));
+
     const line = d3.line()
         .x((d, i) => xScale(i))
         .y(d => yScale(d.value))
