@@ -126,13 +126,14 @@ def get_fingerprint_data():
                     "data": data
                 })
 
-        # 如果没有真实数据，返回模拟数据
+        # 没有真实数据时，返回明确错误并引导用户生成/上传，不再返回随机模拟数据
+        # （避免用户把随机数误当成自己的分析结果）
         return jsonify({
-            "status": "success",
-            "message": "使用模拟数据进行演示",
-            "data": generate_sample_data()
-        })
-        
+            "status": "error",
+            "message": "暂无可用书籍数据。请先运行 python generate_data.py 生成示例数据，"
+                       "或通过上传接口 /api/analyze 上传自己的文本。"
+        }), 404
+
     except Exception as e:
         return jsonify({
             "status": "error",
@@ -242,89 +243,6 @@ def list_books():
             "status": "error",
             "message": str(e)
         }), 500
-
-def generate_sample_data():
-    """
-    生成示例数据用于演示
-    """
-    import random
-    import math
-    
-    data = {}
-    
-    # 三本书的示例数据
-    books = ["The Adventures of Tom Sawyer", "The Call of the Wild", "White Fang"]
-    
-    for book in books:
-        # 每本书生成不同数量的数据点
-        if "Tom Sawyer" in book:
-            n_points = 64
-            base_value_sl = 19.0  # 平均句长
-            base_value_si = 0.06  # Simpson指数
-        elif "Call" in book:
-            n_points = 23
-            base_value_sl = 16.0
-            base_value_si = 0.08
-        else:
-            n_points = 65
-            base_value_sl = 17.0
-            base_value_si = 0.07
-        
-        # 生成数据
-        sentence_length = []
-        simpson_index = []
-        hapax_legomena = []
-        function_words = []
-        
-        for i in range(n_points):
-            # 添加一些随机波动和趋势
-            trend = math.sin(i * 0.1) * 0.5
-            
-            sentence_length.append({
-                "block": i,
-                "value": round(base_value_sl + trend + random.uniform(-1, 1), 2),
-                "keywords": ["example", "text", "analysis"],
-                "preview": f"This is example text block {i} from {book}. It shows how the visualization works.",
-                "wordCount": random.randint(8000, 12000)
-            })
-            
-            simpson_index.append({
-                "block": i,
-                "value": round(base_value_si + trend * 0.01 + random.uniform(-0.01, 0.01), 4),
-                "keywords": ["vocabulary", "richness", "measure"],
-                "preview": f"This is example text block {i} from {book}. It shows how the visualization works.",
-                "wordCount": random.randint(8000, 12000)
-            })
-            
-            hapax_legomena.append({
-                "block": i,
-                "value": round(80 + trend * 5 + random.uniform(-10, 10), 1),
-                "keywords": ["unique", "words", "count"],
-                "preview": f"This is example text block {i} from {book}. It shows how the visualization works.",
-                "wordCount": random.randint(8000, 12000)
-            })
-            
-            function_words.append({
-                "block": i,
-                "value": round(trend * 0.5 + random.uniform(-0.5, 0.5), 3),
-                "keywords": ["function", "words", "pca"],
-                "preview": f"This is example text block {i} from {book}. It shows how the visualization works.",
-                "wordCount": random.randint(8000, 12000)
-            })
-        
-        data[book] = {
-            "sentenceLength": sentence_length,
-            "simpsonIndex": simpson_index,
-            "hapaxLegomena": hapax_legomena,
-            "functionWords": function_words,
-            "metadata": {
-                "totalBlocks": n_points,
-                "avgSentenceLength": round(sum([d["value"] for d in sentence_length]) / n_points, 2),
-                "avgSimpsonIndex": round(sum([d["value"] for d in simpson_index]) / n_points, 4)
-            }
-        }
-    
-    return data
 
 if __name__ == '__main__':
     print("=" * 60)

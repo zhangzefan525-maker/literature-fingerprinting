@@ -119,7 +119,7 @@ async function handleFileUpload(event) {
         if (statusEl) { statusEl.innerText = msg; statusEl.style.color = color; }
     };
 
-    setStatus(`◌ 正在分析 "${file.name}"，请稍候...`, '#b5472f');
+    setStatus(`◌ 正在分析 "${file.name}"（长文本可能需要一会儿），请勿关闭页面...`, '#b5472f');
 
     const formData = new FormData();
     formData.append('file', file);
@@ -733,6 +733,7 @@ function showLoading(message) {
     detailPanel.innerHTML = `
         <h3>◌ ${message}</h3>
         <p>正在从API服务器获取数据...</p>
+        <p style="color:#98907f; font-size:12px; margin-top:-6px;">首次运行需生成示例数据，约 1–2 分钟，请耐心等待。</p>
         <div style="text-align: center; margin-top: 20px;">
             <div style="border: 4px solid #e4d9c3; border-top: 4px solid #b5472f; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 0 auto;"></div>
             <style>@keyframes spin {0% {transform: rotate(0deg);} 100% {transform: rotate(360deg);}}</style>
