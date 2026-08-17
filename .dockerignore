@@ -1,0 +1,14 @@
+# 构建镜像时排除这些，减小体积并避免泄露本地资料
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+data/processed/
+.venv/
+venv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+*.pdf
