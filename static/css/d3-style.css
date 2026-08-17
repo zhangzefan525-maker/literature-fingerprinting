@@ -562,6 +562,77 @@ button:hover {
     font-weight: 600;
 }
 
+/* ---------- 全局指标选择条 + 指标含义说明 ---------- */
+.metric-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+    padding: 12px 18px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--indigo);
+    border-radius: 10px;
+}
+.metric-bar .control-group {
+    flex-shrink: 0;
+}
+.metric-hint {
+    flex: 1;
+    min-width: 220px;
+    color: var(--ink-70);
+    font-size: 0.86rem;
+    line-height: 1.6;
+}
+.metric-hint-label {
+    display: inline-block;
+    margin-right: 8px;
+    padding: 1px 8px;
+    background: var(--indigo);
+    color: #fdf9ef;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+/* ---------- 风格星系：怎么看 + 颜色图例 ---------- */
+.galaxy-guide {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin: 12px 0 10px;
+    padding: 8px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    color: var(--ink-70);
+    font-size: 0.82rem;
+}
+.galaxy-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: var(--card);
+    border-radius: 8px;
+    font-size: 0.82rem;
+    color: var(--ink-70);
+}
+.galaxy-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.galaxy-legend-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(47, 42, 35, 0.2);
+}
+
 /* ---------- 热力图 ---------- */
 .heatmap-rect {
     stroke: var(--border);

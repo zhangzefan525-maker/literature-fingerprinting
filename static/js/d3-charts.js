@@ -19,8 +19,9 @@ let currentTab = 'view-main'; // 记录当前标签页
 document.addEventListener('DOMContentLoaded', function() {
     initEventListeners();
     updateChartTypeUI();
+    updateMetricHint();
     loadBooksList();
-    
+
     setTimeout(() => {
         toggleMatrixRain();
     }, 500);
@@ -62,6 +63,7 @@ function initEventListeners() {
     // 指标选择
     document.getElementById('metricSelect').addEventListener('change', function(e) {
         currentMetric = e.target.value;
+        updateMetricHint();
         if (realData) {
             // 数据变化时，更新所有图表
             refreshAllActiveCharts();
@@ -199,8 +201,8 @@ function updateBookSelector(books) {
     }
     
     const buttons = books.map(book => `
-        <div class="book-btn" data-id="${book.id}" onclick="selectBook('${book.id}')">
-            ${book.name}
+        <div class="book-btn" data-id="${book.id}" onclick="selectBook('${book.id}')" title="${book.name}">
+            ${getBookDisplayName(book.name)}
         </div>
     `).join('');
     
@@ -624,6 +626,31 @@ function getMetricLabel(metric) {
     return labels[metric] || metric;
 }
 
+// 当前指标的大白话说明（面向非技术用户）
+function updateMetricHint() {
+    const el = document.getElementById('metric-hint');
+    if (!el) return;
+    const hints = {
+        sentenceLength: '平均句长：每句话平均多少个词。数值越大句子越长、越书面；越小越短促、越口语化。',
+        simpsonIndex: '用词重复度：衡量词汇有多「重复」。数值越高，同一批词反复出现（词汇单调）；越低，用词越多样。',
+        hapaxLegomena: '用词新颖度：只出现一次的罕见词比例。数值越高，越爱用生僻、独特的新词。',
+        functionWords: '风格走向：用「的、和、是」这类高频小词的用法差异，把文本投成一个风格坐标，看风格像不像。'
+    };
+    el.innerHTML = `<span class="metric-hint-label">当前指标</span>${hints[currentMetric] || ''}`;
+}
+
+// 内置名著的中文名映射（面向中文读者），未知书名原样返回
+function getBookDisplayName(name) {
+    const map = {
+        'The Adventures of Tom Sawyer': '汤姆·索亚历险记',
+        'The Adventures of Huckleberry Finn': '哈克贝利·费恩历险记',
+        'The Call of the Wild': '野性的呼唤',
+        'The call of the wild': '野性的呼唤',
+        'White Fang': '白牙'
+    };
+    return map[name] || name;
+}
+
 // 指纹热力图图例：低值（黛蓝）↔ 高值（赤）在每个指标下的具体含义
 function getHeatmapLegend(metric) {
     const legend = {
@@ -798,6 +825,17 @@ function initStyleGalaxy() {
     const colorScale = d3.scaleOrdinal()
         .domain(books)
         .range(['#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d', '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72']);
+
+    // 颜色图例：让用户知道每种颜色对应哪本书
+    const legendEl = document.getElementById('galaxy-legend');
+    if (legendEl) {
+        legendEl.innerHTML = books.map(book => `
+            <span class="galaxy-legend-item">
+                <span class="galaxy-legend-swatch" style="background:${colorScale(book)}"></span>
+                ${getBookDisplayName(book)}
+            </span>
+        `).join('');
+    }
 
     books.forEach((book) => {
         const baseColor = d3.color(colorScale(book));

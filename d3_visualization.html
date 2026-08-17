@@ -33,7 +33,21 @@
                 <i class="fas fa-cloud-upload-alt"></i> 上传文本分析
             </label>
             <input type="file" id="file-upload" accept=".txt" style="display:none;">
-            <span id="upload-status" class="upload-status">支持上传 .txt 文件，自动生成文学指纹并与示例书籍并列对比</span>
+            <span id="upload-status" class="upload-status">支持上传英文 .txt 纯文本（建议 ≥1 万字），自动生成文学指纹并与示例书籍并列对比 · 仅在本机分析，不上传</span>
+        </div>
+
+        <!-- 全局指标选择器（三个标签页共用同一指标，切换后对所有视图生效） -->
+        <div class="metric-bar">
+            <div class="control-group">
+                <label>分析指标：</label>
+                <select id="metricSelect" aria-label="分析指标">
+                    <option value="sentenceLength">平均句长</option>
+                    <option value="simpsonIndex">用词重复度</option>
+                    <option value="hapaxLegomena">用词新颖度</option>
+                    <option value="functionWords">风格走向</option>
+                </select>
+            </div>
+            <div class="metric-hint" id="metric-hint"></div>
         </div>
 
         <!-- 新增：顶部 Tab 切换导航 -->
@@ -55,22 +69,12 @@
         <div id="view-main" class="view-section active">
             <div class="controls">
                 <div class="control-group">
-                    <label>分析指标：</label>
-                    <select id="metricSelect">
-                        <option value="sentenceLength">平均句长</option>
-                        <option value="simpsonIndex">用词重复度</option>
-                        <option value="hapaxLegomena">用词新颖度</option>
-                        <option value="functionWords">风格走向</option>
-                    </select>
-                </div>
-                
-                <div class="control-group">
                     <label>曲线平滑：</label>
                     <input type="range" id="smoothness" min="1" max="10" value="3" title="数值越大，趋势曲线越平滑">
                 </div>
                 
                 <div class="control-group">
-                    <select id="chartTypeSelect" style="margin-right: 10px;">
+                    <select id="chartTypeSelect" aria-label="图表类型" style="margin-right: 10px;">
                         <option value="heatmap" selected>▦ 指纹热力图</option>
                         <option value="line">〰 折线趋势图</option>
                     </select>
@@ -109,6 +113,15 @@
                         <button onclick="restartGalaxy()" style="padding:5px 15px;">↻ 重新布局</button>
                     </div>
                 </div>
+                <div class="galaxy-guide">
+                    <span>每个圆点 = 一段文本（约 1 万词）</span>
+                    <span>颜色 = 不同书</span>
+                    <span>大小 = 当前指标数值</span>
+                    <span>越靠近 = 风格越相似</span>
+                    <span>滚轮缩放 · 拖动探索 · 点击看原文</span>
+                </div>
+                <div class="galaxy-legend" id="galaxy-legend"></div>
+
                 <!-- 星系图容器 -->
                 <div id="galaxy-container" style="width: 100%; height: 600px; background: #f2e7cd; border-radius: 10px; position: relative; overflow: hidden; cursor: grab;">
                     <!-- HUD 风格分析面板 -->
