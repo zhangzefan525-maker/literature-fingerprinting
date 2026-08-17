@@ -14,20 +14,19 @@ let selectedBooks = new Set();
 let comparisonMode = false;
 let smoothness = 3;
 let chartType = 'line';
-let currentTab = 'view-main'; // 新增：记录当前标签页
+let currentTab = 'view-main'; // 记录当前标签页
 
 // 初始化
 document.addEventListener('DOMContentLoaded', function() {
     initEventListeners();
     loadBooksList();
     
-    // 修复：自动启动文本雨
     setTimeout(() => {
         toggleMatrixRain();
     }, 500);
 });
 
-// 新增：Tab 切换逻辑
+// Tab 切换逻辑
 window.switchTab = function(tabId) {
     currentTab = tabId;
 
@@ -105,6 +104,62 @@ function initEventListeners() {
             compareBtn.style.display = 'block';
         }
     });
+
+    // 上传自定义文本
+    const fileInput = document.getElementById('file-upload');
+    if (fileInput) fileInput.addEventListener('change', handleFileUpload);
+}
+
+// 上传自定义文本并即时分析
+async function handleFileUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const statusEl = document.getElementById('upload-status');
+    const setStatus = (msg, color) => {
+        if (statusEl) { statusEl.innerText = msg; statusEl.style.color = color; }
+    };
+
+    setStatus(`⏳ 正在分析 "${file.name}"，请稍候...`, '#f39c12');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const resp = await fetch(`${API_BASE_URL}/api/analyze`, { method: 'POST', body: formData });
+        const result = await resp.json();
+
+        if (result.status === 'success') {
+            if (!realData) realData = {};
+            realData[result.book] = result.data;
+            selectedBooks.add(result.book);
+            addUploadedBookButton(result.book);
+            const nBlocks = result.data && result.data.metadata ? result.data.metadata.totalBlocks : 0;
+            setStatus(`✅ 已加载 "${result.book}"（${nBlocks} 个文本块）`, '#2ecc71');
+            refreshAllActiveCharts();
+        } else {
+            setStatus(`❌ ${result.message}`, '#e74c3c');
+        }
+    } catch (e) {
+        console.error('上传分析失败:', e);
+        setStatus('❌ 上传失败，请确认服务器已启动 (python api_server.py)', '#e74c3c');
+    }
+
+    event.target.value = ''; // 允许重复上传同一文件
+}
+
+// 将上传的书动态加入选择器，并保持选中态
+function addUploadedBookButton(bookName) {
+    const selector = document.getElementById('bookSelector');
+    if (!selector) return;
+    if (selector.querySelector(`.book-btn[data-id='${bookName}']`)) return;
+
+    const div = document.createElement('div');
+    div.className = 'book-btn active';
+    div.setAttribute('data-id', bookName);
+    div.innerText = bookName;
+    div.onclick = function() { selectBook(bookName); };
+    selector.appendChild(div);
 }
 
 // 辅助函数：根据当前 Tab 刷新图表
@@ -743,7 +798,7 @@ function initStyleGalaxy() {
                         book: bookName,
                         blockIndex: d.block,
                         pcaX: d.value,
-                        pcaY: d.value_y || (Math.random() - 0.5),
+                        pcaY: (d.value_y !== undefined && d.value_y !== null) ? d.value_y : (Math.random() - 0.5),
                         realValue: val,
                         preview: metricItem.preview,
                         extendedPreview: d.extended_preview || metricItem.preview, 

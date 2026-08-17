@@ -1,0 +1,26 @@
+# --- Python 缓存 / 构建产物 ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# --- 生成的指纹数据（运行 generate_data.py 可重新生成）---
+data/processed/*.json
+data/processed/*.html
+
+# --- 编辑器 / 系统 ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# --- 个人/课程资料（不提交到远程仓库）---
+*结课报告*.pdf

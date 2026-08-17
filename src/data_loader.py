@@ -2,6 +2,31 @@
 import re
 import os
 
+# 常见英语缩写及其展开形式（用于论文 3.2 节的缩写还原）
+CONTRACTIONS = {
+    "isn't": "is not", "aren't": "are not", "wasn't": "was not",
+    "weren't": "were not", "can't": "cannot", "couldn't": "could not",
+    "won't": "will not", "wouldn't": "would not", "don't": "do not",
+    "doesn't": "does not", "didn't": "did not", "shouldn't": "should not",
+    "mustn't": "must not", "haven't": "have not", "hasn't": "has not",
+    "hadn't": "had not", "i'm": "i am", "it's": "it is",
+    "that's": "that is", "he's": "he is", "she's": "she is",
+    "we're": "we are", "they're": "they are", "you're": "you are",
+    "i've": "i have", "we've": "we have", "you've": "you have",
+    "they've": "they have", "let's": "let us",
+}
+
+_CONTRACTION_PATTERN = re.compile(
+    r'\b(' + '|'.join(re.escape(k) for k in CONTRACTIONS) + r')\b',
+    re.IGNORECASE,
+)
+
+
+def _expand_contractions(text):
+    """大小写不敏感地展开常见英语缩写（修复原实现仅小写匹配导致的遗漏）。"""
+    return _CONTRACTION_PATTERN.sub(lambda m: CONTRACTIONS[m.group(0).lower()], text)
+
+
 def load_clean_text(filepath):
     """
     读取并清洗 Project Gutenberg 的文本
@@ -23,14 +48,9 @@ def load_clean_text(filepath):
     content = content.replace('\n', ' ').replace('\r', ' ')
     content = re.sub(r'\s+', ' ', content).strip()
 
-    # 3. 缩写转换 (复现论文 3.2 节的要求)
-    replacements = {
-        "isn't": "is not", "aren't": "are not", "can't": "cannot",
-        "won't": "will not", "don't": "do not", "shouldn't": "should not"
-    }
-    for short, long_form in replacements.items():
-        content = content.replace(short, long_form)
-        
+    # 3. 缩写转换 (复现论文 3.2 节的要求，大小写不敏感)
+    content = _expand_contractions(content)
+
     return content
 
 def get_blocks(text, block_size=10000, overlap=9000):

@@ -25,6 +25,15 @@
         <!-- 全局书籍选择器 -->
         <div class="book-selector" id="bookSelector"></div>
 
+        <!-- 上传自定义文本（与示例书籍并列分析） -->
+        <div class="upload-bar">
+            <label class="upload-btn" for="file-upload">
+                <i class="fas fa-cloud-upload-alt"></i> 上传文本分析
+            </label>
+            <input type="file" id="file-upload" accept=".txt" style="display:none;">
+            <span id="upload-status" class="upload-status">支持上传 .txt 文件，自动生成文学指纹并与示例书籍并列对比</span>
+        </div>
+
         <!-- 新增：顶部 Tab 切换导航 -->
         <div class="tab-navigation">
             <button class="tab-btn active" onclick="switchTab('view-main')">
