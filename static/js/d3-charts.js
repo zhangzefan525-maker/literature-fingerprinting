@@ -10,8 +10,7 @@ const API_ENDPOINTS = {
 // 全局变量
 let realData = null;
 let currentMetric = 'sentenceLength';
-let selectedBooks = new Set(); 
-let comparisonMode = false;
+let selectedBooks = new Set();
 let smoothness = 3;
 let chartType = 'heatmap';
 let currentTab = 'view-main'; // 记录当前标签页
@@ -60,9 +59,6 @@ window.switchTab = function(tabId) {
 
 // 初始化事件监听器
 function initEventListeners() {
-    // 切换对比模式
-    document.getElementById('toggleComparison').addEventListener('click', toggleComparisonMode);
-    
     // 指标选择
     document.getElementById('metricSelect').addEventListener('change', function(e) {
         currentMetric = e.target.value;
@@ -103,7 +99,6 @@ function updateChartTypeUI() {
     if (!compareBtn) return;
     if (chartType === 'heatmap') {
         compareBtn.style.display = 'none';
-        comparisonMode = false; // 热力图默认单书视角
     } else {
         compareBtn.style.display = 'block';
     }
@@ -232,14 +227,12 @@ function selectBook(bookId) {
         btn.classList.add('active');
     }
 
-    // 更新对比模式提示文字
+    // 更新对比状态提示文字
     const compareBtn = document.getElementById('toggleComparison');
     if (selectedBooks.size > 1) {
-        compareBtn.innerHTML = `📚 当前对比模式：已选 ${selectedBooks.size} 本书`;
-        comparisonMode = true;
+        compareBtn.innerHTML = `📚 已选 ${selectedBooks.size} 本书进行对比`;
     } else {
-        compareBtn.innerHTML = '⇄ 点击上方按钮可多选进行对比';
-        comparisonMode = false;
+        compareBtn.innerHTML = '⇄ 点击上方书名可多选进行对比';
     }
     
     // 刷新当前可见的图表
@@ -653,18 +646,6 @@ function toggleMetric() {
     
     if (realData) {
         refreshAllActiveCharts();
-    }
-}
-
-function toggleComparisonMode() {
-    comparisonMode = !comparisonMode;
-    const button = document.getElementById('toggleComparison');
-    button.innerHTML = comparisonMode ? 
-        '📖 点击切换到单书分析模式' : 
-        '⇄ 点击切换到多书对比模式';
-    
-    if (realData) {
-        initChart();
     }
 }
 
