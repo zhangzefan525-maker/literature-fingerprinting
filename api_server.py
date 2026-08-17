@@ -377,12 +377,16 @@ if __name__ == '__main__':
     print("  GET /api/fingerprint-data     - 获取所有书籍数据")
     print("  GET /api/book/<name>          - 获取特定书籍数据")
     print("  GET /api/books                - 列出所有书籍")
+    # 端口优先读环境变量 PORT（Render 等托管平台会注入），本地默认 5000
+    port = int(os.environ.get("PORT", 5000))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+
     print("\n🌐 服务器运行在:")
-    print("  http://localhost:5000")
-    print("  http://127.0.0.1:5000")
+    print(f"  http://localhost:{port}")
+    print(f"  http://127.0.0.1:{port}")
     print("\n🎨 直接访问可视化:")
-    print("  http://localhost:5000/visualization")
+    print(f"  http://localhost:{port}/visualization")
     print("\n🔄 按 CTRL+C 停止服务器")
     print("=" * 60)
-    
-    app.run(host='0.0.0.0', port=5000, debug=True)
+
+    app.run(host='0.0.0.0', port=port, debug=debug)

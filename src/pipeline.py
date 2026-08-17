@@ -10,6 +10,8 @@ data/processed/all_books.json 中的单本书完全一致。
 2. api_server.py     —— 用户上传文本后的即时分析 (POST /api/analyze)
 """
 
+import nltk
+
 from src.metrics import (
     calc_sentence_length,
     calc_simpsons_index,
@@ -17,6 +19,19 @@ from src.metrics import (
     get_pca_coordinates,
     get_top_keywords,
 )
+
+
+def _ensure_nltk_data():
+    """确保 NLTK 数据包就绪（punkt 分词、stopwords 停用词），缺失时自动下载。
+
+    全新环境（Render 部署、首次 clone）首次运行会在此下载；已下载时开销极小。
+    网络失败时静默跳过，交由后续调用抛出明确的 LookupError。
+    """
+    for pkg in ("punkt", "punkt_tab", "stopwords"):
+        try:
+            nltk.download(pkg, quiet=True)
+        except Exception:
+            pass
 
 
 def _preview(text, limit):
@@ -37,6 +52,8 @@ def build_book_data(blocks, keywords_n=3):
     """
     if not blocks:
         return None
+
+    _ensure_nltk_data()
 
     sentence_lengths = []
     simpson_indices = []
