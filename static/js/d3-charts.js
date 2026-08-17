@@ -13,12 +13,13 @@ let currentMetric = 'sentenceLength';
 let selectedBooks = new Set(); 
 let comparisonMode = false;
 let smoothness = 3;
-let chartType = 'line';
+let chartType = 'heatmap';
 let currentTab = 'view-main'; // 记录当前标签页
 
 // 初始化
 document.addEventListener('DOMContentLoaded', function() {
     initEventListeners();
+    updateChartTypeUI();
     loadBooksList();
     
     setTimeout(() => {
@@ -59,12 +60,6 @@ window.switchTab = function(tabId) {
 
 // 初始化事件监听器
 function initEventListeners() {
-    // 加载真实数据
-    document.getElementById('loadRealData').addEventListener('click', loadRealData);
-    
-    // 切换视图
-    document.getElementById('toggleView').addEventListener('click', toggleMetric);
-    
     // 切换对比模式
     document.getElementById('toggleComparison').addEventListener('click', toggleComparisonMode);
     
@@ -91,23 +86,27 @@ function initEventListeners() {
     // 新增：图表类型切换监听
     document.getElementById('chartTypeSelect').addEventListener('change', function(e) {
         chartType = e.target.value;
+        updateChartTypeUI();
         if (realData) {
             initChart();
-        }
-        
-        // 热力图模式下，隐藏多书对比按钮（热力图通常只看一本书）
-        const compareBtn = document.getElementById('toggleComparison');
-        if (chartType === 'heatmap') {
-            compareBtn.style.display = 'none';
-            comparisonMode = false; // 强制单书模式
-        } else {
-            compareBtn.style.display = 'block';
         }
     });
 
     // 上传自定义文本
     const fileInput = document.getElementById('file-upload');
     if (fileInput) fileInput.addEventListener('change', handleFileUpload);
+}
+
+// 根据当前图表类型（热力图 / 折线图）控制多书对比按钮的显隐
+function updateChartTypeUI() {
+    const compareBtn = document.getElementById('toggleComparison');
+    if (!compareBtn) return;
+    if (chartType === 'heatmap') {
+        compareBtn.style.display = 'none';
+        comparisonMode = false; // 热力图默认单书视角
+    } else {
+        compareBtn.style.display = 'block';
+    }
 }
 
 // 上传自定义文本并即时分析
@@ -120,7 +119,7 @@ async function handleFileUpload(event) {
         if (statusEl) { statusEl.innerText = msg; statusEl.style.color = color; }
     };
 
-    setStatus(`⏳ 正在分析 "${file.name}"，请稍候...`, '#f39c12');
+    setStatus(`◌ 正在分析 "${file.name}"，请稍候...`, '#b5472f');
 
     const formData = new FormData();
     formData.append('file', file);
@@ -135,14 +134,14 @@ async function handleFileUpload(event) {
             selectedBooks.add(result.book);
             addUploadedBookButton(result.book);
             const nBlocks = result.data && result.data.metadata ? result.data.metadata.totalBlocks : 0;
-            setStatus(`✅ 已加载 "${result.book}"（${nBlocks} 个文本块）`, '#2ecc71');
+            setStatus(`✓ 已加载 "${result.book}"（${nBlocks} 个文本块）`, '#6b8f5a');
             refreshAllActiveCharts();
         } else {
-            setStatus(`❌ ${result.message}`, '#e74c3c');
+            setStatus(`✗ ${result.message}`, '#b5472f');
         }
     } catch (e) {
         console.error('上传分析失败:', e);
-        setStatus('❌ 上传失败，请确认服务器已启动 (python api_server.py)', '#e74c3c');
+        setStatus('✗ 上传失败，请确认服务器已启动 (python api_server.py)', '#b5472f');
     }
 
     event.target.value = ''; // 允许重复上传同一文件
@@ -169,6 +168,15 @@ function refreshAllActiveCharts() {
     if (currentTab === 'view-dashboard' && window.initAdvancedData) window.initAdvancedData();
 }
 
+// 响应式：窗口尺寸变化时防抖重绘当前图表，保证手机横竖屏切换后图表尺寸正确
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+        if (realData) refreshAllActiveCharts();
+    }, 250);
+});
+
 // 加载书籍列表
 async function loadBooksList() {
     try {
@@ -177,6 +185,7 @@ async function loadBooksList() {
         
         if (data.status === 'success') {
             updateBookSelector(data.books);
+            loadRealData(); // 打开页面即自动加载数据并出图
         } else {
             console.error('加载书籍列表失败:', data.message);
             showError('无法加载书籍列表，请检查API服务器是否运行');
@@ -190,7 +199,7 @@ async function loadBooksList() {
 function updateBookSelector(books) {
     const selector = document.getElementById('bookSelector');
     if (!books || books.length === 0) {
-        selector.innerHTML = '<p style="color: #e74c3c;">⚠️ 没有找到任何书籍...</p>';
+        selector.innerHTML = '<p style="color: #b5472f;">△ 没有找到任何书籍...</p>';
         return;
     }
     
@@ -229,7 +238,7 @@ function selectBook(bookId) {
         compareBtn.innerHTML = `📚 当前对比模式：已选 ${selectedBooks.size} 本书`;
         comparisonMode = true;
     } else {
-        compareBtn.innerHTML = '🆚 点击上方按钮可多选进行对比';
+        compareBtn.innerHTML = '⇄ 点击上方按钮可多选进行对比';
         comparisonMode = false;
     }
     
@@ -314,7 +323,7 @@ function drawMultiLineChart(svg, booksArray) {
     const xScale = d3.scaleLinear().domain([0, maxBlocks]).range([0, width]);
     const yScale = d3.scaleLinear().domain([yMin, yMax]).range([height - margin.top - margin.bottom, 0]);
 
-    const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(booksArray);
+    const colorScale = d3.scaleOrdinal(['#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d', '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72']).domain(booksArray);
 
     const chartHeight = height - margin.top - margin.bottom;
     g.append("g").attr("transform", `translate(0,${chartHeight})`).call(d3.axisBottom(xScale));
@@ -351,7 +360,7 @@ function drawMultiLineChart(svg, booksArray) {
             .attr("cy", d => yScale(d.value))
             .attr("r", 3) 
             .attr("fill", colorScale(bookData.book))
-            .attr("stroke", "white")
+            .attr("stroke", "#fdfaf3")
             .attr("stroke-width", 1.5)
             .style("cursor", "pointer")
             .style("opacity", 0) 
@@ -360,7 +369,7 @@ function drawMultiLineChart(svg, booksArray) {
                     .style("opacity", 1)
                     .transition().duration(100)
                     .attr("r", 6)
-                    .attr("stroke", "#f1c40f")
+                    .attr("stroke", "#b5472f")
                     .attr("stroke-width", 2);
                 
                 showTooltip(event, d, bookData.book);
@@ -369,7 +378,7 @@ function drawMultiLineChart(svg, booksArray) {
                 d3.select(this)
                     .transition().duration(200)
                     .attr("r", 3)
-                    .attr("stroke", "white")
+                    .attr("stroke", "#fdfaf3")
                     .attr("stroke-width", 1.5)
                     .style("opacity", 0); 
                 
@@ -378,7 +387,7 @@ function drawMultiLineChart(svg, booksArray) {
             .on("click", function(event, d) {
                 event.stopPropagation(); 
                 d3.selectAll(".data-point").attr("r", 3).style("opacity", 0); 
-                d3.select(this).style("opacity", 1).attr("r", 8).attr("stroke", "#000");
+                d3.select(this).style("opacity", 1).attr("r", 8).attr("stroke", "#b5472f");
                 showDetail(d, bookData.book);
             });
     });
@@ -387,7 +396,7 @@ function drawMultiLineChart(svg, booksArray) {
     chartData.forEach((d, i) => {
         const row = legend.append("g").attr("transform", `translate(0, ${i * 25})`);
         row.append("rect").attr("width", 15).attr("height", 15).attr("fill", colorScale(d.book));
-        row.append("text").attr("x", 20).attr("y", 12).text(d.book).style("font-size", "12px").style("fill", "#333");
+        row.append("text").attr("x", 20).attr("y", 12).text(d.book).style("font-size", "12px").style("fill", "#6f6557");
     });
     
     svg.append("text")
@@ -396,6 +405,7 @@ function drawMultiLineChart(svg, booksArray) {
         .attr("text-anchor", "middle")
         .style("font-size", "16px")
         .style("font-weight", "bold")
+        .style("fill", "#2f2a23")
         .text(`${getMetricLabel(currentMetric)} - 对比分析`);
 }
 
@@ -434,8 +444,8 @@ function drawMultiHeatmap(svg, booksArray) {
     });
     
     const colorScale = d3.scaleSequential()
-        .interpolator(d3.interpolateRdBu)
-        .domain([globalMin, globalMax]); 
+        .interpolator(d3.piecewise(d3.interpolateRgb, ["#2c4a6e", "#f2e7cd", "#a0221a"]))
+        .domain([globalMin, globalMax]);
 
     booksArray.forEach((bookId, index) => {
         const data = realData[bookId][currentMetric];
@@ -458,11 +468,11 @@ function drawMultiHeatmap(svg, booksArray) {
             .attr("height", blockSize)
             .attr("fill", d => colorScale(d.value))
             .on("mouseover", function(event, d) { 
-                d3.select(this).style("stroke", "#f1c40f").style("stroke-width", "2px");
+                d3.select(this).style("stroke", "#b5472f").style("stroke-width", "2px");
                 showTooltip(event, d, bookId); 
             })
             .on("mouseout", function() {
-                d3.select(this).style("stroke", "white").style("stroke-width", "1px");
+                d3.select(this).style("stroke", "#e4d9c3").style("stroke-width", "1px");
                 hideTooltip();
             })
             .on("click", function(event, d) { showDetail(d, bookId); });
@@ -473,7 +483,7 @@ function drawMultiHeatmap(svg, booksArray) {
             .attr("text-anchor", "middle")
             .style("font-size", "14px")
             .style("font-weight", "bold")
-            .style("fill", "#333")
+            .style("fill", "#6f6557")
             .text(bookId.length > 18 ? bookId.substring(0, 15) + "..." : bookId); 
     });
 
@@ -483,8 +493,45 @@ function drawMultiHeatmap(svg, booksArray) {
         .attr("text-anchor", "middle")
         .style("font-size", "18px")
         .style("font-weight", "bold")
-        .style("fill", "#2c3e50")
+        .style("fill", "#2f2a23")
         .text(`${getMetricLabel(currentMetric)} - 指纹对比 (统一色标: ${globalMin.toFixed(1)} ~ ${globalMax.toFixed(1)})`);
+
+    // 图例：低（黛蓝）↔ 高（赤），并标注当前指标的具体含义
+    const [lowLabel, highLabel] = getHeatmapLegend(currentMetric);
+    const legendW = 220, legendH = 12;
+    const legendX = containerWidth / 2 - legendW / 2;
+    const legendY = totalHeight - 26;
+
+    const legendGrad = svg.append("defs").append("linearGradient")
+        .attr("id", "heatmapLegendGrad")
+        .attr("x1", "0%").attr("x2", "100%");
+    legendGrad.append("stop").attr("offset", "0%").attr("stop-color", "#2c4a6e");
+    legendGrad.append("stop").attr("offset", "50%").attr("stop-color", "#f2e7cd");
+    legendGrad.append("stop").attr("offset", "100%").attr("stop-color", "#a0221a");
+
+    svg.append("rect")
+        .attr("x", legendX).attr("y", legendY)
+        .attr("width", legendW).attr("height", legendH)
+        .attr("rx", 3)
+        .attr("fill", "url(#heatmapLegendGrad)")
+        .attr("stroke", "#e0d1b0")
+        .attr("stroke-width", 1);
+
+    svg.append("text")
+        .attr("x", legendX - 10).attr("y", legendY + legendH / 2 + 4)
+        .attr("text-anchor", "end")
+        .style("font-size", "12px")
+        .style("fill", "#2c4a6e")
+        .style("font-weight", "bold")
+        .text(`低 · ${lowLabel}`);
+
+    svg.append("text")
+        .attr("x", legendX + legendW + 10).attr("y", legendY + legendH / 2 + 4)
+        .attr("text-anchor", "start")
+        .style("font-size", "12px")
+        .style("fill", "#a0221a")
+        .style("font-weight", "bold")
+        .text(`高 · ${highLabel}`);
 }
 
 // 工具函数
@@ -549,7 +596,7 @@ function showDetail(data, bookName) {
             
             ${data.keywords && data.keywords.length > 0 ? `
             <div style="margin: 15px 0;">
-                <h4>🔑 关键词</h4>
+                <h4>※ 关键词</h4>
                 <div class="keywords">
                     ${data.keywords.map(keyword => 
                         `<span class="keyword-tag">${keyword}</span>`
@@ -560,7 +607,7 @@ function showDetail(data, bookName) {
             ${data.preview ? `
             <div>
                 <h4>📄 原文片段</h4>
-                <p style="margin-top: 10px; color: #7f8c8d; font-style: italic;">
+                <p style="margin-top: 10px; color: #98907f; font-style: italic;">
                     "${data.preview}"
                 </p>
             </div>` : ''}
@@ -568,7 +615,7 @@ function showDetail(data, bookName) {
     `;
     
     detailPanel.innerHTML = `
-        <h3>📊 数据详情</h3>
+        <h3>▤ 数据详情</h3>
         <p>当前选择：${bookName} - ${getMetricLabel(currentMetric)}</p>
         ${detailHTML}
     `;
@@ -576,12 +623,23 @@ function showDetail(data, bookName) {
 
 function getMetricLabel(metric) {
     const labels = {
-        sentenceLength: '平均句长 (词/句)',
-        simpsonIndex: 'Simpson指数',
-        hapaxLegomena: 'Hapax Legomena',
-        functionWords: '功能词PCA得分'
+        sentenceLength: '平均句长',
+        simpsonIndex: '用词重复度',
+        hapaxLegomena: '用词新颖度',
+        functionWords: '风格走向'
     };
     return labels[metric] || metric;
+}
+
+// 指纹热力图图例：低值（黛蓝）↔ 高值（赤）在每个指标下的具体含义
+function getHeatmapLegend(metric) {
+    const legend = {
+        sentenceLength: ['短句', '长句'],
+        simpsonIndex: ['用词多样', '用词重复'],
+        hapaxLegomena: ['用词常规', '用词新颖'],
+        functionWords: ['风格一端', '风格另一端']
+    };
+    return legend[metric] || ['低值', '高值'];
 }
 
 function toggleMetric() {
@@ -603,7 +661,7 @@ function toggleComparisonMode() {
     const button = document.getElementById('toggleComparison');
     button.innerHTML = comparisonMode ? 
         '📖 点击切换到单书分析模式' : 
-        '🆚 点击切换到多书对比模式';
+        '⇄ 点击切换到多书对比模式';
     
     if (realData) {
         initChart();
@@ -626,9 +684,9 @@ function exportChart() {
 
     const styleString = `
         <style>
-            text { font-family: 'Microsoft YaHei', sans-serif; }
-            .heatmap-rect { stroke: white; stroke-width: 1px; }
-            .axis path, .axis line { fill: none; stroke: #000; shape-rendering: crispEdges; }
+            text { font-family: 'Microsoft YaHei', sans-serif; fill: #2f2a23; }
+            .heatmap-rect { stroke: #e4d9c3; stroke-width: 1px; }
+            .axis path, .axis line { fill: none; stroke: #98907f; shape-rendering: crispEdges; }
         </style>`;
     source = source.replace('</svg>', styleString + '</svg>');
 
@@ -644,7 +702,7 @@ function exportChart() {
     canvas.height = svgRect.height * scaleFactor;
 
     img.onload = function() {
-        context.fillStyle = '#ffffff';
+        context.fillStyle = '#f2e7cd';
         context.fillRect(0, 0, canvas.width, canvas.height);
         
         context.drawImage(img, 0, 0, canvas.width, canvas.height);
@@ -673,10 +731,10 @@ function exportChart() {
 function showLoading(message) {
     const detailPanel = document.getElementById('detailPanel');
     detailPanel.innerHTML = `
-        <h3>⏳ ${message}</h3>
+        <h3>◌ ${message}</h3>
         <p>正在从API服务器获取数据...</p>
         <div style="text-align: center; margin-top: 20px;">
-            <div style="border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 0 auto;"></div>
+            <div style="border: 4px solid #e4d9c3; border-top: 4px solid #b5472f; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 0 auto;"></div>
             <style>@keyframes spin {0% {transform: rotate(0deg);} 100% {transform: rotate(360deg);}}</style>
         </div>
     `;
@@ -685,8 +743,8 @@ function showLoading(message) {
 function showSuccess(message) {
     const detailPanel = document.getElementById('detailPanel');
     detailPanel.innerHTML = `
-        <div class="detail-card" style="border-left-color: #2ecc71;">
-            <h3 style="color: #2ecc71;">✅ ${message}</h3>
+        <div class="detail-card" style="border-left-color: #6b8f5a;">
+            <h3 style="color: #6b8f5a;">✓ ${message}</h3>
             <p>现在可以点击图表中的数据点查看详细信息。</p>
         </div>
     `;
@@ -695,8 +753,8 @@ function showSuccess(message) {
 function showError(message) {
     const detailPanel = document.getElementById('detailPanel');
     detailPanel.innerHTML = `
-        <div class="detail-card" style="border-left-color: #e74c3c;">
-            <h3 style="color: #e74c3c;">❌ 错误</h3>
+        <div class="detail-card" style="border-left-color: #b5472f;">
+            <h3 style="color: #b5472f;">✗ 错误</h3>
             <p>${message}</p>
         </div>
     `;
@@ -706,14 +764,14 @@ function showNoDataMessage() {
     const detailPanel = document.getElementById('detailPanel');
     detailPanel.innerHTML = `
         <div class="detail-card">
-            <h3>📊 无数据可用</h3>
-            <p>请先点击"加载真实数据"按钮获取分析结果。</p>
+            <h3>▤ 暂无数据</h3>
+            <p>请在上方选择一本书，或上传文本进行分析。</p>
         </div>
     `;
 }
 
 // ==========================================
-// 🌌 风格星系 (Style Galaxy)
+// ✧ 风格星系 (Style Galaxy)
 // ==========================================
 
 let galaxySimulation = null;
@@ -743,7 +801,7 @@ function initStyleGalaxy() {
     const svg = d3.select("#galaxy-container").append("svg")
         .attr("width", width)
         .attr("height", height)
-        .style("background", "radial-gradient(ellipse at center, #1b2735 0%, #090a0f 100%)"); 
+        .style("background", "radial-gradient(ellipse at center, #f8efda 0%, #f2e7cd 100%)");
 
     const defs = svg.append("defs");
 
@@ -757,7 +815,7 @@ function initStyleGalaxy() {
 
     const colorScale = d3.scaleOrdinal()
         .domain(books)
-        .range(['#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c']);
+        .range(['#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d', '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72']);
 
     books.forEach((book) => {
         const baseColor = d3.color(colorScale(book));
@@ -861,7 +919,7 @@ function initStyleGalaxy() {
             .transition().duration(100)
             .attr("r", d.r * 1.5)
             .style("filter", "url(#glow)")
-            .attr("stroke", "#fff")
+            .attr("stroke", "#2f2a23")
             .attr("stroke-width", 2);
         
         const allCircles = g.selectAll("circle");
@@ -870,7 +928,7 @@ function initStyleGalaxy() {
 
         allCircles.filter(node => neighbors.includes(node))
             .transition().duration(100)
-            .attr("stroke", "#f1c40f")
+            .attr("stroke", "#b5472f")
             .attr("stroke-width", 1.5)
             .attr("stroke-opacity", 1);
 
@@ -901,8 +959,8 @@ function initStyleGalaxy() {
         
         const hud = document.getElementById('galaxy-hud');
         if(hud) {
-            hud.querySelector('.hud-title').innerText = "📡 星系探针：待机";
-            hud.querySelector('.hud-content').innerHTML = '<p style="color:#7f8c8d; font-size:12px;">鼠标漫游以探测区域风格...</p>';
+            hud.querySelector('.hud-title').innerText = "◎ 悬停查看区域风格";
+            hud.querySelector('.hud-content').innerHTML = '<p style="color:#98907f; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>';
         }
         
         hideTooltip();
@@ -966,7 +1024,7 @@ function openGalaxyModal(d) {
                 keywordContainer.appendChild(span);
             });
         } else {
-            keywordContainer.innerHTML = '<span style="color:#666">无关键词</span>';
+            keywordContainer.innerHTML = '<span style="color:#98907f">无关键词</span>';
         }
     }
 
@@ -1009,7 +1067,7 @@ window.restartGalaxy = function() {
 window.selectBook = selectBook;
 
 // ==========================================
-// 📡 星系探针分析逻辑
+// ◎ 星系探针分析逻辑
 // ==========================================
 
 function findNeighbors(centerNode, allNodes, radius = 80) {
@@ -1060,33 +1118,33 @@ function updateHUD(analysisData, metricLabel) {
     const title = hud.querySelector('.hud-title');
 
     if (!analysisData) {
-        title.innerText = "📡 星系探针：扫描中...";
-        content.innerHTML = `<p style="color:#7f8c8d; font-size:12px;">正在分析区域引力场...</p>`;
+        title.innerText = "◎ 正在分析...";
+        content.innerHTML = `<p style="color:#98907f; font-size:12px;">正在分析这片区域的风格...</p>`;
         return;
     }
 
-    title.innerHTML = `📡 区域扫描 (包含 ${analysisData.count} 个节点)`;
-    
+    title.innerHTML = `◎ 选中区域（${analysisData.count} 个片段）`;
+
     let html = `
         <div class="hud-row">
-            <span class="hud-label">主要归属:</span>
-            <span class="hud-value" style="color:white">${analysisData.dominantBook.substring(0, 15)}...</span>
+            <span class="hud-label">主要来自:</span>
+            <span class="hud-value" style="color:#2f2a23">${analysisData.dominantBook.substring(0, 15)}...</span>
         </div>
-        <div class="hud-bar-bg" title="该作者占比 ${analysisData.dominanceRate.toFixed(0)}%">
+        <div class="hud-bar-bg" title="这本书占比 ${analysisData.dominanceRate.toFixed(0)}%">
             <div class="hud-bar-fill" style="width: ${analysisData.dominanceRate}%;"></div>
         </div>
         <div class="hud-row" style="margin-top:8px;">
-            <span class="hud-label">区域平均 ${metricLabel}:</span>
-            <span class="hud-value" style="color:#f1c40f">${analysisData.avgMetric.toFixed(2)}</span>
+            <span class="hud-label">区域平均${metricLabel}:</span>
+            <span class="hud-value" style="color:#b5472f">${analysisData.avgMetric.toFixed(2)}</span>
         </div>
         <div class="hud-row" style="margin-top:8px;">
-            <span class="hud-label">区域共性话题:</span>
+            <span class="hud-label">共同关键词:</span>
         </div>
         <div class="hud-tags">
             ${analysisData.topKeywords.map(k => `<span class="hud-tag">${k}</span>`).join('')}
         </div>
-        <div style="margin-top:10px; padding-top:5px; border-top:1px dashed rgba(255,255,255,0.1); font-size:10px; color:#7f8c8d;">
-            * 此区域节点因由 PCA (功能词使用习惯) 相近而聚集。
+        <div style="margin-top:10px; padding-top:5px; border-top:1px dashed rgba(46, 42, 36, 0.12); font-size:10px; color:#98907f;">
+            * 这些片段因写作风格相近而聚集在一起。
         </div>
     `;
 
@@ -1094,7 +1152,7 @@ function updateHUD(analysisData, metricLabel) {
 }
 
 // ==========================================
-// 🌧️ 黑客帝国文本雨 (Matrix Keyword Rain)
+// ⋮ 黑客帝国文本雨 (Matrix Keyword Rain)
 // ==========================================
 
 let matrixInterval = null;
@@ -1108,6 +1166,7 @@ function initMatrixRain() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
+    // 收集书籍关键词（读起来更像「文字」，而非乱码）
     let words = [];
     if (typeof realData !== 'undefined' && realData) {
         Object.values(realData).forEach(bookData => {
@@ -1115,65 +1174,70 @@ function initMatrixRain() {
             if (Array.isArray(metricData)) {
                 metricData.forEach(block => {
                     if (block.keywords && Array.isArray(block.keywords)) {
-                        const shortKws = block.keywords.filter(w => w.length < 10);
-                        words.push(...shortKws);
+                        words.push(...block.keywords.filter(w => w.length < 12));
                     }
                 });
             }
         });
     }
-    
     if (words.length < 50) {
         words = [
-            'Literature', 'Style', 'Twain', 'London', 'Data', 'Visual', 
-            'Python', 'Analysis', 'Fingerprint', 'Novel', 'Text', 'Code',
-            'Stream', 'Galaxy', 'Emotion', 'Plot', 'Character'
+            'Literature', 'Style', 'Twain', 'London', 'Novel', 'Plot',
+            'Character', 'Emotion', 'Fingerprint', 'Text', 'Stream', 'Galaxy'
         ];
     }
-    
     words = [...new Set(words)];
 
-    const fontSize = 14;
-    const fontFamily = 'Consolas, monospace';
+    const fontSize = 15;
+    const fontFamily = 'Consolas, "Microsoft YaHei", monospace';
     const columns = Math.floor(canvas.width / fontSize);
-    
+
+    // 暖墨 · 羊皮纸 · 金，贴合「墨」主题（低饱和、不刺眼）
+    const PALETTE = ['#c9bda3', '#b3a58a', '#98907f', '#a67c3d', '#b5472f'];
+
+    // 每列一枚「雨滴」：颜色、文字、速度、透明度在下落全程保持不变，避免闪烁
     const drops = [];
     for (let i = 0; i < columns; i++) {
-        drops[i] = Math.random() * -100; 
+        drops[i] = {
+            y: Math.random() * -60,
+            speed: 0.25 + Math.random() * 0.6,
+            word: words[Math.floor(Math.random() * words.length)],
+            color: PALETTE[Math.floor(Math.random() * PALETTE.length)],
+            opacity: 0.12 + Math.random() * 0.45
+        };
     }
 
-    const colors = ['#3498db', '#e74c3c', '#2ecc71', '#9b59b6', '#f1c40f', '#34495e'];
-
     function draw() {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+        // 轻柔淡出拖尾（淡入暖墨背景）
+        ctx.fillStyle = 'rgba(242, 231, 205, 0.08)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
-        
-        ctx.font = `${fontSize}px ${fontFamily}`;
         ctx.textAlign = 'center';
+        ctx.font = `${fontSize}px ${fontFamily}`;
 
         for (let i = 0; i < drops.length; i++) {
-            const text = words[Math.floor(Math.random() * words.length)];
-            
-            const x = i * fontSize;
-            const y = drops[i] * fontSize;
+            const d = drops[i];
+            const x = i * fontSize + fontSize / 2;
+            const y = d.y * fontSize;
 
-            if (y > 0 && y < canvas.height) {
-                ctx.fillText(text, x, y);
+            ctx.globalAlpha = d.opacity;
+            ctx.fillStyle = d.color;
+            ctx.fillText(d.word, x, y);
+            ctx.globalAlpha = 1;
+
+            d.y += d.speed;
+
+            if (y > canvas.height + 40) {
+                d.y = Math.random() * -15;
+                d.word = words[Math.floor(Math.random() * words.length)];
+                d.color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
             }
-
-            if (y > canvas.height && Math.random() > 0.975) {
-                drops[i] = 0;
-            }
-
-            drops[i]++;
         }
     }
 
     if (matrixInterval) clearInterval(matrixInterval);
-    matrixInterval = setInterval(draw, 50); 
-    
+    matrixInterval = setInterval(draw, 50);
+
     window.onresize = () => {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
@@ -1190,11 +1254,11 @@ function toggleMatrixRain() {
         initMatrixRain(); 
         canvas.classList.add('active'); 
         btn.classList.add('active');
-        btn.innerHTML = "🛑 停止文本雨";
+        btn.innerHTML = "■ 停止文本雨";
     } else {
         canvas.classList.remove('active'); 
         btn.classList.remove('active');
-        btn.innerHTML = "🌧️ 激活文本雨";
+        btn.innerHTML = "⋮ 激活文本雨";
         
         setTimeout(() => {
             if (matrixInterval) clearInterval(matrixInterval);

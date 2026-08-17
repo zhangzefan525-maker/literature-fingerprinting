@@ -10,16 +10,18 @@
 </head>
 <body>
     <!-- 1. 背景画布 -->
-    <canvas id="matrix-canvas" style="position: fixed; top: 0; left: 0; z-index: -1;"></canvas>
+    <canvas id="matrix-canvas" style="position: fixed; top: 0; left: 0; z-index: 0; pointer-events: none;"></canvas>
 
     <!-- 2. 全局悬浮开关 -->
     <button id="btn-matrix" onclick="toggleMatrixRain()" class="cyber-btn-float active">
-        🛑 停止文本雨
+        ■ 停止文本雨
     </button>
     
     <div class="container">
         <div class="header">
-            <h1>文印 - 文学指纹交互分析系统</h1>
+            <div class="seal" aria-hidden="true">文印</div>
+            <h1>文印 · 文学指纹</h1>
+            <p class="header-subtitle">上传或选择一本文学作品，自动分析它的写作风格（句子长短、用词重复度、用词新颖度），并生成直观的风格走势图与多书对比。</p>
         </div>
 
         <!-- 全局书籍选择器 -->
@@ -40,10 +42,10 @@
                 <i class="fas fa-chart-line"></i> 基础趋势分析
             </button>
             <button class="tab-btn" onclick="switchTab('view-galaxy')">
-                <i class="fas fa-atom"></i> 风格星系探针
+                <i class="fas fa-atom"></i> 风格星系
             </button>
             <button class="tab-btn" onclick="switchTab('view-dashboard')">
-                <i class="fas fa-tachometer-alt"></i> 综合仪表盘
+                <i class="fas fa-chart-bar"></i> 全书对比
             </button>
         </div>
         
@@ -56,30 +58,28 @@
                     <label>分析指标：</label>
                     <select id="metricSelect">
                         <option value="sentenceLength">平均句长</option>
-                        <option value="simpsonIndex">Simpson指数</option>
-                        <option value="hapaxLegomena">Hapax Legomena</option>
-                        <option value="functionWords">功能词PCA</option>
+                        <option value="simpsonIndex">用词重复度</option>
+                        <option value="hapaxLegomena">用词新颖度</option>
+                        <option value="functionWords">风格走向</option>
                     </select>
                 </div>
                 
                 <div class="control-group">
-                    <label>平滑度：</label>
-                    <input type="range" id="smoothness" min="1" max="10" value="3">
+                    <label>曲线平滑：</label>
+                    <input type="range" id="smoothness" min="1" max="10" value="3" title="数值越大，趋势曲线越平滑">
                 </div>
                 
                 <div class="control-group">
                     <select id="chartTypeSelect" style="margin-right: 10px;">
-                        <option value="line">📈 折线趋势图</option>
-                        <option value="heatmap">▦ 指纹热力图</option>
+                        <option value="heatmap" selected>▦ 指纹热力图</option>
+                        <option value="line">〰 折线趋势图</option>
                     </select>
-                    <button id="loadRealData">加载数据</button>
-                    <button id="toggleView">切换视图</button>
                     <button id="exportBtn">导出图像</button>
                 </div>
             </div>
             
             <div class="comparison-mode" id="toggleComparison">
-                🆚 点击切换到多书对比模式
+                ⇄ 点击切换到多书对比模式
             </div>
             
             <div class="visualization-container">
@@ -87,8 +87,8 @@
                     <svg id="main-chart" width="100%" height="400"></svg>
                 </div>
                 <div class="detail-panel" id="detailPanel">
-                    <h3>📊 数据详情</h3>
-                    <p>请先加载数据，然后点击或悬停图表中的点查看详细信息</p>
+                    <h3>▤ 数据详情</h3>
+                    <p>点击或悬停图表中的点，即可查看对应文本片段的详细信息</p>
                 </div>
             </div>
             
@@ -102,23 +102,23 @@
             <div class="galaxy-section">
                 <div class="adv-header">
                     <div>
-                        <h2 style="margin:0; color:#2c3e50; font-size: 18px;">🌌 风格星系 (Style Galaxy)</h2>
-                        <small style="color:#7f8c8d">物理仿真视图：拖拽泡泡以探索风格聚类</small>
+                        <h2 style="margin:0; color:#2f2a23; font-size: 18px;">✧ 风格星系</h2>
+                        <small style="color:#98907f">把每本书的风格投影成点，风格相近的会聚在一起，可拖动探索</small>
                     </div>
                     <div>
-                        <button onclick="restartGalaxy()" style="padding:5px 15px;">💥 重聚星系</button>
+                        <button onclick="restartGalaxy()" style="padding:5px 15px;">↻ 重新布局</button>
                     </div>
                 </div>
                 <!-- 星系图容器 -->
-                <div id="galaxy-container" style="width: 100%; height: 600px; background: #1a1a2e; border-radius: 10px; position: relative; overflow: hidden; cursor: grab;">
+                <div id="galaxy-container" style="width: 100%; height: 600px; background: #f2e7cd; border-radius: 10px; position: relative; overflow: hidden; cursor: grab;">
                     <!-- HUD 风格分析面板 -->
                     <div id="galaxy-hud" class="galaxy-hud">
-                        <div class="hud-title">📡 星系探针：未激活</div>
+                        <div class="hud-title">◎ 悬停查看区域风格</div>
                         <div class="hud-content">
-                            <p style="color:#7f8c8d; font-size:12px;">请将鼠标悬停在星球上，探测该区域的风格特征。</p>
+                            <p style="color:#98907f; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>
                         </div>
                     </div>
-                    <div id="galaxy-loading" style="color:white; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">加载数据以开始...</div>
+                    <div id="galaxy-loading" style="color:#2f2a23; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">正在加载...</div>
                 </div>
             </div>
         </div>
@@ -130,21 +130,26 @@
             <div id="advanced-dashboard-wrapper" style="display: block;">
                 <div class="adv-header">
                     <div>
-                        <h2 style="margin:0; color:#2c3e50; font-size: 18px;">🧠 深度综合分析仪表盘</h2>
-                        <small style="color:#7f8c8d">联动筛选 · 区间刷选 · 对比分析</small>
+                        <h2 style="margin:0; color:#2f2a23; font-size: 18px;">📚 全书对比</h2>
+                        <small style="color:#98907f">选择书籍 · 拖选段落 · 查看片段详情</small>
                     </div>
                     <div class="adv-controls">
-                        <span>显示书籍: </span>
+                        <span>选择书籍: </span>
                         <span id="adv-filters"></span>
                         <button onclick="advReset()" style="margin-left:10px; padding:4px 8px; font-size:12px;">重置视图</button>
                     </div>
+                </div>
+
+                <div class="insight-panel">
+                    <h4>✦ 一句话解读</h4>
+                    <div id="insight-content"><span class="insight-muted">选择书籍后，这里会自动生成大白话解读。</span></div>
                 </div>
 
                 <div class="dashboard-grid">
                     <div class="charts-area">
                         <div class="dash-card">
                             <h4>
-                                📊 均值对比
+                                ▤ 整体水平对比
                                 <span class="sort-control" onclick="advCycleSort('mean')" title="点击切换：数值大小 / 书名首字母">
                                     <span id="sort-text-mean">数值</span>
                                     <i id="sort-icon-mean" class="fas fa-sort-amount-down"></i>
@@ -154,29 +159,15 @@
                         </div>
 
                         <div class="dash-card">
-                            <h4>
-                                📉 波动性
-                                <span class="sort-control" onclick="advCycleSort('std')" title="点击切换：数值大小 / 书名首字母">
-                                    <span id="sort-text-std">数值</span>
-                                    <i id="sort-icon-std" class="fas fa-sort-amount-down"></i>
-                                </span>
-                            </h4>
-                            <div id="adv-std" class="dash-chart-body"></div>
-                        </div>
-                        <div class="dash-card">
-                            <h4>📦 分布箱线图</h4>
-                            <div id="adv-box" class="dash-chart-body"></div>
-                        </div>
-                        <div class="dash-card">
-                            <h4>📈 趋势演变 (支持刷选) <span style="font-size:10px;color:#e67e22">拖拽选区</span></h4>
+                            <h4>〰 风格走势 <span style="font-size:10px;color:#b5472f">拖拽选择段落</span></h4>
                             <div id="adv-line" class="dash-chart-body"></div>
                         </div>
                     </div>
 
                     <div class="drill-panel">
-                        <h4 style="margin:0; border-bottom:1px solid #eee; padding-bottom:10px;">🔍 钻取详情</h4>
+                        <h4 style="margin:0; border-bottom:1px solid #e4d9c3; padding-bottom:10px;">▸ 片段详情</h4>
                         <div id="adv-drill-content" class="drill-content">
-                            <div class="empty-tip">点击左侧图表中的书籍<br>或拖拽趋势图查看详情</div>
+                            <div class="empty-tip">点击左侧图表中的书籍<br>或拖拽走势图查看段落详情</div>
                         </div>
                     </div>
                 </div>
@@ -197,7 +188,7 @@
                 </div>
 
                 <div class="modal-section">
-                    <h4>🔑 核心关键词</h4>
+                    <h4>※ 核心关键词</h4>
                     <div id="modal-keywords" class="keyword-container"></div>
                 </div>
 
@@ -209,6 +200,12 @@
                 </div>
             </div>
         </div>
+
+        <!-- 题跋落款（页脚） -->
+        <footer class="footer">
+            <span class="footer-text">文印 · 文学指纹交互分析系统</span>
+            <span class="footer-seal" aria-hidden="true">文印</span>
+        </footer>
 
         
     </div>
@@ -238,8 +235,8 @@
                 .attr("id", "adv-tooltip")
                 .style("opacity", 0)
                 .style("position", "absolute")
-                .style("background", "rgba(50, 50, 50, 0.9)")
-                .style("color", "#fff")
+                .style("background", "rgba(46, 42, 36, 0.97)")
+                .style("color", "#f6f0e3")
                 .style("padding", "6px 10px")
                 .style("border-radius", "4px")
                 .style("font-size", "11px")
@@ -259,7 +256,7 @@
             
             const colorScale = d3.scaleOrdinal()
                 .domain(books)
-                .range(['#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c']);
+                .range(['#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d', '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72']);
             
             books.forEach(bookName => {
                 advState.activeBooks.add(bookName);
@@ -330,11 +327,20 @@
                     const q1 = d3.quantile(vals, 0.25);
                     const q3 = d3.quantile(vals, 0.75);
                     const iqr = q3 - q1;
-                    
+
+                    // 趋势：后半段均值 - 前半段均值（正 = 上升，负 = 下降）
+                    const rawVals = segment.map(d => d.value);
+                    let trend = 0;
+                    const half = Math.floor(rawVals.length / 2);
+                    if (half > 0) {
+                        trend = (d3.mean(rawVals.slice(half)) || 0) - (d3.mean(rawVals.slice(0, half)) || 0);
+                    }
+
                     return {
                         ...book,
                         currentMean: d3.mean(vals),
                         currentStd: d3.deviation(vals) || 0,
+                        trend: trend,
                         box: { q1, median: d3.quantile(vals, 0.5), q3, min: Math.max(vals[0], q1-1.5*iqr), max: Math.min(vals[vals.length-1], q3+1.5*iqr) },
                         activeSegment: segment,
                         peak: segment.reduce((p, c) => p.value > c.value ? p : c, segment[0])
@@ -350,7 +356,51 @@
             renderAdvStd(data);
             renderAdvBox(data);
             renderAdvLine(data);
-            updateHighlightVisuals(); 
+            updateHighlightVisuals();
+            renderInsight(data);
+        }
+
+        // 一句话解读：把图表自动翻译成大白话
+        const INSIGHT_METRIC = {
+            sentenceLength: { up: '中后段句子越写越长', down: '中后段句子越写越短', high: '整体句子最长', low: '整体句子最短' },
+            simpsonIndex:  { up: '中后段用词越来越重复', down: '中后段用词越来越丰富', high: '用词重复度最高（词汇较单调）', low: '用词重复度最低（词汇最丰富）' },
+            hapaxLegomena:{ up: '中后段用词越来越新颖', down: '中后段用词越来越常规', high: '用词新颖度最高（新词更多）', low: '用词新颖度最低（用词较常规）' },
+            functionWords: { up: '中后段风格走向持续偏移', down: '中后段风格走向趋于回归', high: null, low: null }
+        };
+
+        function renderInsight(data) {
+            const panel = document.getElementById('insight-content');
+            if (!panel) return;
+            if (!data || data.length === 0) {
+                panel.innerHTML = '<span class="insight-muted">暂无数据，请在上方选择书籍。</span>';
+                return;
+            }
+
+            const mLabel = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
+            const cfg = INSIGHT_METRIC[currentMetric] || INSIGHT_METRIC.sentenceLength;
+            const lines = [];
+
+            if (data.length >= 2 && cfg.high) {
+                const highest = [...data].sort((a, b) => b.currentMean - a.currentMean)[0];
+                const lowest  = [...data].sort((a, b) => a.currentMean - b.currentMean)[0];
+                lines.push(`《${highest.name}》${cfg.high}（${highest.currentMean.toFixed(2)}），《${lowest.name}》${cfg.low}（${lowest.currentMean.toFixed(2)}）。`);
+            } else if (data.length === 1) {
+                lines.push(`《${data[0].name}》的「${mLabel}」整体水平为 ${data[0].currentMean.toFixed(2)}。`);
+            } else {
+                lines.push(`所选书籍的「${mLabel}」风格走向各有不同，详见走势图。`);
+            }
+
+            const trendBook = [...data].sort((a, b) => Math.abs(b.trend) - Math.abs(a.trend))[0];
+            if (trendBook && Math.abs(trendBook.trend) > 0.5 * (trendBook.currentStd || 0)) {
+                lines.push(`《${trendBook.name}》${trendBook.trend > 0 ? cfg.up : cfg.down}。`);
+            }
+
+            if (data.length >= 2) {
+                const stable = [...data].sort((a, b) => a.currentStd - b.currentStd)[0];
+                if (stable) lines.push(`《${stable.name}》的「${mLabel}」起伏最小，风格最平稳。`);
+            }
+
+            panel.innerHTML = lines.map(l => `<div class="insight-line">${l}</div>`).join('');
         }
 
         // 3. 渲染逻辑
@@ -386,7 +436,7 @@
                     .attr("x", d=>x(d.name)).attr("y", d=>y(d.currentMean)).attr("width", x.bandwidth()).attr("height", d=>h-y(d.currentMean)),
                 exit => exit.transition().duration(500).attr("height", 0).remove()
             )
-            .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${d.name}</b><br>均值: ${d.currentMean.toFixed(2)}`); })
+            .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${d.name}</b><br>平均: ${d.currentMean.toFixed(2)}`); })
             .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
             .on("click", (e, d) => advDrillDown(d));
         }
@@ -452,9 +502,9 @@
                 .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
                 .on("click", (e, d) => advDrillDown(d));
             
-            enterG.append("line").attr("class", "whisker").attr("stroke", "#555");
-            enterG.append("rect").attr("class", "box-rect").attr("stroke", "#333").attr("opacity", 0.8);
-            enterG.append("line").attr("class", "median-line").attr("stroke", "#fff").attr("stroke-width", 2);
+            enterG.append("line").attr("class", "whisker").attr("stroke", "#98907f");
+            enterG.append("rect").attr("class", "box-rect").attr("stroke", "#2f2a23").attr("opacity", 0.8);
+            enterG.append("line").attr("class", "median-line").attr("stroke", "#2f2a23").attr("stroke-width", 2);
 
             const allG = enterG.merge(groups);
             allG.select(".whisker").transition().duration(750)
@@ -487,7 +537,7 @@
                 enter => enter.append("path").attr("class", d => `book-el line-path book-${d.id}`)
                     .attr("fill", "none").attr("stroke-width", 1.5).attr("stroke", d=>d.color)
                     .attr("d", d => line(d.activeSegment))
-                    .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${d.name}</b><br>区间均值: ${d.currentMean.toFixed(1)}`); })
+                    .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${d.name}</b><br>平均: ${d.currentMean.toFixed(1)}`); })
                     .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
                     .on("click", (e, d) => advDrillDown(d)),
                 update => update.attr("stroke", d => d.color).attr("d", d => line(d.activeSegment)),
@@ -499,7 +549,7 @@
                 enter => enter.append("circle").attr("class", d => `peak-dot annotation-point book-el book-${d.id}`).attr("r", 4),
                 update => update.attr("cx", d=>x(d.peak.xPercent)).attr("cy", d=>y(d.peak.value)),
                 exit => exit.remove()
-            ).on("mouseover", (e, d) => showAdvTooltip(e, `<b>${d.name}</b><br>峰值: ${d.peak.value.toFixed(1)}`))
+            ).on("mouseover", (e, d) => showAdvTooltip(e, `<b>${d.name}</b><br>最高点: ${d.peak.value.toFixed(1)}`))
              .on("mouseout", hideAdvTooltip);
 
             const brush = d3.brushX().extent([[0, 0], [w, h]]).on("end", advBrushed);
@@ -511,7 +561,7 @@
         function updateDrillPanel() {
             const panel = document.getElementById('adv-drill-content');
             if (advState.selectedIds.length === 0) {
-                panel.innerHTML = '<div class="empty-tip">点击左侧图表中的书籍<br>或拖拽趋势图查看详情</div>';
+                panel.innerHTML = '<div class="empty-tip">点击左侧图表中的书籍<br>或拖拽走势图查看段落详情</div>';
                 return;
             }
             panel.innerHTML = '';
@@ -524,21 +574,21 @@
                 const topBlocks = [...book.activeSegment].sort((a,b) => b.value - a.value).slice(0, 3);
 
                 let bookHtml = `
-                    <div style="margin-bottom: 20px; border-bottom: 2px dashed #eee; padding-bottom: 10px;">
+                    <div style="margin-bottom: 20px; border-bottom: 2px dashed #e4d9c3; padding-bottom: 10px;">
                         <div style="padding:5px; margin-bottom:5px; display:flex; justify-content:space-between; align-items:center;">
                             <strong style="color:${book.color};font-size:14px">${book.name}</strong>
-                            <span style="font-size:10px; color:#999; cursor:pointer;" onclick="removeSelection('${book.id}')">✕ 移除</span>
+                            <span style="font-size:10px; color:#98907f; cursor:pointer;" onclick="removeSelection('${book.id}')">✕ 移除</span>
                         </div>
-                        <div style="font-size:10px; color:#666; margin-bottom:5px; padding-left:5px;">区间均值: ${book.currentMean.toFixed(2)}</div>
+                        <div style="font-size:10px; color:#98907f; margin-bottom:5px; padding-left:5px;">平均: ${book.currentMean.toFixed(2)}</div>
                 `;
 
                 topBlocks.forEach((b, i) => {
                     const keywords = b.keywords ? b.keywords.join(", ") : "";
                     bookHtml += `
                         <div class="drill-item" style="border-left-color:${book.color}; margin-bottom: 5px;">
-                            <strong>#${i+1} 峰值: ${b.value.toFixed(1)}</strong>
-                            <p style="margin:0;color:#666;line-height:1.2;max-height:50px;overflow:hidden">${b.preview?b.preview.substring(0,60)+'...':'无预览'}</p>
-                            ${keywords ? `<div style="margin-top:2px;color:#3498db;font-size:9px">🔑 ${keywords}</div>` : ''}
+                            <strong>#${i+1} 最高点: ${b.value.toFixed(1)}</strong>
+                            <p style="margin:0;color:#98907f;line-height:1.2;max-height:50px;overflow:hidden">${b.preview?b.preview.substring(0,60)+'...':'无预览'}</p>
+                            ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:9px">※ ${keywords}</div>` : ''}
                         </div>
                     `;
                 });
