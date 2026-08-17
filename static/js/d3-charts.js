@@ -95,14 +95,18 @@ function initEventListeners() {
     if (fileInput) fileInput.addEventListener('change', handleFileUpload);
 }
 
-// 根据当前图表类型（热力图 / 折线图）控制多书对比按钮的显隐
+// 根据当前图表类型（热力图 / 折线图）控制「曲线平滑」与「多书对比」控件的显隐
+// 热力图是像素块，没有曲线可平滑，也不支持折线多书对比，故仅折线图下显示
 function updateChartTypeUI() {
     const compareBtn = document.getElementById('toggleComparison');
-    if (!compareBtn) return;
-    if (chartType === 'heatmap') {
-        compareBtn.style.display = 'none';
-    } else {
-        compareBtn.style.display = 'block';
+    const smoothnessGroup = document.getElementById('smoothnessGroup');
+    const isHeatmap = chartType === 'heatmap';
+
+    if (compareBtn) {
+        compareBtn.style.display = isHeatmap ? 'none' : 'block';
+    }
+    if (smoothnessGroup) {
+        smoothnessGroup.style.display = isHeatmap ? 'none' : 'flex';
     }
 }
 
