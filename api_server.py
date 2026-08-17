@@ -4,7 +4,7 @@
 为D3.js可视化提供JSON数据接口
 """
 
-from flask import Flask, jsonify, send_from_directory, send_file
+from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_cors import CORS
 import json
 import os
@@ -14,6 +14,9 @@ from pathlib import Path
 app = Flask(__name__, static_folder='static')
 CORS(app)  # 允许跨域请求
 
+# 限制上传文件大小，防止超大文件拖垮服务器
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
+
 # 配置
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data" / "raw"
@@ -22,6 +25,35 @@ STATIC_DIR = BASE_DIR / "static"
 # 确保目录存在
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
+# 演示数据生成状态（懒加载：首次请求时若 all_books.json 缺失则自动生成一次）
+_demo_data_ready = False
+
+
+def _ensure_demo_data():
+    """若预处理的示例数据不存在，则基于 data/raw/ 自动生成一次（保证全新克隆开箱即用）。"""
+    global _demo_data_ready
+    if _demo_data_ready:
+        return True
+
+    target = BASE_DIR / "data" / "processed" / "all_books.json"
+    if target.exists():
+        _demo_data_ready = True
+        return True
+
+    raw_dir = BASE_DIR / "data" / "raw"
+    if not raw_dir.exists() or not list(raw_dir.glob("*.txt")):
+        return False
+
+    try:
+        from generate_data import process_all_books
+        process_all_books()
+        _demo_data_ready = target.exists()
+    except Exception as e:
+        print(f"自动生成演示数据失败: {e}")
+        _demo_data_ready = False
+    return _demo_data_ready
+
 
 @app.route('/')
 def index():
@@ -99,8 +131,9 @@ def get_fingerprint_data():
     获取所有书籍的指纹数据
     """
     try:
+        _ensure_demo_data()
         processed_dir = BASE_DIR / "data" / "processed"
-        
+
         # --- 修改开始 ---
         # 明确指定我们要加载 all_books.json，而不是任何最新的 json 文件
         target_file = processed_dir / "all_books.json"
@@ -119,8 +152,6 @@ def get_fingerprint_data():
         # 如果找不到 all_books.json，尝试查找其他 json 文件作为备选（保持原有逻辑作为后备）
         elif processed_dir.exists():
             data_files = list(processed_dir.glob("*.json"))
-            # 排除 statistics.json，防止加载错误
-            data_files = [f for f in data_files if "statistics" not in f.name]
             
             if data_files:
                 latest_file = max(data_files, key=os.path.getctime)
@@ -149,70 +180,70 @@ def get_fingerprint_data():
 @app.route('/api/book/<book_name>', methods=['GET'])
 def get_book_data(book_name):
     """
-    获取特定书籍的数据
+    获取特定书籍的真实指纹数据
     """
     try:
-        # 这里应该计算真实数据
-        # 为了演示，返回模拟数据
-        sample_data = generate_sample_data()
-        
-        if book_name in sample_data:
-            return jsonify({
-                "status": "success",
-                "book": book_name,
-                "data": sample_data[book_name]
-            })
-        else:
-            return jsonify({
-                "status": "error",
-                "message": f"书籍 '{book_name}' 不存在"
-            }), 404
-            
+        processed_dir = BASE_DIR / "data" / "processed"
+        target_file = processed_dir / "all_books.json"
+
+        if target_file.exists():
+            with open(target_file, 'r', encoding='utf-8') as f:
+                all_data = json.load(f)
+
+            if book_name in all_data:
+                return jsonify({
+                    "status": "success",
+                    "book": book_name,
+                    "data": all_data[book_name]
+                })
+
+        return jsonify({
+            "status": "error",
+            "message": f"书籍 '{book_name}' 不存在。请先运行 python generate_data.py 生成数据"
+        }), 404
+
     except Exception as e:
         return jsonify({
             "status": "error",
             "message": str(e)
         }), 500
-@app.route('/simple-viz')
-def simple_viz():
-    """
-    简化版可视化页面
-    """
-    try:
-        return send_file('simple_viz.html')
-    except:
-        # 返回内联HTML
-        return '''
-        <!DOCTYPE html>
-        <html>
-        <head><title>简化版可视化</title></head>
-        <body>
-            <h1>简化版可视化</h1>
-            <p><a href="/visualization">返回完整版</a></p>
-            <p><a href="/test">测试页面</a></p>
-        </body>
-        </html>
-        '''
 
-@app.route('/test')
-def test_page():
+@app.route('/api/analyze', methods=['POST'])
+def analyze_upload():
     """
-    测试页面
+    用户上传文本文件，即时计算文学指纹。
+    复用与示例书籍完全相同的 src/* 管线，返回与 all_books.json 单本书一致的结构。
     """
-    try:
-        return send_file('test.html')
-    except:
-        return '''
-        <!DOCTYPE html>
-        <html>
-        <head><title>测试页面</title></head>
-        <body>
-            <h1>测试页面</h1>
-            <p>test.html 文件不存在，请在项目根目录创建该文件。</p>
-        </body>
-        </html>
-        '''
+    from src.data_loader import get_blocks
+    from src.pipeline import build_book_data
 
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "请求中未包含文件（字段名应为 file）"}), 400
+
+    file = request.files['file']
+    if not file or file.filename == '':
+        return jsonify({"status": "error", "message": "未选择文件"}), 400
+
+    if not file.filename.lower().endswith('.txt'):
+        return jsonify({"status": "error", "message": "仅支持 .txt 文本文件"}), 400
+
+    # 用文件名（不含扩展名）作为该书在可视化中的标识
+    book_name = Path(file.filename).stem
+
+    try:
+        raw_text = file.read().decode('utf-8', errors='ignore')
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"读取文件失败: {e}"}), 400
+
+    blocks = get_blocks(raw_text, block_size=10000, overlap=9000)
+    if not blocks:
+        return jsonify({
+            "status": "error",
+            "message": "文本太短，无法生成指纹（至少需要约 10000 个单词）"
+        }), 400
+
+    book_data = build_book_data(blocks)
+    return jsonify({"status": "success", "book": book_name, "data": book_data})
 
 @app.route('/api/books', methods=['GET'])
 def list_books():
@@ -220,6 +251,7 @@ def list_books():
     列出所有可用的书籍
     """
     try:
+        _ensure_demo_data()
         books = []
         # 检查data/raw目录中的文本文件
         if DATA_DIR.exists():

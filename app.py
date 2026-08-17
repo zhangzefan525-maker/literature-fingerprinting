@@ -1,12 +1,12 @@
 # 成员C负责写的主逻辑，调用A和B的函数
 # 修改者：成员B (集成了 Task E 关键词提取功能)
-# 新增：集成了指纹分析模块和界面美化
+# 集成指纹分析模块和界面美化
 import streamlit as st
 import os
 import tempfile
 import nltk
 import numpy as np
-# +++ 修复：添加time模块导入 +++
+# +++ 添加time模块导入 +++
 import time
 from datetime import datetime
 
@@ -32,29 +32,6 @@ from src.metrics import (
 )
 from src.visualizer import draw_heatmap
 from src.analyzer import FingerprintAnalyzer
-
-import streamlit as st
-import streamlit.components.v1 as components
-
-def show_d3_visualization():
-    # 方法1：直接嵌入代码
-    html_code = """
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    ...（您的完整HTML代码）...
-    </html>
-    """
-    components.html(html_code, height=800, scrolling=True)
-    
-    # 或方法2：读取外部HTML文件
-    # with open("d3_visualization.html", "r", encoding="utf-8") as f:
-    #     html_content = f.read()
-    # components.html(html_content, height=800, scrolling=True)
-
-# 在合适的地方调用
-if st.sidebar.checkbox("📊 显示D3.js交互图表"):
-    st.markdown("## 🔬 D3.js交互式可视化分析")
-    show_d3_visualization()
 
 # --- 自定义CSS样式 ---
 def load_custom_css():
@@ -282,15 +259,6 @@ def main():
                 help="相邻文本块之间的重叠单词数"
             )
         
-        # 系统控制
-        st.markdown("---")
-        st.markdown("### ⚡ 系统控制")
-        
-        if st.button("🛑 停止程序", use_container_width=True, type="secondary"):
-            st.warning("程序已终止。")
-            time.sleep(1)
-            os._exit(0)
-        
         # 页脚信息
         st.markdown("---")
         st.markdown("""
@@ -321,8 +289,12 @@ def main():
                     tmp_file.write(text_content)
                     tmp_file_path = tmp_file.name
 
-                # 调用成员 A 的数据处理逻辑
-                raw_text = load_clean_text(tmp_file_path)
+                # 调用成员 A 的数据处理逻辑（读取后立即清理临时文件，避免短文本 continue 时泄漏）
+                try:
+                    raw_text = load_clean_text(tmp_file_path)
+                finally:
+                    if os.path.exists(tmp_file_path):
+                        os.remove(tmp_file_path)
                 blocks = get_blocks(raw_text, block_size=block_size, overlap=overlap)
                 
                 if len(blocks) == 0:
@@ -331,7 +303,9 @@ def main():
 
                 # 调用成员 B 的指标计算逻辑
                 if metric_key == "pca":
-                    values = get_pca_coordinates(blocks)
+                    # get_pca_coordinates 返回 [{'x':..,'y':..}] 字典列表，
+                    # 热力图/统计只需第一主成分 x，故取出标量列表
+                    values = [item['x'] for item in get_pca_coordinates(blocks)]
                 else:
                     values = []
                     for block in blocks:
@@ -341,10 +315,7 @@ def main():
                         values.append(val)
                 
                 all_books_results[uploaded_file.name] = {"values": values, "blocks": blocks}
-            
-                if os.path.exists(tmp_file_path):
-                    os.remove(tmp_file_path)
-            
+
             progress_bar.progress(1.0)
             status_text.text("✅ 所有文件处理完成！")
             time.sleep(0.5)

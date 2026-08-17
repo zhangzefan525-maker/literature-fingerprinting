@@ -183,21 +183,16 @@ class FingerprintAnalyzer:
         book_names = list(all_results.keys())
         n_books = len(book_names)
         similarity = np.zeros((n_books, n_books))
-        
+
         for i in range(n_books):
             for j in range(n_books):
-                if i != j and len(all_results[book_names[i]]['values']) > 1 and len(all_results[book_names[j]]['values']) > 1:
-                    # 使用动态时间规整(DTW)或简单相关系数
-                    # 这里使用简单相关系数，注意需要对齐长度
-                    min_len = min(len(all_results[book_names[i]]['values']), 
-                                  len(all_results[book_names[j]]['values']))
-                    if min_len > 1:
-                        corr = np.corrcoef(
-                            all_results[book_names[i]]['values'][:min_len],
-                            all_results[book_names[j]]['values'][:min_len]
-                        )[0, 1]
-                        similarity[i, j] = corr
-                similarity[i, i] = 1.0
+                if i == j:
+                    similarity[i, j] = 1.0
+                    continue
+                values_i = all_results[book_names[i]]['values']
+                values_j = all_results[book_names[j]]['values']
+                if len(values_i) > 1 and len(values_j) > 1:
+                    similarity[i, j] = self._series_correlation(values_i, values_j)
         
         comparison['similarity_matrix'] = similarity.tolist()
         
@@ -210,6 +205,31 @@ class FingerprintAnalyzer:
         
         return comparison
     
+    @staticmethod
+    def _series_correlation(a, b, n_points=100) -> float:
+        """
+        计算两条长度可能不同的序列的 Pearson 相关系数。
+
+        原实现直接截断到较短长度，会丢失较长序列的大部分信息；
+        这里改为将两条序列重采样到相同长度后再求相关。
+        常数序列（标准差为 0）无定义，返回 0。
+        """
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        if len(a) < 2 or len(b) < 2:
+            return 0.0
+        if np.std(a) == 0 or np.std(b) == 0:
+            return 0.0
+
+        x_old_a = np.linspace(0, 1, len(a))
+        x_old_b = np.linspace(0, 1, len(b))
+        x_new = np.linspace(0, 1, n_points)
+        a_resampled = np.interp(x_new, x_old_a, a)
+        b_resampled = np.interp(x_new, x_old_b, b)
+
+        corr = np.corrcoef(a_resampled, b_resampled)[0, 1]
+        return 0.0 if np.isnan(corr) else float(corr)
+
     def _find_most_similar_pair(self, book_names: List[str], similarity: np.ndarray) -> Tuple:
         """找出最相似的书籍对"""
         max_sim = -1
