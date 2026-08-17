@@ -309,14 +309,15 @@
         const charts = {}; 
 
         function initD3Structures() {
+            const metricLabel = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
             ['mean', 'std', 'box', 'line'].forEach(id => {
                 const el = document.getElementById(`adv-${id}`);
                 // 确保容器可见，否则宽度为0
                 if (!el) return;
-                
+
                 const w = el.clientWidth || 300; // 后备宽度
                 const h = el.clientHeight || 200;
-                
+
                 d3.select(el).selectAll("*").remove();
                 const svg = d3.select(el).append("svg").attr("width", w).attr("height", h);
                 const innerW = w - advMargin.left - advMargin.right;
@@ -325,6 +326,25 @@
                 g.append("g").attr("class", "x-axis").attr("transform", `translate(0,${innerH})`);
                 g.append("g").attr("class", "y-axis");
                 g.append("g").attr("class", "content-area");
+
+                // 轴标签：Y 轴统一标当前指标中文名；走势图额外标 X 轴「阅读进度」
+                // （条形图/箱线图 X 轴即书名，已由刻度文本标注，无需重复）
+                g.append("text")
+                    .attr("class", "axis-label")
+                    .attr("transform", "rotate(-90)")
+                    .attr("x", -innerH / 2)
+                    .attr("y", -38)
+                    .attr("text-anchor", "middle")
+                    .text(metricLabel);
+                if (id === 'line') {
+                    g.append("text")
+                        .attr("class", "axis-label")
+                        .attr("x", innerW / 2)
+                        .attr("y", innerH + 40)
+                        .attr("text-anchor", "middle")
+                        .text("阅读进度");
+                }
+
                 charts[id] = { svg, g, w: innerW, h: innerH };
             });
             if(charts['line']) charts['line'].g.append("g").attr("class", "brush");
