@@ -50,13 +50,22 @@ class TestSimpsonsIndex(unittest.TestCase):
         self.assertEqual(calc_simpsons_index("lonely"), 0.0)
 
 
-class TestHapaxLegomena(unittest.TestCase):
+class TestHonoreMeasureR(unittest.TestCase):
     def test_known_counts(self):
         # 词频: a=2, b=2, c=1; N=5, V=3, V1=1
         # R = 100*ln(N) / (1 - V1/V)
         text = "a b c a b"
         expected = 100 * math.log(5) / (1 - 1 / 3)
         self.assertAlmostEqual(calc_hapax_legomena(text), expected, places=6)
+
+    def test_single_token_returns_zero(self):
+        # 只有一个词型时 V1 == V，按实现返回 0，避免除零
+        self.assertEqual(calc_hapax_legomena("word"), 0.0)
+
+    def test_repeated_token_returns_zero(self):
+        # 没有只出现一次的词型时，公式结果为 100*ln(N)
+        expected = 100 * math.log(3)
+        self.assertAlmostEqual(calc_hapax_legomena("word word word"), expected, places=6)
 
     def test_all_unique_returns_zero(self):
         # V1 == V 时按实现返回 0，避免除零

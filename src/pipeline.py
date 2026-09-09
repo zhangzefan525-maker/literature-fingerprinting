@@ -22,16 +22,26 @@ from src.metrics import (
 
 
 def _ensure_nltk_data():
-    """确保 NLTK 数据包就绪（punkt 分词、stopwords 停用词），缺失时自动下载。
+    """确保 NLTK 数据包就绪（punkt 分词、punkt_tab、stopwords）。
 
-    全新环境（Render 部署、首次 clone）首次运行会在此下载；已下载时开销极小。
-    网络失败时静默跳过，交由后续调用抛出明确的 LookupError。
+    优先本地查找，命中时零网络开销——避免每次分析都触发 nltk.download()
+    联网检查（离线/受限网络下每个包会卡几十秒超时）。
+    仅当本地确实缺失时才尝试自动下载；下载失败静默跳过，
+    由后续实际调用抛出明确的 LookupError。
     """
-    for pkg in ("punkt", "punkt_tab", "stopwords"):
+    resources = {
+        "punkt": "tokenizers/punkt",
+        "punkt_tab": "tokenizers/punkt_tab",
+        "stopwords": "corpora/stopwords",
+    }
+    for pkg, resource in resources.items():
         try:
-            nltk.download(pkg, quiet=True)
-        except Exception:
-            pass
+            nltk.data.find(resource)
+        except LookupError:
+            try:
+                nltk.download(pkg, quiet=True)
+            except Exception:
+                pass
 
 
 def _preview(text, limit):
