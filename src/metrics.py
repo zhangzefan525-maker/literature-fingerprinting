@@ -1,4 +1,3 @@
-# B成员的主要任务
 import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
@@ -9,7 +8,7 @@ from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import CountVectorizer
 
 # ---------------------------------------------------------
-# 成员 B 负责部分：核心指标计算 (Core Metrics)
+# 核心指标计算 (Core Metrics)
 # ---------------------------------------------------------
 
 def _clean_tokens(text):

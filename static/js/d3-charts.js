@@ -8,7 +8,13 @@ const API_ENDPOINTS = {
 };
 
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
-const DEFAULT_UPLOAD_STATUS = '支持上传英文 .txt 纯文本（建议 ≥1 万词），自动生成文学指纹并与示例书籍并列对比。';
+
+function isLocalHost() {
+    const hostname = (window.location.hostname || '').toLowerCase();
+    return LOCAL_HOSTNAMES.has(hostname);
+}
+
+const DEFAULT_UPLOAD_STATUS = '支持上传英文纯文本小说（.txt，建议 1 万字以上）。分析后会出现在上方的书名列表里，和内置名著放在一起对比。';
 
 // 全局变量
 let realData = null;
@@ -23,6 +29,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initEventListeners();
     updateChartTypeUI();
     setUploadStatus(`${DEFAULT_UPLOAD_STATUS} ${getUploadPrivacyNotice()}`);
+    syncSaveToggleDefault();
     updateMetricHint();
     loadBooksList();
 
@@ -31,12 +38,24 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 500);
 });
 
+// 「存入我的图书馆」勾选框：本地默认勾选（本机留档安全），远程默认不勾（默认不落盘）
+function syncSaveToggleDefault() {
+    const cb = document.getElementById('save-upload');
+    if (cb) cb.checked = isLocalHost();
+}
+
+// 上传是否要写入「我的图书馆」：以勾选框为准；找不到勾选框时本机默认保存、远程不保存
+function isUploadSaveWanted() {
+    const cb = document.getElementById('save-upload');
+    if (cb) return cb.checked;
+    return isLocalHost();
+}
+
 function getUploadPrivacyNotice() {
-    const hostname = window.location.hostname;
-    if (LOCAL_HOSTNAMES.has(hostname)) {
-        return '当前为本机访问：文件会发送到本机 Flask 服务即时处理，应用代码不会主动保存上传的原文。';
+    if (isLocalHost()) {
+        return '分析只在本机进行，不上传服务器。勾选「存入我的图书馆」后，结果会保存到本机，刷新后仍在；不勾选则本次不保存。';
     }
-    return '当前为远程访问：文件会发送到当前服务器即时处理，请勿上传敏感、私密或未获授权的文本。在线演示使用 HTTP，不应视为加密传输。';
+    return '文件会发到这台网页的服务器做分析。勾选「存入我的图书馆」后，结果会写入服务器（重新部署可能被清空），且当前页面未加密传输，请不要上传敏感或未获授权的文本；不勾选则本次不保存。';
 }
 
 function setUploadStatus(message, state = '') {
@@ -216,6 +235,7 @@ async function handleFileUpload(event) {
 
     const formData = new FormData();
     formData.append('file', file);
+    if (isUploadSaveWanted()) formData.append('save', '1');
 
     try {
         const resp = await fetch(`${API_BASE_URL}/api/analyze`, { method: 'POST', body: formData });
@@ -228,11 +248,15 @@ async function handleFileUpload(event) {
         }
 
         if (!realData) realData = {};
-        realData[result.book] = result.data;
+        realData[result.book] = result.data; // 一律以服务端返回的 result.book 作为键
         selectedBooks.add(result.book);
-        addUploadedBookButton(result.book);
+        addUploadedBookButton(result.book, { deletable: !!result.saved });
         const nBlocks = result.data && result.data.metadata ? result.data.metadata.totalBlocks : 0;
-        setUploadStatus(`已加载「${getBookDisplayName(result.book)}」（${nBlocks} 个文本块）。${getUploadPrivacyNotice()}`, 'success');
+        const savedMsg = result.saved
+            ? '已存入「我的图书馆」，刷新后仍在，可点书名旁 ✕ 删除。'
+            : '本次未勾选保存，刷新后不会保留。';
+        setUploadStatus(`「${getBookDisplayName(result.book)}」分析完成，共划分 ${nBlocks} 个片段。${savedMsg}`, 'success');
+        updateMetricHint();
         refreshAllActiveCharts();
     } catch (e) {
         console.error('上传分析失败:', e);
@@ -243,20 +267,103 @@ async function handleFileUpload(event) {
     }
 }
 
-// 将上传的书动态加入选择器，并保持选中态
-function addUploadedBookButton(bookName) {
-    const selector = document.getElementById('bookSelector');
-    if (!selector) return;
-    if (getBookButtonById(bookName)) return;
+// 生成一个「书名 chip」：来自「我的图书馆」的书带 ✕ 删除钮
+// （删除钮 stopPropagation，避免误触发选书）
+function buildBookGroup(book, { active = false, deletable = false, onClick } = {}) {
+    const id = book.id;
+    const wrap = document.createElement('span');
+    wrap.className = 'book-group';
+    wrap.dataset.bookId = id;
 
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'book-btn active';
-    button.setAttribute('data-id', bookName);
-    button.title = bookName;
-    button.textContent = getBookDisplayName(bookName);
-    button.addEventListener('click', () => selectBook(bookName));
-    selector.appendChild(button);
+    button.className = 'book-btn' + (active ? ' active' : '');
+    button.dataset.id = id;
+    button.title = book.name || id;
+    button.textContent = getBookDisplayName(book.name || id);
+    if (typeof onClick === 'function') button.addEventListener('click', onClick);
+    wrap.appendChild(button);
+
+    if (deletable || book.source === 'library') {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'book-del';
+        del.title = '从「我的图书馆」删除这本书';
+        del.setAttribute('aria-label', `删除「${getBookDisplayName(book.name || id)}」`);
+        del.textContent = '✕';
+        del.addEventListener('click', (event) => {
+            event.stopPropagation();
+            deleteLibraryBook(id);
+        });
+        wrap.appendChild(del);
+    }
+    return wrap;
+}
+
+// 将上传的书动态加入选择器，并保持选中态
+function addUploadedBookButton(bookName, { deletable = false } = {}) {
+    const selector = document.getElementById('bookSelector');
+    if (!selector) return;
+    const existing = getBookButtonById(bookName);
+    if (existing) {
+        // 此前是「未保存」瞬时 chip，这次真正落盘后需补上删除钮
+        const wrap = existing.closest('.book-group');
+        if (wrap && deletable && !wrap.querySelector('.book-del')) {
+            wrap.replaceWith(buildBookGroup(
+                { id: bookName, name: bookName },
+                { active: true, deletable: true, onClick: () => selectBook(bookName) }
+            ));
+        }
+        return;
+    }
+
+    selector.appendChild(buildBookGroup(
+        { id: bookName, name: bookName },
+        { active: true, deletable, onClick: () => selectBook(bookName) }
+    ));
+}
+
+// 从「我的图书馆」删除：确认 → DELETE 接口 → 同步内存/选择/按钮/图表
+async function deleteLibraryBook(bookName) {
+    if (!window.confirm(`确定从「我的图书馆」删除《${getBookDisplayName(bookName)}》？此操作不可撤销。`)) return;
+    setUploadBusy(true);
+    try {
+        const resp = await fetch(`${API_BASE_URL}/api/library/${encodeURIComponent(bookName)}`, { method: 'DELETE' });
+        const contentType = resp.headers.get('content-type') || '';
+        const result = contentType.includes('application/json') ? await resp.json() : null;
+        if (!resp.ok) {
+            setUploadStatus(getErrorMessage(resp, result), 'error');
+            return;
+        }
+
+        if (realData) delete realData[bookName];
+        selectedBooks.delete(bookName);
+        document.querySelectorAll('.book-group').forEach(group => {
+            if (group.dataset.bookId === bookName) group.remove();
+        });
+
+        setUploadStatus((result && result.message) || `已从「我的图书馆」删除《${getBookDisplayName(bookName)}》。`, 'success');
+        updateMetricHint();
+
+        const remaining = Object.keys(realData || {}).length;
+        if (remaining === 0) {
+            const selector = document.getElementById('bookSelector');
+            if (selector) selector.innerHTML = '<p class="state-card empty">没有已加载的书籍了。请上传文本，或将 .txt 放入 data/raw。</p>';
+            showNoDataMessage();
+            return;
+        }
+        if (selectedBooks.size === 0) {
+            const firstBtn = document.querySelector('.book-btn');
+            if (firstBtn) selectBook(firstBtn.dataset.id);
+        } else {
+            refreshAllActiveCharts();
+        }
+    } catch (e) {
+        console.error('删除书库书籍失败:', e);
+        setUploadStatus('删除失败：无法连接当前分析服务。', 'error');
+    } finally {
+        setUploadBusy(false);
+    }
 }
 
 // 辅助函数：根据当前 Tab 刷新图表
@@ -311,14 +418,9 @@ function updateBookSelector(books) {
 
     selector.innerHTML = '';
     books.forEach(book => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'book-btn';
-        button.dataset.id = book.id;
-        button.title = book.name || book.id;
-        button.textContent = getBookDisplayName(book.name || book.id);
-        button.addEventListener('click', () => selectBook(book.id));
-        selector.appendChild(button);
+        selector.appendChild(buildBookGroup(book, {
+            onClick: () => selectBook(book.id)
+        }));
     });
 
     // 默认选中第一本书
@@ -375,6 +477,7 @@ async function loadRealData() {
             return;
         }
         showSuccess(`成功加载 ${availableBooks.length} 本书籍的数据`);
+        updateMetricHint(); // 参考区间跟随当前已加载书集合
 
         // 确保 selectedBooks 中的书在数据中存在
         selectedBooks = new Set(Array.from(selectedBooks).filter(book => availableBooks.includes(book)));
@@ -459,7 +562,7 @@ function drawMultiLineChart(svg, booksArray) {
         .attr("x", width / 2)
         .attr("y", chartHeight + 38)
         .attr("text-anchor", "middle")
-        .text("阅读进度（文本块，约 1 万词 / 块）");
+        .text("阅读进度（每个片段约 1 万字）");
 
     g.append("text")
         .attr("class", "axis-label")
@@ -502,7 +605,7 @@ function drawMultiLineChart(svg, booksArray) {
             .attr("stroke-width", 1.5)
             .attr("tabindex", 0)
             .attr("role", "button")
-            .attr("aria-label", d => `${getBookDisplayName(bookData.book)} 第 ${d.block + 1} 个文本块，${getMetricLabel(currentMetric)} ${formatMetricValue(d.value)}`)
+            .attr("aria-label", d => `${getBookDisplayName(bookData.book)} 第 ${d.block + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetricValue(d.value)}`)
             .style("cursor", "pointer")
             .style("opacity", 0) 
             .on("mouseover", function(event, d) {
@@ -632,7 +735,7 @@ function drawMultiHeatmap(svg, booksArray) {
             .attr("fill", d => colorScale(d.value))
             .attr("tabindex", 0)
             .attr("role", "button")
-            .attr("aria-label", d => `${getBookDisplayName(bookId)} 第 ${d.block + 1} 个文本块，${getMetricLabel(currentMetric)} ${formatMetricValue(d.value)}`)
+            .attr("aria-label", d => `${getBookDisplayName(bookId)} 第 ${d.block + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetricValue(d.value)}`)
             .on("mouseover", function(event, d) {
                 d3.select(this).style("stroke", "#b5472f").style("stroke-width", "2px");
                 showTooltip(event, d, bookId);
@@ -736,7 +839,7 @@ function showTooltip(event, data, bookName) {
             <strong>${escapeHtml(getBookDisplayName(bookName))}</strong>
         </div>
         <div style="margin-bottom: 3px;">
-            <strong>文本块:</strong> ${Number(data.block) + 1}
+            <strong>片段：</strong>第 ${Number(data.block) + 1} 个
         </div>
         <div style="margin-bottom: 3px;">
             <strong>${escapeHtml(getMetricLabel(currentMetric))}:</strong> ${escapeHtml(data.value)}
@@ -765,12 +868,15 @@ function showDetail(data, bookName) {
     const keywordsHtml = Array.isArray(data.keywords) && data.keywords.length > 0
         ? data.keywords.map(keyword => `<span class="keyword-tag">${escapeHtml(keyword)}</span>`).join('')
         : '';
+    const locationText = formatBlockLocation(bookName, data.block) + formatWordCount(data.wordCount);
+    const sourceText = data.extended_preview || data.preview || '';
     const previewHtml = data.preview ? `
             <div>
                 <h4>📄 原文片段</h4>
                 <p style="margin-top: 10px; color: #98907f; font-style: italic;">
                     "${escapeHtml(data.preview)}"
                 </p>
+                ${sourceText ? copyButtonHtml(sourceText) : ''}
             </div>` : '';
 
     detailPanel.innerHTML = `
@@ -778,7 +884,7 @@ function showDetail(data, bookName) {
         <p>当前选择：${escapeHtml(displayName)} - ${escapeHtml(getMetricLabel(currentMetric))}</p>
         <div class="detail-card">
             <h3>📖 ${escapeHtml(displayName)}</h3>
-            <p><strong>文本块编号:</strong> #${Number(data.block) + 1}</p>
+            <p class="block-location">📍 ${escapeHtml(locationText)}</p>
             <div class="value">${escapeHtml(formatMetricValue(data.value, 4))}</div>
             <p><strong>${escapeHtml(getMetricLabel(currentMetric))}</strong></p>
 
@@ -797,7 +903,7 @@ function getMetricLabel(metric) {
     const labels = {
         sentenceLength: '平均句长',
         simpsonIndex: '用词重复度',
-        hapaxLegomena: 'Honoré 词汇丰富度 R',
+        hapaxLegomena: '独特词丰富度',
         functionWords: '风格走向'
     };
     return labels[metric] || metric;
@@ -808,12 +914,120 @@ function updateMetricHint() {
     const el = document.getElementById('metric-hint');
     if (!el) return;
     const hints = {
-        sentenceLength: '平均句长：每句话平均多少个词。数值越大句子越长、越书面；越小越短促、越口语化。',
-        simpsonIndex: '用词重复度：衡量词汇有多「重复」。数值越高，同一批词反复出现（词汇单调）；越低，用词越多样。',
-        hapaxLegomena: 'Honoré 词汇丰富度 R：综合词元总数、不同词型数和只出现一次的词型数。通常不是 0–1 比例；数值越高，词汇使用越丰富。',
-        functionWords: '风格走向：用「的、和、是」这类高频小词的用法差异，把文本投成一个风格坐标。位置用于探索，不直接代表严格的跨书相似度。'
+        sentenceLength: '一句话平均几个词。句子长，读起来更书面、更正式；句子短，更口语、更利落。',
+        simpsonIndex: '这本书是不是翻来覆去用同一批词。数值越高越重复（词有点单调）；越低，用词越多样。',
+        hapaxLegomena: '书里有多少「只出现一次的独特词」。这样的词越多，说明作者用词越丰富、越不单调。',
+        functionWords: '不看内容，而看「的、和、是」这类高频小词的使用习惯。点越靠近只说明这些词的用法越像，不等于两本书本身相似。'
     };
-    el.innerHTML = `<span class="metric-hint-label">当前指标</span>${escapeHtml(hints[currentMetric] || '')}`;
+    const ctxText = getMetricContextLine(currentMetric);
+    el.innerHTML = `<span class="metric-hint-label">${escapeHtml(getMetricLabel(currentMetric))}：</span>${escapeHtml(hints[currentMetric] || '')}`;
+    if (ctxText) {
+        const line = document.createElement('div');
+        line.className = 'metric-context';
+        line.textContent = ctxText;
+        el.appendChild(line);
+    }
+}
+
+// ==========================================
+// 📍 出处定位 / 复制片段（R2）
+// ==========================================
+
+function getBookBlockCount(bookName) {
+    const bookData = realData && realData[bookName];
+    if (!bookData) return 0;
+    const n = bookData.metadata && Number(bookData.metadata.totalBlocks);
+    if (isFiniteNumber(n) && n > 0) return n;
+    for (const metric of ['sentenceLength', 'simpsonIndex', 'hapaxLegomena', 'functionWords']) {
+        if (Array.isArray(bookData[metric]) && bookData[metric].length > 0) return bookData[metric].length;
+    }
+    return 0;
+}
+
+function formatBlockLocation(bookName, blockIndex) {
+    const idx = Number(blockIndex);
+    const count = getBookBlockCount(bookName);
+    if (!isFiniteNumber(idx) || idx < 0 || count <= 0) return '暂无全书定位';
+    return `第 ${idx + 1}/${count} 个片段 · 约全书 ${(((idx + 1) / count) * 100).toFixed(1)}%`;
+}
+
+function formatWordCount(wordCount) {
+    const wc = Number(wordCount);
+    if (!isFiniteNumber(wc) || wc <= 0) return '';
+    return ` · 本片段约 ${wc.toLocaleString('zh-CN')} 词`;
+}
+
+// 复制原文片段。原文（可能含引号/换行/CJK）不进 HTML 属性：
+// 先存入内存注册表，按钮只带数字索引，由全局委托统一处理点击。
+const _copySources = [];
+
+function registerCopySource(text) {
+    return _copySources.push(String(text ?? '')) - 1;
+}
+
+function copyButtonHtml(text, extraClass = '') {
+    if (!text) return '';
+    return `<button type="button" class="copy-block-btn${extraClass ? ` ${extraClass}` : ''}" data-copy-idx="${registerCopySource(text)}">⧉ 复制片段</button>`;
+}
+
+function copyFromButton(button) {
+    const idx = Number(button && button.dataset.copyIdx);
+    const text = _copySources[idx];
+    if (text === undefined) return;
+    const flash = () => {
+        const original = button.innerHTML;
+        button.textContent = '✓ 已复制';
+        setTimeout(() => { button.innerHTML = original; }, 1600);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(flash).catch(() => { fallbackCopyText(text, flash); });
+    } else {
+        fallbackCopyText(text, flash); // http 等非安全上下文必须走 execCommand 兜底
+    }
+}
+
+function fallbackCopyText(text, done) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    if (ok && typeof done === 'function') done();
+}
+
+document.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-copy-idx]');
+    if (target) copyFromButton(target);
+});
+
+// ==========================================
+// 📏 指标解读参考区间（R3）：纯数据驱动，不编造固定阈值
+// ==========================================
+
+function getMetricContextLine(metric) {
+    if (!realData) return '';
+    const means = [];
+    Object.keys(realData).forEach(name => {
+        const vals = getMetricValues(name, metric).map(d => d.value);
+        if (vals.length === 0) return;
+        const m = d3.mean(vals);
+        if (isFiniteNumber(m)) means.push(m);
+    });
+    if (means.length < 2) return ''; // 书太少时不硬给“范围”，避免误导
+    const min = d3.min(means);
+    const max = d3.max(means);
+    let line = `参考一下：目前这 ${means.length} 本书的整体水平大约在 ${formatMetricValue(min)} 到 ${formatMetricValue(max)} 之间（会随选书变化，仅供横向比较）。`;
+    if (metric === 'hapaxLegomena') {
+        line += ' 独特词的数量会受片段长短影响，建议只在本页选中的书之间比较。';
+    } else if (metric === 'functionWords') {
+        line += ' 「风格走向」只是高频小词用法的一个参照方向，请结合原文理解。';
+    }
+    return line;
 }
 
 function getBookSafeId(name) {
@@ -843,8 +1057,8 @@ function getHeatmapLegend(metric) {
     const legend = {
         sentenceLength: ['短句', '长句'],
         simpsonIndex: ['用词多样', '用词重复'],
-        hapaxLegomena: ['词汇较常规', '词汇更丰富'],
-        functionWords: ['投影一端', '投影另一端']
+        hapaxLegomena: ['独特词较少', '独特词较多'],
+        functionWords: ['一端', '另一端']
     };
     return legend[metric] || ['低值', '高值'];
 }
@@ -930,24 +1144,26 @@ function exportSummary() {
 
     const books = Array.from(selectedBooks).filter(book => getMetricValues(book, currentMetric).length > 0);
     if (books.length === 0) {
-        showError('当前选择的书籍没有可导出的指标数据，请切换指标或重新生成数据。');
+        showError('当前选择的书籍暂时没有可用于这个观察角度的数据，请换一个角度，或换一本书再试。');
         return;
     }
 
     const metricLabel = getMetricLabel(currentMetric);
     const metricHint = {
-        sentenceLength: '每句话平均词数。',
-        simpsonIndex: '数值越高表示词汇重复度越高。',
-        hapaxLegomena: 'Honoré 词汇丰富度 R；综合词元总数、不同词型数和只出现一次的词型数，通常不是比例。',
-        functionWords: '功能词 PCA 的探索性投影，位置不直接等于严格的跨书相似度。'
+        sentenceLength: '一句话平均几个词。',
+        simpsonIndex: '数值越高，用词越重复。',
+        hapaxLegomena: '书里「只出现一次的独特词」越多，用词越丰富。',
+        functionWords: '由「的、和、是」这类高频小词的使用习惯得出，仅作参照。'
     }[currentMetric] || '';
+    const contextLine = getMetricContextLine(currentMetric);
     const lines = [
         '# 文印·文学指纹分析摘要',
         '',
         `- 生成时间：${new Date().toLocaleString('zh-CN')}`,
         `- 当前视图：${currentTab === 'view-main' ? (chartType === 'line' ? '基础趋势分析 · 折线趋势图' : '基础趋势分析 · 指纹热力图') : currentTab === 'view-galaxy' ? '风格星系' : '全书对比'}`,
-        `- 分析指标：${metricLabel}`,
-        `- 指标说明：${metricHint}`,
+        `- 观察角度：${metricLabel}`,
+        `- 怎么理解：${metricHint}`,
+        ...(contextLine ? [`- 解读参考：${contextLine}`] : []),
         `- 选择书籍：${books.map(getBookDisplayName).join('、')}`,
         ''
     ];
@@ -957,9 +1173,11 @@ function exportSummary() {
         const mean = d3.mean(values, d => d.value);
         const peak = values.reduce((best, current) => current.value > best.value ? current : best, values[0]);
         lines.push(`## ${getBookDisplayName(book)}`);
-        lines.push(`- 文本块数量：${values.length}`);
-        lines.push(`- 平均值：${formatMetricValue(mean)}`);
-        lines.push(`- 最高片段：第 ${Number(peak.block) + 1} 块，数值 ${formatMetricValue(peak.value)}`);
+        lines.push(`- 参与统计的片段数：${values.length}`);
+        lines.push(`- 全书范围：全书共 ${getBookBlockCount(book)} 个片段 · 本次分析其中 ${values.length} 个片段`);
+        lines.push(`- 平均水平：${formatMetricValue(mean)}`);
+        lines.push(`- 最高片段：第 ${Number(peak.block) + 1} 个片段，数值 ${formatMetricValue(peak.value)}`);
+        lines.push(`- 片段位置：${formatBlockLocation(book, peak.block)}${formatWordCount(peak.wordCount)}`);
         if (Array.isArray(peak.keywords) && peak.keywords.length > 0) {
             lines.push(`- 最高片段关键词：${peak.keywords.join('、')}`);
         }
@@ -969,7 +1187,7 @@ function exportSummary() {
         lines.push('');
     });
 
-    lines.push('> 说明：本摘要用于记录当前页面选择。图表中的指标和 PCA 坐标应结合文本块、数据范围与研究问题解读，不应单独作为文学价值判断。');
+    lines.push('> 说明：本摘要用于记录当前页面的选择。图中的数值与位置只是风格方面的数据，请结合作品原文与具体片段理解，不宜单独当作文学质量高低的评判。');
 
     const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
     const link = document.createElement('a');
@@ -1133,6 +1351,7 @@ function initStyleGalaxy() {
                     realValue: metricItem.value,
                     preview: metricItem.preview,
                     extendedPreview: d.extended_preview || metricItem.preview,
+                    wordCount: isFiniteNumber(d.wordCount) ? d.wordCount : metricItem.wordCount,
                     keywords: metricItem.keywords
                 });
             });
@@ -1142,7 +1361,7 @@ function initStyleGalaxy() {
     if (allNodes.length === 0) {
         if (loadingEl) {
             loadingEl.style.display = 'block';
-            loadingEl.textContent = "所选书籍暂无可用的功能词 PCA 数据。请重新生成数据或换一本书。";
+            loadingEl.textContent = "这几本书暂时缺少生成风格星系所需的高频小词数据。请换几本书再试。";
         }
         return;
     }
@@ -1191,7 +1410,7 @@ function initStyleGalaxy() {
         .attr("stroke-opacity", 0.8)
         .attr("tabindex", 0)
         .attr("role", "button")
-        .attr("aria-label", d => `${getBookDisplayName(d.book)} 第 ${d.blockIndex + 1} 个文本块，${getMetricLabel(currentMetric)} ${formatMetricValue(d.realValue)}`)
+        .attr("aria-label", d => `${getBookDisplayName(d.book)} 第 ${d.blockIndex + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetricValue(d.realValue)}`)
         .style("cursor", "pointer")
         .call(d3.drag()
             .on("start", dragstarted)
@@ -1300,11 +1519,14 @@ function openGalaxyModal(d) {
     if (titleEl) titleEl.textContent = getBookDisplayName(d.book);
 
     const blockEl = document.getElementById('modal-block-id');
-    if (blockEl) blockEl.textContent = `文本块 #${Number(d.blockIndex) + 1}`;
+    if (blockEl) {
+        const loc = formatBlockLocation(d.book, d.blockIndex) + formatWordCount(d.wordCount);
+        blockEl.textContent = loc || `第 ${Number(d.blockIndex) + 1} 个片段`;
+    }
 
     const valDisplay = isFiniteNumber(d.realValue) ? d.realValue.toFixed(4) : '暂无';
     const metricEl = document.getElementById('modal-metric-val');
-    if (metricEl) metricEl.textContent = `${getMetricLabel(currentMetric)}: ${valDisplay}`;
+    if (metricEl) metricEl.textContent = `${getMetricLabel(currentMetric)}：${valDisplay}`;
 
     const keywordContainer = document.getElementById('modal-keywords');
     if (keywordContainer) {
@@ -1325,6 +1547,17 @@ function openGalaxyModal(d) {
 
     const textContainer = document.getElementById('modal-long-text');
     if (textContainer) textContainer.textContent = d.extendedPreview || d.preview || "暂无详细文本内容...";
+
+    const modalCopyBtn = document.getElementById('modal-copy-btn');
+    if (modalCopyBtn) {
+        const txt = d.extendedPreview || d.preview || '';
+        if (txt) {
+            modalCopyBtn.dataset.copyIdx = registerCopySource(txt);
+            modalCopyBtn.hidden = false;
+        } else {
+            modalCopyBtn.hidden = true;
+        }
+    }
 
     modal.setAttribute('aria-hidden', 'false');
     modal.style.display = 'flex';

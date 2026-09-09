@@ -1237,3 +1237,83 @@ button:hover {
 
 /* 使 HTML hidden 属性始终生效（压过元素的 display 规则） */
 [hidden] { display: none !important; }
+
+/* ---------- 「我的图书馆」：保存勾选 + 书名 chip 的删除钮 ---------- */
+.save-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--ink-70);
+    cursor: pointer;
+    -webkit-user-select: none; user-select: none;
+    white-space: nowrap;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    transition: all .2s ease;
+}
+.save-toggle:hover { color: var(--ink-100); border-color: var(--border); }
+.save-toggle input { accent-color: var(--vermilion); cursor: pointer; }
+
+.book-group {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.book-del {
+    width: 22px;
+    height: 22px;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--ink-50);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all .2s ease;
+    flex-shrink: 0;
+}
+.book-del:hover { color: var(--err); background: rgba(181, 71, 47, 0.12); }
+.book-del:active { transform: scale(0.9); }
+
+/* ---------- 出处定位 / 指标解读参考 / 复制片段（研究资产化） ---------- */
+.block-location {
+    display: inline-block;
+    font-size: 0.85rem;
+    color: var(--ink-70);
+    background: var(--elev);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin: 8px 0 4px;
+}
+
+.metric-context {
+    margin-top: 4px;
+    font-size: 0.78rem;
+    color: var(--ink-50);
+    line-height: 1.6;
+}
+
+.copy-block-btn {
+    font-family: inherit;
+    font-size: 0.75rem;
+    color: var(--indigo);
+    background: rgba(79, 122, 140, 0.1);
+    border: 1px solid rgba(79, 122, 140, 0.3);
+    border-radius: 6px;
+    padding: 3px 10px;
+    cursor: pointer;
+    margin-top: 6px;
+    transition: all .2s ease;
+    white-space: nowrap;
+}
+.copy-block-btn:hover { background: rgba(79, 122, 140, 0.2); }
+.copy-block-btn:active { transform: translateY(1px); }
+
+.modal-copy-row { text-align: right; }

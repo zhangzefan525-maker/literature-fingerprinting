@@ -1,6 +1,4 @@
-# 成员C负责写的主逻辑，调用A和B的函数
-# 修改者：成员B (集成了 Task E 关键词提取功能)
-# 集成指纹分析模块和界面美化
+# 主逻辑：集成指纹分析模块、关键词提取与界面美化
 import streamlit as st
 import os
 import tempfile
@@ -289,7 +287,7 @@ def main():
                     tmp_file.write(text_content)
                     tmp_file_path = tmp_file.name
 
-                # 调用成员 A 的数据处理逻辑（读取后立即清理临时文件，避免短文本 continue 时泄漏）
+                # 调用数据处理模块（读取后立即清理临时文件，避免短文本 continue 时泄漏）
                 try:
                     raw_text = load_clean_text(tmp_file_path)
                 finally:
@@ -301,7 +299,7 @@ def main():
                     st.warning(f"文件 '{uploaded_file.name}' 太短，已跳过。")
                     continue
 
-                # 调用成员 B 的指标计算逻辑
+                # 调用指标计算模块
                 if metric_key == "pca":
                     # get_pca_coordinates 返回 [{'x':..,'y':..}] 字典列表，
                     # 热力图/统计只需第一主成分 x，故取出标量列表
@@ -394,7 +392,7 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # --- Task E: 关键词显示 ---
+                        # --- 关键词显示 ---
                         st.markdown("#### 🔑 高频关键词")
                         keywords = get_top_keywords(current_block_text, n=5)
                         if keywords:

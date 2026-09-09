@@ -21,7 +21,7 @@
         <div class="header">
             <div class="seal" aria-hidden="true">文印</div>
             <h1>文印 · 文学指纹</h1>
-            <p class="header-subtitle">上传或选择一本文学作品，自动分析它的写作风格（句子长短、用词重复度、Honoré 词汇丰富度），并生成直观的风格走势图与多书对比。</p>
+            <p class="header-subtitle">选一本书或上传英文全文，自动分析它的写作风格——句子长短、用词习惯、风格走向——再和其他书放在一起直观对比。</p>
         </div>
 
         <!-- 全局书籍选择器 -->
@@ -33,17 +33,20 @@
                 <i class="fas fa-cloud-upload-alt"></i> 上传文本分析
             </label>
             <input type="file" id="file-upload" accept=".txt" style="display:none;">
-            <span id="upload-status" class="upload-status" aria-live="polite">支持上传英文 .txt 纯文本（建议 ≥1 万词），自动生成文学指纹并与示例书籍并列对比。</span>
+            <label class="save-toggle" id="save-toggle" for="save-upload" title="勾选后：这次的分析结果会保留下来，刷新页面后仍在；重名时会自动改名，不会覆盖内置示例书。">
+                <input type="checkbox" id="save-upload"> 存入「我的图书馆」
+            </label>
+            <span id="upload-status" class="upload-status" aria-live="polite">支持上传英文纯文本小说（.txt，建议 1 万字以上）。分析后会出现在上方的书名列表里，和内置名著放在一起对比。</span>
         </div>
 
         <!-- 全局指标选择器（三个标签页共用同一指标，切换后对所有视图生效） -->
         <div class="metric-bar">
             <div class="control-group">
-                <label>分析指标：</label>
-                <select id="metricSelect" aria-label="分析指标">
+                <label>观察角度：</label>
+                <select id="metricSelect" aria-label="观察角度">
                     <option value="sentenceLength">平均句长</option>
                     <option value="simpsonIndex">用词重复度</option>
-                    <option value="hapaxLegomena">Honoré 词汇丰富度 R</option>
+                    <option value="hapaxLegomena">独特词丰富度</option>
                     <option value="functionWords">风格走向</option>
                 </select>
             </div>
@@ -108,7 +111,7 @@
                 <div class="adv-header">
                     <div>
                         <h2 style="margin:0; color:#2f2a23; font-size: 18px;">✧ 风格星系</h2>
-                        <small style="color:#98907f">位置来自功能词 PCA 的探索性投影；在当前投影中越靠近，只表示功能词使用模式更接近，不能直接当作严格的跨书风格相似度。</small>
+                        <small style="color:#98907f">每个点的位置，根据书中「的、和、是」这类高频小词的使用习惯计算。点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或水平相似。</small>
                     </div>
                     <div>
                         <button id="restartGalaxyBtn" type="button" onclick="restartGalaxy()" style="padding:5px 15px;">↻ 重新布局</button>
@@ -117,8 +120,8 @@
                 <div class="galaxy-guide">
                     <span>每个圆点 = 一段文本（约 1 万词）</span>
                     <span>颜色 = 不同书</span>
-                    <span>大小 = 当前指标数值</span>
-                    <span>位置 = 功能词 PCA 探索性投影</span>
+                    <span>大小 = 数值高低</span>
+                    <span>位置 = 高频小词（的/和/是）的用法</span>
                     <span>滚轮缩放 · 拖动探索 · 点击看原文</span>
                 </div>
                 <div class="galaxy-legend" id="galaxy-legend"></div>
@@ -196,8 +199,8 @@
                 <div class="modal-header">
                     <h2 id="modal-book-title">书籍标题</h2>
                     <div class="modal-badges">
-                        <span id="modal-block-id" class="badge">Block #0</span>
-                        <span id="modal-metric-val" class="badge badge-highlight">Value: 0.00</span>
+                        <span id="modal-block-id" class="badge">第 1 个片段</span>
+                        <span id="modal-metric-val" class="badge badge-highlight">数值 0.00</span>
                     </div>
                 </div>
 
@@ -210,6 +213,9 @@
                     <h4>📜 原文深度阅读</h4>
                     <div class="text-scroll-area">
                         <p id="modal-long-text">正在加载文本...</p>
+                    </div>
+                    <div class="modal-copy-row">
+                        <button type="button" id="modal-copy-btn" class="copy-block-btn" hidden>⧉ 复制全文</button>
                     </div>
                 </div>
             </div>
@@ -290,7 +296,9 @@
                         value: d.value,
                         preview: d.preview,
                         keywords: d.keywords,
-                        blockIndex: d.block
+                        blockIndex: d.block,
+                        wordCount: d.wordCount,
+                        extendedPreview: d.extended_preview
                     }))
                     .filter(d => typeof d.value === 'number' && Number.isFinite(d.value));
 
@@ -405,7 +413,7 @@
         const INSIGHT_METRIC = {
             sentenceLength: { up: '中后段句子越写越长', down: '中后段句子越写越短', high: '整体句子最长', low: '整体句子最短' },
             simpsonIndex:  { up: '中后段用词越来越重复', down: '中后段用词越来越丰富', high: '用词重复度最高（词汇较单调）', low: '用词重复度最低（词汇最丰富）' },
-            hapaxLegomena:{ up: '中后段 Honoré 词汇丰富度 R 上升', down: '中后段 Honoré 词汇丰富度 R 下降', high: 'Honoré 词汇丰富度 R 最高', low: 'Honoré 词汇丰富度 R 最低' },
+            hapaxLegomena:{ up: '中后段独特词越来越多（用词更丰富）', down: '中后段独特词越来越少', high: '独特词最多（用词最丰富）', low: '独特词最少' },
             functionWords: { up: '中后段风格走向持续偏移', down: '中后段风格走向趋于回归', high: null, low: null }
         };
 
@@ -440,7 +448,10 @@
                         const benchmark = d3.mean(otherMeans);
                         const diff = data[0].currentMean - benchmark;
                         const dir = diff > 0 ? '高于' : (diff < 0 ? '低于' : '接近');
-                        lines.push(`作为参照，其他 ${otherMeans.length} 本书的平均值为 ${benchmark.toFixed(2)}，本书${dir}基准 ${Math.abs(diff).toFixed(2)}。`);
+                        const cmp = dir === '接近'
+                            ? '这本书与它们的水平差不多'
+                            : `这本书比它们${dir}约 ${Math.abs(diff).toFixed(2)}`;
+                        lines.push(`作为参照，其它 ${otherMeans.length} 本书的平均水平约为 ${benchmark.toFixed(2)}，${cmp}。`);
                     }
                 }
             } else {
@@ -562,11 +573,15 @@
 
                 topBlocks.forEach((b, i) => {
                     const keywords = b.keywords ? b.keywords.join(", ") : "";
+                    const loc = formatBlockLocation(book.name, b.blockIndex) + formatWordCount(b.wordCount);
+                    const copyTxt = b.extendedPreview || b.preview || '';
                     bookHtml += `
                         <div class="drill-item" style="border-left-color:${book.color}; margin-bottom: 5px;">
                             <strong>#${i+1} 最高点: ${b.value.toFixed(1)}</strong>
+                            <div style="margin:2px 0;color:#98907f;font-size:10px">📍 ${escapeHtml(loc)}</div>
                             <p style="margin:0;color:#98907f;line-height:1.2;max-height:50px;overflow:hidden">${b.preview ? escapeHtml(b.preview.substring(0,60)) + '...' : '无预览'}</p>
                             ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:9px">※ ${escapeHtml(keywords)}</div>` : ''}
+                            ${copyTxt ? `<div style="margin-top:4px;text-align:right;">${copyButtonHtml(copyTxt, 'drill-copy-btn')}</div>` : ''}
                         </div>
                     `;
                 });

@@ -15,6 +15,9 @@ env/
 data/processed/*.json
 data/processed/*.html
 
+# --- 用户「我的图书馆」（上传并勾选保存的派生分析 JSON，属于个人数据，不入库）---
+data/library/
+
 # --- 编辑器 / 系统 ---
 .vscode/
 .idea/
