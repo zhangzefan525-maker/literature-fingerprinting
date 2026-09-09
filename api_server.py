@@ -6,6 +6,7 @@
 
 from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_cors import CORS
+from werkzeug.exceptions import RequestEntityTooLarge
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,16 @@ CORS(app)  # 允许跨域请求
 
 # 限制上传文件大小，防止超大文件拖垮服务器
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_request_too_large(_error):
+    """将 Flask 默认 HTML 413 转为前端可解析的 JSON。"""
+    return jsonify({
+        "status": "error",
+        "message": "文件太大，单个文件不能超过 50 MB。请压缩内容或选择较小的 .txt 文件。"
+    }), 413
+
 
 # 配置
 BASE_DIR = Path(__file__).parent
@@ -194,9 +205,20 @@ def analyze_upload():
     book_name = Path(file.filename).stem
 
     try:
-        raw_text = file.read().decode('utf-8', errors='ignore')
+        raw_text = file.read().decode('utf-8')
+    except UnicodeDecodeError:
+        return jsonify({
+            "status": "error",
+            "message": "文件不是有效的 UTF-8 编码。请将文本另存为 UTF-8 后重试。"
+        }), 400
     except Exception as e:
         return jsonify({"status": "error", "message": f"读取文件失败: {e}"}), 400
+
+    if not raw_text.strip():
+        return jsonify({
+            "status": "error",
+            "message": "文件内容为空，请选择包含正文的 .txt 文件。"
+        }), 400
 
     blocks = get_blocks(raw_text, block_size=10000, overlap=9000)
     if not blocks:
@@ -205,7 +227,15 @@ def analyze_upload():
             "message": "文本太短，无法生成指纹（至少需要约 10000 个单词）"
         }), 400
 
-    book_data = build_book_data(blocks)
+    try:
+        book_data = build_book_data(blocks)
+    except Exception as e:
+        app.logger.exception("上传文本分析失败")
+        return jsonify({
+            "status": "error",
+            "message": "文本分析失败，请确认文件是英文 UTF-8 纯文本后重试。"
+        }), 422
+
     return jsonify({"status": "success", "book": book_name, "data": book_data})
 
 @app.route('/api/books', methods=['GET'])
@@ -245,13 +275,16 @@ def list_books():
         }), 500
 
 if __name__ == '__main__':
+    # 注意：横幅只用 ASCII 符号 + 中文，不用 emoji/生僻 Unicode——
+    # Windows 中文控制台输出被重定向时退化为 GBK，遇 emoji 直接 print 会抛
+    # UnicodeEncodeError 导致服务器启动崩溃；交互控制台虽无碍，重定向场景必须安全。
     print("=" * 60)
     print("文印 - 文学指纹分析系统 API 服务器")
     print("=" * 60)
     print(f"项目目录: {BASE_DIR}")
     print(f"数据目录: {DATA_DIR}")
     print(f"静态文件目录: {STATIC_DIR}")
-    print("\n📡 可用接口:")
+    print("\n[API] 可用接口:")
     print("  GET /                         - 主页面")
     print("  GET /visualization            - D3.js可视化界面")
     print("  GET /api/fingerprint-data     - 获取所有书籍数据")
@@ -261,12 +294,13 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
 
-    print("\n🌐 服务器运行在:")
+    print("\n[RUN] 服务器运行在:")
     print(f"  http://localhost:{port}")
     print(f"  http://127.0.0.1:{port}")
-    print("\n🎨 直接访问可视化:")
+    print("\n[OPEN] 直接访问可视化:")
     print(f"  http://localhost:{port}/visualization")
-    print("\n🔄 按 CTRL+C 停止服务器")
+    print("\n[STOP] 按 CTRL+C 停止服务器")
     print("=" * 60)
 
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    host = os.environ.get("HOST", "127.0.0.1")
+    app.run(host=host, port=port, debug=debug)

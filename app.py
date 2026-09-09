@@ -225,7 +225,7 @@ def main():
         metric_options = {
             "Average Sentence Length (Avg Words/Sent)": "sl",
             "Simpson's Index (Vocabulary Richness)": "si",
-            "Hapax Legomena (Uniqueness)": "hl",
+            "Honoré's Measure R (词汇丰富度)": "hl",
             "Function Words PCA (1st Dimension)": "pca"
         }
         
@@ -622,7 +622,7 @@ def main():
                     <ul>
                         <li><strong>平均句长</strong>：衡量写作风格复杂度，值越高表示句子结构越复杂</li>
                         <li><strong>Simpson指数</strong>：评估词汇丰富度，值越低表示词汇多样性越高</li>
-                        <li><strong>Hapax Legomena</strong>：测量词汇独特性，值越高表示作者使用独特词汇越多</li>
+                        <li><strong>Honoré 词汇丰富度 R</strong>：综合词元总数、不同词型数和只出现一次的词型数；当前实现不是 0–1 的孤词比例，数值越高通常表示词汇使用越丰富</li>
                         <li><strong>功能词PCA</strong>：分析虚词使用模式，反映作者的语法习惯</li>
                     </ul>
                     
@@ -769,7 +769,7 @@ def main():
             with col_m2:
                 st.metric("Simpson指数", "词汇多样性", "值越低越丰富")
             with col_m3:
-                st.metric("Hapax Legomena", "词汇独特性", "值越高越独特")
+                st.metric("Honoré 词汇丰富度 R", "词汇丰富度", "通常不是比例")
             with col_m4:
                 st.metric("功能词PCA", "语法习惯", "反映虚词使用模式")
 

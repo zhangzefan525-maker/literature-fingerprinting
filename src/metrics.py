@@ -58,9 +58,9 @@ def calc_simpsons_index(text_block):
 
 def calc_hapax_legomena(text_block):
     """
-    3. 计算 Hapax Legomena (Honoré's Measure R)
+    3. 计算 Honoré's Measure R（兼容旧函数名 calc_hapax_legomena）
     公式：R = 100 * log(N) / (1 - V1/V)
-    描述：V1是只出现一次的词，V是词汇总数。
+    其中 N 是词元总数，V 是不同词型数，V1 是只出现一次的词型数。
     """
     words = _clean_tokens(text_block)
     N = len(words)
@@ -68,8 +68,8 @@ def calc_hapax_legomena(text_block):
         return 0.0
         
     counts = Counter(words)
-    V = len(counts) # 词汇表大小
-    V1 = sum(1 for count in counts.values() if count == 1) # 只出现一次的词
+    V = len(counts)  # 不同词型数
+    V1 = sum(1 for count in counts.values() if count == 1)  # 只出现一次的词型数
     
     if V == 0:
         return 0.0

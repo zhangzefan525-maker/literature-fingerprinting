@@ -133,13 +133,14 @@ class FingerprintAnalyzer:
                 style_parts.append("词汇多样性中等")
             else:
                 style_parts.append("词汇多样性低")
-        elif "Hapax" in metric_name or "Uniqueness" in metric_name:
+        elif "Hapax" in metric_name or "Uniqueness" in metric_name or "Honoré" in metric_name:
+            # 该字段兼容旧命名，但数值实际是 Honoré's Measure R，不是百分比。
             if mean_val < 50:
-                style_parts.append("词汇重复度较高")
+                style_parts.append("Honoré 词汇丰富度 R 较低")
             elif mean_val < 100:
-                style_parts.append("词汇使用均衡")
+                style_parts.append("Honoré 词汇丰富度 R 居中")
             else:
-                style_parts.append("词汇独特性强")
+                style_parts.append("Honoré 词汇丰富度 R 较高")
         elif "PCA" in metric_name or "Function" in metric_name:
             if mean_val < 0:
                 style_parts.append("虚词使用模式A")

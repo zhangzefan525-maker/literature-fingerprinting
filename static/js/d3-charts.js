@@ -7,6 +7,9 @@ const API_ENDPOINTS = {
     books: `${API_BASE_URL}/api/books`
 };
 
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+const DEFAULT_UPLOAD_STATUS = '支持上传英文 .txt 纯文本（建议 ≥1 万词），自动生成文学指纹并与示例书籍并列对比。';
+
 // 全局变量
 let realData = null;
 let currentMetric = 'sentenceLength';
@@ -19,6 +22,7 @@ let currentTab = 'view-main'; // 记录当前标签页
 document.addEventListener('DOMContentLoaded', function() {
     initEventListeners();
     updateChartTypeUI();
+    setUploadStatus(`${DEFAULT_UPLOAD_STATUS} ${getUploadPrivacyNotice()}`);
     updateMetricHint();
     loadBooksList();
 
@@ -27,32 +31,115 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 500);
 });
 
+function getUploadPrivacyNotice() {
+    const hostname = window.location.hostname;
+    if (LOCAL_HOSTNAMES.has(hostname)) {
+        return '当前为本机访问：文件会发送到本机 Flask 服务即时处理，应用代码不会主动保存上传的原文。';
+    }
+    return '当前为远程访问：文件会发送到当前服务器即时处理，请勿上传敏感、私密或未获授权的文本。在线演示使用 HTTP，不应视为加密传输。';
+}
+
+function setUploadStatus(message, state = '') {
+    const statusEl = document.getElementById('upload-status');
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.className = `upload-status${state ? ` ${state}` : ''}`;
+}
+
+function setUploadBusy(isBusy) {
+    const bar = document.getElementById('upload-bar');
+    const fileInput = document.getElementById('file-upload');
+    const uploadBtn = document.getElementById('upload-btn');
+    if (bar) bar.setAttribute('aria-busy', String(isBusy));
+    if (fileInput) fileInput.disabled = isBusy;
+    if (uploadBtn) {
+        uploadBtn.setAttribute('aria-disabled', String(isBusy));
+        uploadBtn.classList.toggle('is-busy', isBusy);
+    }
+}
+
+function getErrorMessage(response, result) {
+    if (response.status === 413) {
+        return '文件太大，单个文件不能超过 50 MB。请选择较小的 .txt 文件后重试。';
+    }
+    if (result && result.message) return result.message;
+    if (!response.ok) return `服务器暂时无法完成分析（HTTP ${response.status}），请稍后重试。`;
+    return '服务器返回了无法识别的结果，请稍后重试。';
+}
+
+function isFiniteNumber(value) {
+    return typeof value === 'number' && Number.isFinite(value);
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function truncateText(value, length = 18) {
+    const text = String(value ?? '');
+    return text.length > length ? text.substring(0, length - 3) + '...' : text;
+}
+
+function formatMetricValue(value, digits = 2) {
+    return isFiniteNumber(value) ? value.toFixed(digits) : '暂无';
+}
+
+function getMetricValues(bookName, metric) {
+    const values = realData && realData[bookName] ? realData[bookName][metric] : null;
+    if (!Array.isArray(values)) return [];
+    return values.filter(d => d && isFiniteNumber(d.value));
+}
+
+function getBookButtonById(bookId) {
+    return Array.from(document.querySelectorAll('.book-btn'))
+        .find(btn => btn.dataset.id === bookId) || null;
+}
+
+function normalizeExtent(extent, fallback = 0) {
+    let [min, max] = extent;
+    if (!isFiniteNumber(min) || !isFiniteNumber(max)) return [fallback - 1, fallback + 1];
+    if (min === max) return [min - 1, max + 1];
+    return [min, max];
+}
+
+function getDeterministicFallbackY(bookIndex, blockIndex) {
+    return (bookIndex + 1) * 0.01 + ((blockIndex % 11) - 5) * 0.001;
+}
+
+
 // Tab 切换逻辑
 window.switchTab = function(tabId) {
     currentTab = tabId;
 
-    // 1. 切换按钮状态
-    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    const clickedBtn = document.querySelector(`.tab-btn[onclick="switchTab('${tabId}')"]`);
-    if (clickedBtn) clickedBtn.classList.add('active');
-
-    // 2. 切换内容显示
-    document.querySelectorAll('.view-section').forEach(section => {
-        section.classList.remove('active');
+    // 同步 tab/tabpanel 语义，让键盘和读屏用户知道当前视图
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        const isActive = btn.getAttribute('aria-controls') === tabId;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-selected', String(isActive));
+        btn.setAttribute('tabindex', isActive ? '0' : '-1');
     });
+
+    document.querySelectorAll('.view-section').forEach(section => {
+        const isActive = section.id === tabId;
+        section.classList.toggle('active', isActive);
+        section.hidden = !isActive;
+    });
+
     const activeSection = document.getElementById(tabId);
     if (activeSection) {
-        activeSection.classList.add('active');
-        
-        // 3. 关键：当视图变可见时，触发对应图表的重绘或调整大小
         // 延迟一点点以确保 DOM 布局已更新
         setTimeout(() => {
             if (tabId === 'view-main' && realData) {
-                initChart(); // 重新调整基础图表大小
+                initChart();
             } else if (tabId === 'view-galaxy' && realData) {
-                initStyleGalaxy(); // 初始化或重绘星系
+                initStyleGalaxy();
             } else if (tabId === 'view-dashboard' && realData) {
-                if (window.initAdvancedData) window.initAdvancedData(); // 初始化或重绘仪表盘
+                if (window.initAdvancedData) window.initAdvancedData();
             }
         }, 50);
     }
@@ -80,6 +167,8 @@ function initEventListeners() {
     
     // 导出图像
     document.getElementById('exportBtn').addEventListener('click', exportChart);
+    const exportSummaryBtn = document.getElementById('exportSummaryBtn');
+    if (exportSummaryBtn) exportSummaryBtn.addEventListener('click', exportSummary);
 
     // 新增：图表类型切换监听
     document.getElementById('chartTypeSelect').addEventListener('change', function(e) {
@@ -112,54 +201,62 @@ function updateChartTypeUI() {
 
 // 上传自定义文本并即时分析
 async function handleFileUpload(event) {
-    const file = event.target.files[0];
+    const input = event.target;
+    const file = input.files[0];
     if (!file) return;
 
-    const statusEl = document.getElementById('upload-status');
-    const setStatus = (msg, color) => {
-        if (statusEl) { statusEl.innerText = msg; statusEl.style.color = color; }
-    };
+    if (!file.name.toLowerCase().endsWith('.txt')) {
+        setUploadStatus('仅支持 .txt 文本文件。请重新选择 UTF-8 编码的英文纯文本。', 'error');
+        input.value = '';
+        return;
+    }
 
-    setStatus(`◌ 正在分析 "${file.name}"（长文本可能需要一会儿），请勿关闭页面...`, '#b5472f');
+    setUploadBusy(true);
+    setUploadStatus(`正在分析「${file.name}」（长文本可能需要一会儿），请勿关闭页面...`, 'loading');
 
     const formData = new FormData();
     formData.append('file', file);
 
     try {
         const resp = await fetch(`${API_BASE_URL}/api/analyze`, { method: 'POST', body: formData });
-        const result = await resp.json();
+        const contentType = resp.headers.get('content-type') || '';
+        const result = contentType.includes('application/json') ? await resp.json() : null;
 
-        if (result.status === 'success') {
-            if (!realData) realData = {};
-            realData[result.book] = result.data;
-            selectedBooks.add(result.book);
-            addUploadedBookButton(result.book);
-            const nBlocks = result.data && result.data.metadata ? result.data.metadata.totalBlocks : 0;
-            setStatus(`✓ 已加载 "${result.book}"（${nBlocks} 个文本块）`, '#6b8f5a');
-            refreshAllActiveCharts();
-        } else {
-            setStatus(`✗ ${result.message}`, '#b5472f');
+        if (!resp.ok || !result || result.status !== 'success') {
+            setUploadStatus(getErrorMessage(resp, result), 'error');
+            return;
         }
+
+        if (!realData) realData = {};
+        realData[result.book] = result.data;
+        selectedBooks.add(result.book);
+        addUploadedBookButton(result.book);
+        const nBlocks = result.data && result.data.metadata ? result.data.metadata.totalBlocks : 0;
+        setUploadStatus(`已加载「${getBookDisplayName(result.book)}」（${nBlocks} 个文本块）。${getUploadPrivacyNotice()}`, 'success');
+        refreshAllActiveCharts();
     } catch (e) {
         console.error('上传分析失败:', e);
-        setStatus('✗ 上传失败，请确认服务器已启动 (python api_server.py)', '#b5472f');
+        setUploadStatus('上传失败：无法连接当前分析服务。请确认服务器已启动，或稍后重试。', 'error');
+    } finally {
+        setUploadBusy(false);
+        input.value = ''; // 允许重复上传同一文件
     }
-
-    event.target.value = ''; // 允许重复上传同一文件
 }
 
 // 将上传的书动态加入选择器，并保持选中态
 function addUploadedBookButton(bookName) {
     const selector = document.getElementById('bookSelector');
     if (!selector) return;
-    if (selector.querySelector(`.book-btn[data-id='${bookName}']`)) return;
+    if (getBookButtonById(bookName)) return;
 
-    const div = document.createElement('div');
-    div.className = 'book-btn active';
-    div.setAttribute('data-id', bookName);
-    div.innerText = bookName;
-    div.onclick = function() { selectBook(bookName); };
-    selector.appendChild(div);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'book-btn active';
+    button.setAttribute('data-id', bookName);
+    button.title = bookName;
+    button.textContent = getBookDisplayName(bookName);
+    button.addEventListener('click', () => selectBook(bookName));
+    selector.appendChild(button);
 }
 
 // 辅助函数：根据当前 Tab 刷新图表
@@ -182,63 +279,75 @@ window.addEventListener('resize', () => {
 async function loadBooksList() {
     try {
         const response = await fetch(API_ENDPOINTS.books);
-        const data = await response.json();
-        
-        if (data.status === 'success') {
-            updateBookSelector(data.books);
-            loadRealData(); // 打开页面即自动加载数据并出图
-        } else {
-            console.error('加载书籍列表失败:', data.message);
-            showError('无法加载书籍列表，请检查API服务器是否运行');
+        const contentType = response.headers.get('content-type') || '';
+        const data = contentType.includes('application/json') ? await response.json() : null;
+
+        if (!response.ok || !data || data.status !== 'success') {
+            const message = getErrorMessage(response, data);
+            console.error('加载书籍列表失败:', message);
+            showError(`无法加载书籍列表：${message}`);
+            return;
         }
+
+        updateBookSelector(data.books);
+        if (!data.books || data.books.length === 0) {
+            showNoDataMessage();
+            return;
+        }
+        loadRealData(); // 打开页面即自动加载数据并出图
     } catch (error) {
         console.error('网络错误:', error);
-        showError('无法连接到API服务器，请确保已运行 python api_server.py');
+        showError('无法连接到当前分析服务。请确保已运行 python api_server.py，或稍后重试。');
     }
 }
 
 function updateBookSelector(books) {
     const selector = document.getElementById('bookSelector');
+    if (!selector) return;
     if (!books || books.length === 0) {
-        selector.innerHTML = '<p style="color: #b5472f;">△ 没有找到任何书籍...</p>';
+        selector.innerHTML = '<p class="state-card empty">没有找到任何书籍。请将 .txt 文件放入 data/raw，或直接上传文本。</p>';
         return;
     }
-    
-    const buttons = books.map(book => `
-        <div class="book-btn" data-id="${book.id}" onclick="selectBook('${book.id}')" title="${book.name}">
-            ${getBookDisplayName(book.name)}
-        </div>
-    `).join('');
-    
-    selector.innerHTML = buttons;
-    
+
+    selector.innerHTML = '';
+    books.forEach(book => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'book-btn';
+        button.dataset.id = book.id;
+        button.title = book.name || book.id;
+        button.textContent = getBookDisplayName(book.name || book.id);
+        button.addEventListener('click', () => selectBook(book.id));
+        selector.appendChild(button);
+    });
+
     // 默认选中第一本书
-    if (books.length > 0) {
-        selectBook(books[0].id); 
-    }
+    selectBook(books[0].id);
 }
 
 function selectBook(bookId) {
-    const btn = document.querySelector(`.book-btn[data-id='${bookId}']`);
-    
+    const btn = getBookButtonById(bookId);
+
     if (selectedBooks.has(bookId)) {
-        // 如果已经选中，且不是唯一选中的书，则取消选中
+        const btn = getBookButtonById(bookId);
         if (selectedBooks.size > 1) {
             selectedBooks.delete(bookId);
-            btn.classList.remove('active');
+            if (btn) btn.classList.remove('active');
         }
     } else {
         // 如果未选中，则添加
         selectedBooks.add(bookId);
-        btn.classList.add('active');
+        if (btn) btn.classList.add('active');
     }
 
     // 更新对比状态提示文字
     const compareBtn = document.getElementById('toggleComparison');
-    if (selectedBooks.size > 1) {
-        compareBtn.innerHTML = `📚 已选 ${selectedBooks.size} 本书进行对比`;
-    } else {
-        compareBtn.innerHTML = '⇄ 点击上方书名可多选进行对比';
+    if (compareBtn) {
+        if (selectedBooks.size > 1) {
+            compareBtn.textContent = `📚 已选 ${selectedBooks.size} 本书进行对比`;
+        } else {
+            compareBtn.textContent = '⇄ 点击上方书名可多选进行对比';
+        }
     }
     
     // 刷新当前可见的图表
@@ -250,28 +359,33 @@ function selectBook(bookId) {
 async function loadRealData() {
     try {
         showLoading('正在加载数据...');
-        
+
         const response = await fetch(API_ENDPOINTS.fingerprintData);
-        const data = await response.json();
-        
-        if (data.status === 'success') {
-            realData = data.data;
-            showSuccess(`成功加载 ${Object.keys(realData).length} 本书籍的数据`);
-            
-            // 确保 selectedBooks 中的书在数据中存在
-            const availableBooks = Object.keys(realData);
-            if (selectedBooks.size === 0 && availableBooks.length > 0) {
-                selectBook(availableBooks[0]); // 如果没选，默认选第一本
-            }
-            
-            // 初始化当前标签页的图表
-            refreshAllActiveCharts();
+        const contentType = response.headers.get('content-type') || '';
+        const data = contentType.includes('application/json') ? await response.json() : null;
+        if (!response.ok || !data || data.status !== 'success') {
+            showError(`加载数据失败：${getErrorMessage(response, data)}`);
+            return;
+        }
+
+        realData = data.data && typeof data.data === 'object' ? data.data : {};
+        const availableBooks = Object.keys(realData);
+        if (availableBooks.length === 0) {
+            showNoDataMessage();
+            return;
+        }
+        showSuccess(`成功加载 ${availableBooks.length} 本书籍的数据`);
+
+        // 确保 selectedBooks 中的书在数据中存在
+        selectedBooks = new Set(Array.from(selectedBooks).filter(book => availableBooks.includes(book)));
+        if (selectedBooks.size === 0) {
+            selectBook(availableBooks[0]); // 如果没选，默认选第一本
         } else {
-            showError('加载数据失败: ' + data.message);
+            refreshAllActiveCharts();
         }
     } catch (error) {
         console.error('加载数据失败:', error);
-        showError('无法加载数据，请检查API服务器是否运行在 http://localhost:5000');
+        showError('无法加载数据，请检查分析服务是否运行。');
     }
 }
 
@@ -283,25 +397,28 @@ function initChart() {
     const svg = d3.select("#main-chart");
     svg.selectAll("*").remove();
 
-    if (!realData || selectedBooks.size === 0) return;
+    if (!realData || selectedBooks.size === 0) {
+        showNoDataMessage();
+        return;
+    }
 
     const booksArray = Array.from(selectedBooks);
-    
+
     // 确保 SVG 容器有宽度 (D3 在 display:none 时宽度为 0)
     const container = svg.node().parentNode;
     if (container.clientWidth === 0) return;
 
     if (chartType === 'heatmap') {
-        drawMultiHeatmap(svg, booksArray); 
+        drawMultiHeatmap(svg, booksArray);
     } else {
-        drawMultiLineChart(svg, booksArray); 
+        drawMultiLineChart(svg, booksArray);
     }
 }
 
 function drawMultiLineChart(svg, booksArray) {
     const chartData = booksArray.map(bookId => ({
         book: bookId,
-        values: realData[bookId][currentMetric] || []
+        values: getMetricValues(bookId, currentMetric)
     })).filter(d => d.values.length > 0);
 
     if (chartData.length === 0) { showNoDataMessage(); return; }
@@ -316,8 +433,14 @@ function drawMultiLineChart(svg, booksArray) {
 
     const maxBlocks = d3.max(chartData, d => d.values.length - 1);
     const allValues = chartData.flatMap(d => d.values.map(v => v.value));
-    const yMin = d3.min(allValues) * 0.95;
-    const yMax = d3.max(allValues) * 1.05;
+    const extent = d3.extent(allValues);
+    let yMin = extent[0] * 0.95;
+    let yMax = extent[1] * 1.05;
+    if (!isFiniteNumber(yMin) || !isFiniteNumber(yMax) || yMin === yMax) {
+        const center = isFiniteNumber(extent[0]) ? extent[0] : 0;
+        yMin = center - 1;
+        yMax = center + 1;
+    }
 
     const xScale = d3.scaleLinear().domain([0, maxBlocks]).range([0, width]);
     const yScale = d3.scaleLinear().domain([yMin, yMax]).range([height - margin.top - margin.bottom, 0]);
@@ -364,7 +487,7 @@ function drawMultiLineChart(svg, booksArray) {
             .on("mouseover", function() { d3.select(this).attr("stroke-width", 5); })
             .on("mouseout", function() { d3.select(this).attr("stroke-width", 2.5); });
             
-        const safeBookID = bookData.book.replace(/[^a-zA-Z0-9]/g, '_');
+        const safeBookID = getBookSafeId(bookData.book);
 
         g.selectAll(`.point-${safeBookID}`)
             .data(bookData.values) 
@@ -377,6 +500,9 @@ function drawMultiLineChart(svg, booksArray) {
             .attr("fill", colorScale(bookData.book))
             .attr("stroke", "#fdfaf3")
             .attr("stroke-width", 1.5)
+            .attr("tabindex", 0)
+            .attr("role", "button")
+            .attr("aria-label", d => `${getBookDisplayName(bookData.book)} 第 ${d.block + 1} 个文本块，${getMetricLabel(currentMetric)} ${formatMetricValue(d.value)}`)
             .style("cursor", "pointer")
             .style("opacity", 0) 
             .on("mouseover", function(event, d) {
@@ -400,10 +526,16 @@ function drawMultiLineChart(svg, booksArray) {
                 hideTooltip();
             })
             .on("click", function(event, d) {
-                event.stopPropagation(); 
-                d3.selectAll(".data-point").attr("r", 3).style("opacity", 0); 
+                event.stopPropagation();
+                d3.selectAll(".data-point").attr("r", 3).style("opacity", 0);
                 d3.select(this).style("opacity", 1).attr("r", 8).attr("stroke", "#b5472f");
                 showDetail(d, bookData.book);
+            })
+            .on("keydown", function(event, d) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    showDetail(d, bookData.book);
+                }
             });
     });
 
@@ -411,7 +543,7 @@ function drawMultiLineChart(svg, booksArray) {
     chartData.forEach((d, i) => {
         const row = legend.append("g").attr("transform", `translate(0, ${i * 25})`);
         row.append("rect").attr("width", 15).attr("height", 15).attr("fill", colorScale(d.book));
-        row.append("text").attr("x", 20).attr("y", 12).text(d.book).style("font-size", "12px").style("fill", "#6f6557");
+        row.append("text").attr("x", 20).attr("y", 12).text(getBookDisplayName(d.book)).style("font-size", "12px").style("fill", "#6f6557");
     });
     
     svg.append("text")
@@ -425,53 +557,69 @@ function drawMultiLineChart(svg, booksArray) {
 }
 
 function drawMultiHeatmap(svg, booksArray) {
+    const chartData = booksArray.map(bookId => ({
+        book: bookId,
+        values: getMetricValues(bookId, currentMetric)
+    })).filter(d => d.values.length > 0);
+
+    if (chartData.length === 0) {
+        showNoDataMessage();
+        return;
+    }
+
     const containerWidth = svg.node().parentNode.getBoundingClientRect().width;
-    const padding = 20; 
-    const topMargin = 80; 
-    const bottomMargin = 50; 
-    
-    const chartWidth = (containerWidth - 60 - (booksArray.length - 1) * padding) / booksArray.length;
-    
+    const padding = 20;
+    const topMargin = 80;
+    const bottomMargin = 50;
+
+    const chartWidth = (containerWidth - 60 - (chartData.length - 1) * padding) / chartData.length;
+
     let maxRows = 0;
     let finalBlockSize = 0;
-    
-    booksArray.forEach(bookId => {
-        const data = realData[bookId][currentMetric];
-        const n = data.length;
-        const cols = Math.ceil(Math.sqrt(n)); 
+
+    chartData.forEach(bookData => {
+        const n = bookData.values.length;
+        const cols = Math.ceil(Math.sqrt(n));
         const rows = Math.ceil(n / cols);
-        const blockSize = Math.floor(chartWidth / cols);
-        
+        const blockSize = Math.max(1, Math.floor(chartWidth / cols));
+
         if (rows > maxRows) maxRows = rows;
-        if (finalBlockSize === 0) finalBlockSize = blockSize; 
+        if (finalBlockSize === 0) finalBlockSize = blockSize;
     });
-    
+
     const totalHeight = Math.max(400, topMargin + (maxRows * finalBlockSize) + bottomMargin);
-    
+
     svg.attr("viewBox", `0 0 ${containerWidth} ${totalHeight}`)
-       .style("height", totalHeight + "px"); 
-    
-    let globalMin = Infinity, globalMax = -Infinity;
-    booksArray.forEach(bookId => {
-        const vals = realData[bookId][currentMetric].map(d => d.value);
-        globalMin = Math.min(globalMin, Math.min(...vals));
-        globalMax = Math.max(globalMax, Math.max(...vals));
-    });
-    
+       .style("height", totalHeight + "px");
+
+    const allVals = chartData.flatMap(bookData => bookData.values.map(d => d.value));
+    const extent = d3.extent(allVals);
+    let globalMin = extent[0];
+    let globalMax = extent[1];
+    if (!isFiniteNumber(globalMin) || !isFiniteNumber(globalMax)) {
+        globalMin = 0;
+        globalMax = 1;
+    }
+    if (globalMin === globalMax) {
+        globalMin -= 1;
+        globalMax += 1;
+    }
+
     const colorScale = d3.scaleSequential()
         .interpolator(d3.piecewise(d3.interpolateRgb, ["#2c4a6e", "#f2e7cd", "#a0221a"]))
         .domain([globalMin, globalMax]);
 
-    booksArray.forEach((bookId, index) => {
-        const data = realData[bookId][currentMetric];
-        
+    chartData.forEach((bookData, index) => {
+        const bookId = bookData.book;
+        const data = bookData.values;
+
         const g = svg.append("g")
             .attr("transform", `translate(${30 + index * (chartWidth + padding)}, ${topMargin})`);
-            
+
         const n = data.length;
-        const cols = Math.ceil(Math.sqrt(n)); 
-        const blockSize = Math.floor(chartWidth / cols);
-        
+        const cols = Math.ceil(Math.sqrt(n));
+        const blockSize = Math.max(1, Math.floor(chartWidth / cols));
+
         g.selectAll("rect")
             .data(data)
             .enter()
@@ -482,29 +630,38 @@ function drawMultiHeatmap(svg, booksArray) {
             .attr("width", blockSize)
             .attr("height", blockSize)
             .attr("fill", d => colorScale(d.value))
-            .on("mouseover", function(event, d) { 
+            .attr("tabindex", 0)
+            .attr("role", "button")
+            .attr("aria-label", d => `${getBookDisplayName(bookId)} 第 ${d.block + 1} 个文本块，${getMetricLabel(currentMetric)} ${formatMetricValue(d.value)}`)
+            .on("mouseover", function(event, d) {
                 d3.select(this).style("stroke", "#b5472f").style("stroke-width", "2px");
-                showTooltip(event, d, bookId); 
+                showTooltip(event, d, bookId);
             })
             .on("mouseout", function() {
                 d3.select(this).style("stroke", "#e4d9c3").style("stroke-width", "1px");
                 hideTooltip();
             })
-            .on("click", function(event, d) { showDetail(d, bookId); });
+            .on("click", function(event, d) { showDetail(d, bookId); })
+            .on("keydown", function(event, d) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    showDetail(d, bookId);
+                }
+            });
 
         g.append("text")
             .attr("x", (cols * blockSize) / 2)
-            .attr("y", -20) 
+            .attr("y", -20)
             .attr("text-anchor", "middle")
             .style("font-size", "14px")
             .style("font-weight", "bold")
             .style("fill", "#6f6557")
-            .text(bookId.length > 18 ? bookId.substring(0, 15) + "..." : bookId); 
+            .text(truncateText(getBookDisplayName(bookId), 18));
     });
 
     svg.append("text")
         .attr("x", containerWidth / 2)
-        .attr("y", 30) 
+        .attr("y", 30)
         .attr("text-anchor", "middle")
         .style("font-size", "18px")
         .style("font-weight", "bold")
@@ -572,20 +729,21 @@ function showTooltip(event, data, bookName) {
         .style("opacity", 0)
         .style("left", (event.pageX + 10) + "px")
         .style("top", (event.pageY - 10) + "px");
-    
+
+    const keywords = Array.isArray(data.keywords) ? data.keywords.map(escapeHtml).join(', ') : '';
     tooltip.html(`
         <div style="margin-bottom: 5px;">
-            <strong>${bookName}</strong>
+            <strong>${escapeHtml(getBookDisplayName(bookName))}</strong>
         </div>
         <div style="margin-bottom: 3px;">
-            <strong>文本块:</strong> ${data.block + 1}
+            <strong>文本块:</strong> ${Number(data.block) + 1}
         </div>
         <div style="margin-bottom: 3px;">
-            <strong>${getMetricLabel(currentMetric)}:</strong> ${data.value}
+            <strong>${escapeHtml(getMetricLabel(currentMetric))}:</strong> ${escapeHtml(data.value)}
         </div>
-        ${data.keywords ? `<div style="margin-top: 5px;"><strong>关键词:</strong> ${data.keywords.join(', ')}</div>` : ''}
+        ${keywords ? `<div style="margin-top: 5px;"><strong>关键词:</strong> ${keywords}</div>` : ''}
     `);
-    
+
     tooltip.transition()
         .duration(200)
         .style("opacity", 1);
@@ -601,38 +759,37 @@ function hideTooltip() {
 
 function showDetail(data, bookName) {
     const detailPanel = document.getElementById('detailPanel');
-    
-    const detailHTML = `
-        <div class="detail-card">
-            <h3>📖 ${bookName}</h3>
-            <p><strong>文本块编号:</strong> #${data.block + 1}</p>
-            <div class="value">${data.value}</div>
-            <p><strong>${getMetricLabel(currentMetric)}</strong></p>
-            
-            ${data.keywords && data.keywords.length > 0 ? `
-            <div style="margin: 15px 0;">
-                <h4>※ 关键词</h4>
-                <div class="keywords">
-                    ${data.keywords.map(keyword => 
-                        `<span class="keyword-tag">${keyword}</span>`
-                    ).join('')}
-                </div>
-            </div>` : ''}
-            
-            ${data.preview ? `
+    if (!detailPanel) return;
+
+    const displayName = getBookDisplayName(bookName);
+    const keywordsHtml = Array.isArray(data.keywords) && data.keywords.length > 0
+        ? data.keywords.map(keyword => `<span class="keyword-tag">${escapeHtml(keyword)}</span>`).join('')
+        : '';
+    const previewHtml = data.preview ? `
             <div>
                 <h4>📄 原文片段</h4>
                 <p style="margin-top: 10px; color: #98907f; font-style: italic;">
-                    "${data.preview}"
+                    "${escapeHtml(data.preview)}"
                 </p>
-            </div>` : ''}
-        </div>
-    `;
-    
+            </div>` : '';
+
     detailPanel.innerHTML = `
         <h3>▤ 数据详情</h3>
-        <p>当前选择：${bookName} - ${getMetricLabel(currentMetric)}</p>
-        ${detailHTML}
+        <p>当前选择：${escapeHtml(displayName)} - ${escapeHtml(getMetricLabel(currentMetric))}</p>
+        <div class="detail-card">
+            <h3>📖 ${escapeHtml(displayName)}</h3>
+            <p><strong>文本块编号:</strong> #${Number(data.block) + 1}</p>
+            <div class="value">${escapeHtml(formatMetricValue(data.value, 4))}</div>
+            <p><strong>${escapeHtml(getMetricLabel(currentMetric))}</strong></p>
+
+            ${keywordsHtml ? `
+            <div style="margin: 15px 0;">
+                <h4>※ 关键词</h4>
+                <div class="keywords">${keywordsHtml}</div>
+            </div>` : ''}
+
+            ${previewHtml}
+        </div>
     `;
 }
 
@@ -640,7 +797,7 @@ function getMetricLabel(metric) {
     const labels = {
         sentenceLength: '平均句长',
         simpsonIndex: '用词重复度',
-        hapaxLegomena: '用词新颖度',
+        hapaxLegomena: 'Honoré 词汇丰富度 R',
         functionWords: '风格走向'
     };
     return labels[metric] || metric;
@@ -653,10 +810,20 @@ function updateMetricHint() {
     const hints = {
         sentenceLength: '平均句长：每句话平均多少个词。数值越大句子越长、越书面；越小越短促、越口语化。',
         simpsonIndex: '用词重复度：衡量词汇有多「重复」。数值越高，同一批词反复出现（词汇单调）；越低，用词越多样。',
-        hapaxLegomena: '用词新颖度：只出现一次的罕见词比例。数值越高，越爱用生僻、独特的新词。',
-        functionWords: '风格走向：用「的、和、是」这类高频小词的用法差异，把文本投成一个风格坐标，看风格像不像。'
+        hapaxLegomena: 'Honoré 词汇丰富度 R：综合词元总数、不同词型数和只出现一次的词型数。通常不是 0–1 比例；数值越高，词汇使用越丰富。',
+        functionWords: '风格走向：用「的、和、是」这类高频小词的用法差异，把文本投成一个风格坐标。位置用于探索，不直接代表严格的跨书相似度。'
     };
-    el.innerHTML = `<span class="metric-hint-label">当前指标</span>${hints[currentMetric] || ''}`;
+    el.innerHTML = `<span class="metric-hint-label">当前指标</span>${escapeHtml(hints[currentMetric] || '')}`;
+}
+
+function getBookSafeId(name) {
+    const text = String(name ?? 'book');
+    let hash = 0;
+    for (let i = 0; i < text.length; i += 1) {
+        hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+    }
+    const normalized = text.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'book';
+    return `${normalized}_${Math.abs(hash)}`;
 }
 
 // 内置名著的中文名映射（面向中文读者），未知书名原样返回
@@ -676,8 +843,8 @@ function getHeatmapLegend(metric) {
     const legend = {
         sentenceLength: ['短句', '长句'],
         simpsonIndex: ['用词多样', '用词重复'],
-        hapaxLegomena: ['用词常规', '用词新颖'],
-        functionWords: ['风格一端', '风格另一端']
+        hapaxLegomena: ['词汇较常规', '词汇更丰富'],
+        functionWords: ['投影一端', '投影另一端']
     };
     return legend[metric] || ['低值', '高值'];
 }
@@ -755,25 +922,84 @@ function exportChart() {
     img.src = imageSrc;
 }
 
-// UI辅助函数
+function exportSummary() {
+    if (!realData || selectedBooks.size === 0) {
+        showError('当前没有可导出的分析数据。请先选择书籍或上传文本。');
+        return;
+    }
+
+    const books = Array.from(selectedBooks).filter(book => getMetricValues(book, currentMetric).length > 0);
+    if (books.length === 0) {
+        showError('当前选择的书籍没有可导出的指标数据，请切换指标或重新生成数据。');
+        return;
+    }
+
+    const metricLabel = getMetricLabel(currentMetric);
+    const metricHint = {
+        sentenceLength: '每句话平均词数。',
+        simpsonIndex: '数值越高表示词汇重复度越高。',
+        hapaxLegomena: 'Honoré 词汇丰富度 R；综合词元总数、不同词型数和只出现一次的词型数，通常不是比例。',
+        functionWords: '功能词 PCA 的探索性投影，位置不直接等于严格的跨书相似度。'
+    }[currentMetric] || '';
+    const lines = [
+        '# 文印·文学指纹分析摘要',
+        '',
+        `- 生成时间：${new Date().toLocaleString('zh-CN')}`,
+        `- 当前视图：${currentTab === 'view-main' ? (chartType === 'line' ? '基础趋势分析 · 折线趋势图' : '基础趋势分析 · 指纹热力图') : currentTab === 'view-galaxy' ? '风格星系' : '全书对比'}`,
+        `- 分析指标：${metricLabel}`,
+        `- 指标说明：${metricHint}`,
+        `- 选择书籍：${books.map(getBookDisplayName).join('、')}`,
+        ''
+    ];
+
+    books.forEach(book => {
+        const values = getMetricValues(book, currentMetric);
+        const mean = d3.mean(values, d => d.value);
+        const peak = values.reduce((best, current) => current.value > best.value ? current : best, values[0]);
+        lines.push(`## ${getBookDisplayName(book)}`);
+        lines.push(`- 文本块数量：${values.length}`);
+        lines.push(`- 平均值：${formatMetricValue(mean)}`);
+        lines.push(`- 最高片段：第 ${Number(peak.block) + 1} 块，数值 ${formatMetricValue(peak.value)}`);
+        if (Array.isArray(peak.keywords) && peak.keywords.length > 0) {
+            lines.push(`- 最高片段关键词：${peak.keywords.join('、')}`);
+        }
+        if (peak.preview) {
+            lines.push(`- 原文片段：${String(peak.preview).replace(/\r?\n/g, ' ').trim().substring(0, 240)}`);
+        }
+        lines.push('');
+    });
+
+    lines.push('> 说明：本摘要用于记录当前页面选择。图表中的指标和 PCA 坐标应结合文本块、数据范围与研究问题解读，不应单独作为文学价值判断。');
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+    const link = document.createElement('a');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    link.download = `文印_分析摘要_${timestamp}.md`;
+    link.href = URL.createObjectURL(blob);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+}
+
 function showLoading(message) {
     const detailPanel = document.getElementById('detailPanel');
+    if (!detailPanel) return;
     detailPanel.innerHTML = `
-        <h3>◌ ${message}</h3>
-        <p>正在从API服务器获取数据...</p>
-        <p style="color:#98907f; font-size:12px; margin-top:-6px;">首次运行需生成示例数据，约 1–2 分钟，请耐心等待。</p>
-        <div style="text-align: center; margin-top: 20px;">
-            <div style="border: 4px solid #e4d9c3; border-top: 4px solid #b5472f; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 0 auto;"></div>
-            <style>@keyframes spin {0% {transform: rotate(0deg);} 100% {transform: rotate(360deg);}}</style>
+        <div class="state-card loading">
+            <h3>◌ ${escapeHtml(message)}</h3>
+            <p>正在从当前分析服务获取数据。首次运行需生成示例数据，约 1–2 分钟。</p>
+            <div class="state-spinner" aria-hidden="true"></div>
         </div>
     `;
 }
 
 function showSuccess(message) {
     const detailPanel = document.getElementById('detailPanel');
+    if (!detailPanel) return;
     detailPanel.innerHTML = `
-        <div class="detail-card" style="border-left-color: #6b8f5a;">
-            <h3 style="color: #6b8f5a;">✓ ${message}</h3>
+        <div class="detail-card state-card success">
+            <h3>${escapeHtml(message)}</h3>
             <p>现在可以点击图表中的数据点查看详细信息。</p>
         </div>
     `;
@@ -781,20 +1007,22 @@ function showSuccess(message) {
 
 function showError(message) {
     const detailPanel = document.getElementById('detailPanel');
+    if (!detailPanel) return;
     detailPanel.innerHTML = `
-        <div class="detail-card" style="border-left-color: #b5472f;">
-            <h3 style="color: #b5472f;">✗ 错误</h3>
-            <p>${message}</p>
+        <div class="detail-card state-card error">
+            <h3>错误</h3>
+            <p>${escapeHtml(message)}</p>
         </div>
     `;
 }
 
-function showNoDataMessage() {
+function showNoDataMessage(message = '请在上方选择一本已有数据的书，或上传文本进行分析。') {
     const detailPanel = document.getElementById('detailPanel');
+    if (!detailPanel) return;
     detailPanel.innerHTML = `
-        <div class="detail-card">
-            <h3>▤ 暂无数据</h3>
-            <p>请在上方选择一本书，或上传文本进行分析。</p>
+        <div class="detail-card state-card empty">
+            <h3>暂无数据</h3>
+            <p>${escapeHtml(message)}</p>
         </div>
     `;
 }
@@ -804,6 +1032,7 @@ function showNoDataMessage() {
 // ==========================================
 
 let galaxySimulation = null;
+let lastGalaxyTrigger = null;
 
 function initStyleGalaxy() {
     // 检查是否可见
@@ -812,7 +1041,10 @@ function initStyleGalaxy() {
     const books = Array.from(selectedBooks);
     if (books.length === 0) {
         const loadingEl = document.getElementById('galaxy-loading');
-        if(loadingEl) loadingEl.innerText = "请先在上方选择书籍";
+        if (loadingEl) {
+            loadingEl.style.display = 'block';
+            loadingEl.textContent = "请先在上方选择书籍";
+        }
         return;
     }
 
@@ -825,7 +1057,7 @@ function initStyleGalaxy() {
 
     d3.select("#galaxy-container").selectAll("svg").remove();
     const loadingEl = document.getElementById('galaxy-loading');
-    if(loadingEl) loadingEl.style.display = 'none';
+    if (loadingEl) loadingEl.style.display = 'none';
 
     const svg = d3.select("#galaxy-container").append("svg")
         .attr("width", width)
@@ -849,24 +1081,29 @@ function initStyleGalaxy() {
     // 颜色图例：让用户知道每种颜色对应哪本书
     const legendEl = document.getElementById('galaxy-legend');
     if (legendEl) {
-        legendEl.innerHTML = books.map(book => `
-            <span class="galaxy-legend-item">
-                <span class="galaxy-legend-swatch" style="background:${colorScale(book)}"></span>
-                ${getBookDisplayName(book)}
-            </span>
-        `).join('');
+        legendEl.innerHTML = '';
+        books.forEach(book => {
+            const item = document.createElement('span');
+            item.className = 'galaxy-legend-item';
+            const swatch = document.createElement('span');
+            swatch.className = 'galaxy-legend-swatch';
+            swatch.style.background = colorScale(book);
+            item.appendChild(swatch);
+            item.appendChild(document.createTextNode(getBookDisplayName(book)));
+            legendEl.appendChild(item);
+        });
     }
 
     books.forEach((book) => {
         const baseColor = d3.color(colorScale(book));
-        const highlight = baseColor.brighter(1.5); 
-        const shadow = baseColor.darker(1.2);      
-        
-        const gradId = "grad-" + book.replace(/[^a-zA-Z0-9]/g, '');
-        
+        const highlight = baseColor.brighter(1.5);
+        const shadow = baseColor.darker(1.2);
+
+        const gradId = "grad-" + getBookSafeId(book);
+
         const gradient = defs.append("radialGradient")
             .attr("id", gradId)
-            .attr("cx", "30%") 
+            .attr("cx", "30%")
             .attr("cy", "30%")
             .attr("r", "70%");
 
@@ -876,52 +1113,56 @@ function initStyleGalaxy() {
     });
 
     let allNodes = [];
-    let minMetric = Infinity;
-    let maxMetric = -Infinity;
 
-    books.forEach(bookName => {
-        const positionData = realData[bookName]['functionWords'];
-        const displayData = realData[bookName][currentMetric];
+    books.forEach((bookName, bookIndex) => {
+        const positionData = getMetricValues(bookName, 'functionWords');
+        const displayData = getMetricValues(bookName, currentMetric);
 
-        if (positionData && displayData) {
+        if (positionData.length && displayData.length) {
             positionData.forEach((d, i) => {
                 const metricItem = displayData[i];
-                if (metricItem) {
-                    const val = metricItem.value;
-                    if (val < minMetric) minMetric = val;
-                    if (val > maxMetric) maxMetric = val;
+                if (!metricItem || !isFiniteNumber(d.value) || !isFiniteNumber(metricItem.value)) return;
+                const pcaY = isFiniteNumber(d.value_y) ? d.value_y : getDeterministicFallbackY(bookIndex, Number(d.block) || i);
 
-                    allNodes.push({
-                        id: `${bookName}_${d.block}`,
-                        book: bookName,
-                        blockIndex: d.block,
-                        pcaX: d.value,
-                        pcaY: (d.value_y !== undefined && d.value_y !== null) ? d.value_y : (Math.random() - 0.5),
-                        realValue: val,
-                        preview: metricItem.preview,
-                        extendedPreview: d.extended_preview || metricItem.preview, 
-                        keywords: metricItem.keywords,
-                        x: width / 2 + (Math.random() - 0.5) * 50,
-                        y: height / 2 + (Math.random() - 0.5) * 50
-                    });
-                }
+                allNodes.push({
+                    id: `${bookName}_${d.block}`,
+                    book: bookName,
+                    blockIndex: d.block,
+                    pcaX: d.value,
+                    pcaY,
+                    realValue: metricItem.value,
+                    preview: metricItem.preview,
+                    extendedPreview: d.extended_preview || metricItem.preview,
+                    keywords: metricItem.keywords
+                });
             });
         }
     });
 
+    if (allNodes.length === 0) {
+        if (loadingEl) {
+            loadingEl.style.display = 'block';
+            loadingEl.textContent = "所选书籍暂无可用的功能词 PCA 数据。请重新生成数据或换一本书。";
+        }
+        return;
+    }
+
+    const metricExtent = normalizeExtent(d3.extent(allNodes, d => d.realValue));
     const radiusScale = d3.scaleSqrt()
-        .domain([minMetric, maxMetric])
-        .range([4, 18]); 
+        .domain(metricExtent)
+        .range([4, 18]);
 
-    allNodes.forEach(d => {
-        d.r = radiusScale(d.realValue);
-    });
-
-    const xExtent = d3.extent(allNodes, d => d.pcaX);
-    const yExtent = d3.extent(allNodes, d => d.pcaY);
+    const xExtent = normalizeExtent(d3.extent(allNodes, d => d.pcaX));
+    const yExtent = normalizeExtent(d3.extent(allNodes, d => d.pcaY));
     const padding = 60;
     const xScale = d3.scaleLinear().domain(xExtent).range([padding, width - padding]);
     const yScale = d3.scaleLinear().domain(yExtent).range([padding, height - padding]);
+
+    allNodes.forEach(d => {
+        d.r = radiusScale(d.realValue);
+        d.x = xScale(d.pcaX);
+        d.y = yScale(d.pcaY);
+    });
 
     const g = svg.append("g");
     svg.call(d3.zoom()
@@ -944,10 +1185,13 @@ function initStyleGalaxy() {
         .data(allNodes)
         .enter().append("circle")
         .attr("r", d => d.r)
-        .attr("fill", d => `url(#grad-${d.book.replace(/[^a-zA-Z0-9]/g, '')})`)
+        .attr("fill", d => `url(#grad-${getBookSafeId(d.book)})`)
         .attr("stroke", d => d3.color(colorScale(d.book)).darker(0.5))
         .attr("stroke-width", 0.5)
         .attr("stroke-opacity", 0.8)
+        .attr("tabindex", 0)
+        .attr("role", "button")
+        .attr("aria-label", d => `${getBookDisplayName(d.book)} 第 ${d.blockIndex + 1} 个文本块，${getMetricLabel(currentMetric)} ${formatMetricValue(d.realValue)}`)
         .style("cursor", "pointer")
         .call(d3.drag()
             .on("start", dragstarted)
@@ -1006,8 +1250,16 @@ function initStyleGalaxy() {
         hideTooltip();
     })
     .on("click", (event, d) => {
-        event.stopPropagation(); 
+        event.stopPropagation();
+        lastGalaxyTrigger = event.currentTarget;
         openGalaxyModal(d);
+    })
+    .on("keydown", (event, d) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            lastGalaxyTrigger = event.currentTarget;
+            openGalaxyModal(d);
+        }
     });
 
     function ticked() {
@@ -1042,58 +1294,70 @@ function initStyleGalaxy() {
 
 function openGalaxyModal(d) {
     const modal = document.getElementById('galaxy-modal');
-    if(!modal) return;
+    if (!modal) return;
 
     const titleEl = document.getElementById('modal-book-title');
-    if(titleEl) titleEl.innerText = d.book;
-    
+    if (titleEl) titleEl.textContent = getBookDisplayName(d.book);
+
     const blockEl = document.getElementById('modal-block-id');
-    if(blockEl) blockEl.innerText = `Block #${d.blockIndex}`;
-    
-    let valDisplay = typeof d.realValue === 'number' ? d.realValue.toFixed(4) : d.realValue;
+    if (blockEl) blockEl.textContent = `文本块 #${Number(d.blockIndex) + 1}`;
+
+    const valDisplay = isFiniteNumber(d.realValue) ? d.realValue.toFixed(4) : '暂无';
     const metricEl = document.getElementById('modal-metric-val');
-    if(metricEl) metricEl.innerText = `${getMetricLabel(currentMetric)}: ${valDisplay}`;
-    
+    if (metricEl) metricEl.textContent = `${getMetricLabel(currentMetric)}: ${valDisplay}`;
+
     const keywordContainer = document.getElementById('modal-keywords');
-    if(keywordContainer) {
-        keywordContainer.innerHTML = '';
-        if (d.keywords && d.keywords.length > 0) {
+    if (keywordContainer) {
+        keywordContainer.replaceChildren();
+        if (Array.isArray(d.keywords) && d.keywords.length > 0) {
             d.keywords.forEach(kw => {
                 const span = document.createElement('span');
-                span.innerText = kw;
+                span.textContent = kw;
                 keywordContainer.appendChild(span);
             });
         } else {
-            keywordContainer.innerHTML = '<span style="color:#98907f">无关键词</span>';
+            const empty = document.createElement('span');
+            empty.style.color = '#98907f';
+            empty.textContent = '无关键词';
+            keywordContainer.appendChild(empty);
         }
     }
 
     const textContainer = document.getElementById('modal-long-text');
-    if(textContainer) {
-        textContainer.innerText = d.extendedPreview || d.preview || "暂无详细文本内容...";
-    }
+    if (textContainer) textContainer.textContent = d.extendedPreview || d.preview || "暂无详细文本内容...";
 
+    modal.setAttribute('aria-hidden', 'false');
     modal.style.display = 'flex';
     setTimeout(() => {
         modal.classList.add('show');
+        const closeButton = modal.querySelector('.galaxy-modal-close');
+        if (closeButton) closeButton.focus();
     }, 10);
 }
 
 function closeGalaxyModal() {
     const modal = document.getElementById('galaxy-modal');
-    if(!modal) return;
-    
+    if (!modal) return;
+
     modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
     setTimeout(() => {
         modal.style.display = 'none';
+        if (lastGalaxyTrigger && typeof lastGalaxyTrigger.focus === 'function') {
+            lastGalaxyTrigger.focus();
+        }
+        lastGalaxyTrigger = null;
     }, 300);
 }
 
 document.addEventListener('DOMContentLoaded', function() {
     const modal = document.getElementById('galaxy-modal');
-    if(modal) {
+    if (modal) {
         modal.addEventListener('click', function(e) {
-            if (e.target === this) {
+            if (e.target === this) closeGalaxyModal();
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && modal.getAttribute('aria-hidden') === 'false') {
                 closeGalaxyModal();
             }
         });
