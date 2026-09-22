@@ -23,20 +23,145 @@ let selectedBooks = new Set();
 let smoothness = 3;
 let chartType = 'heatmap';
 let currentTab = 'view-main'; // 记录当前标签页
+let builtinBookNames = [];    // 服务器上常驻的示例书（用作解读参照基准，不含用户自己上传的）
+
+const METRIC_KEYS = ['sentenceLength', 'simpsonIndex', 'hapaxLegomena', 'functionWords'];
+const VIEW_IDS = ['view-main', 'view-galaxy', 'view-dashboard'];
+const DEFAULT_SMOOTHNESS = 3;
 
 // 初始化
 document.addEventListener('DOMContentLoaded', function() {
+    applyUrlState(readUrlState()); // 先按链接里的状态设置视图，再加载数据
     initEventListeners();
+    initTabKeyboard();
+    applyQuickStartVisibility();
     updateChartTypeUI();
     setUploadStatus(`${DEFAULT_UPLOAD_STATUS} ${getUploadPrivacyNotice()}`);
     syncSaveToggleDefault();
     updateMetricHint();
     loadBooksList();
 
-    setTimeout(() => {
-        toggleMatrixRain();
-    }, 500);
+    // 系统开了「减少动态效果」就不自动启动文本雨（按钮仍然可以手动打开）
+    setMatrixRain(!prefersReducedMotion());
 });
+
+// ==========================================
+// 🔗 视图状态放进网址（能分享、能复现）
+// ==========================================
+// 只写「看得见的选择」：指标、选中的书、标签页、图表类型、平滑度、框选范围。
+// 用 replaceState 而不是 pushState——不往浏览器历史里塞记录，返回键行为不变。
+let pendingUrlBooks = null;
+let pendingUrlBrush = null;
+
+function readUrlState() {
+    let params;
+    try {
+        params = new URLSearchParams(window.location.search);
+    } catch (e) {
+        return null; // 极老的浏览器没有 URLSearchParams，当作没有链接状态
+    }
+
+    const state = {};
+    const metric = params.get('metric');
+    if (metric && METRIC_KEYS.includes(metric)) state.metric = metric;
+    const chart = params.get('chart');
+    if (chart === 'line' || chart === 'heatmap') state.chartType = chart;
+    const smooth = Number(params.get('smooth'));
+    if (isFiniteNumber(smooth) && smooth >= 1 && smooth <= 10) state.smoothness = smooth;
+    const view = params.get('view');
+    if (view && VIEW_IDS.includes(view)) state.tab = view;
+    const books = params.get('books');
+    if (books) {
+        const list = books.split('|').map(item => item.trim()).filter(Boolean);
+        if (list.length > 0) state.books = list;
+    }
+    const brush = params.get('brush');
+    if (brush && /^\d+(\.\d+)?-\d+(\.\d+)?$/.test(brush)) state.brush = brush.split('-').map(Number);
+    return state;
+}
+
+function applyUrlState(state) {
+    if (!state) return;
+
+    if (state.metric) {
+        currentMetric = state.metric;
+        const select = document.getElementById('metricSelect');
+        if (select) select.value = state.metric;
+    }
+    if (state.chartType) {
+        chartType = state.chartType;
+        const select = document.getElementById('chartTypeSelect');
+        if (select) select.value = state.chartType;
+    }
+    if (isFiniteNumber(state.smoothness)) {
+        smoothness = state.smoothness;
+        const slider = document.getElementById('smoothness');
+        if (slider) slider.value = String(state.smoothness);
+    }
+    // 先记住链接里的选书再切标签：switchTab 会顺手把状态写回网址，
+    // 晚一步记就会把 books 参数抹掉
+    if (state.books) {
+        pendingUrlBooks = state.books;
+        selectedBooks = new Set(state.books);
+    }
+    if (state.brush) pendingUrlBrush = state.brush;
+
+    if (state.tab) window.switchTab(state.tab);
+
+    updateMetricHint();
+}
+
+// 把当前视图状态写回网址栏（不产生历史记录）
+function syncUrlState() {
+    if (!window.history || !window.history.replaceState) return;
+    window.history.replaceState(null, '', buildStateUrl());
+}
+
+// 当前状态对应的完整链接（复制链接、导出摘要都用它）
+function buildStateUrl() {
+    const params = new URLSearchParams();
+    if (currentMetric !== METRIC_KEYS[0]) params.set('metric', currentMetric);
+    if (chartType !== 'heatmap') params.set('chart', chartType);
+    if (smoothness !== DEFAULT_SMOOTHNESS) params.set('smooth', String(smoothness));
+    if (currentTab !== VIEW_IDS[0]) params.set('view', currentTab);
+    const books = Array.from(selectedBooks);
+    if (books.length > 0) params.set('books', books.join('|'));
+
+    // advState 定义在页面内的另一段脚本里，取不到就当没有框选
+    try {
+        const brushRange = (typeof advState !== 'undefined' && advState) ? advState.brushRange : null;
+        if (Array.isArray(brushRange) && brushRange.length === 2 && brushRange.every(isFiniteNumber)) {
+            params.set('brush', `${brushRange[0].toFixed(4)}-${brushRange[1].toFixed(4)}`);
+        }
+    } catch (e) { /* 没有框选状态，忽略 */ }
+
+    const query = params.toString();
+    return `${window.location.origin}${window.location.pathname}${query ? `?${query}` : ''}`;
+}
+
+// 「复制此链接」：把当前视图（指标/选书/标签页/图形/框选）发给同事
+function copyShareLink(button) {
+    syncUrlState();
+    const flash = () => {
+        if (!button) return;
+        const original = button.innerHTML;
+        button.textContent = '✓ 链接已复制';
+        setTimeout(() => { button.innerHTML = original; }, 1600);
+    };
+    const url = buildStateUrl();
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).then(flash).catch(() => { fallbackCopyText(url, flash); });
+    } else {
+        fallbackCopyText(url, flash);
+    }
+}
+
+// 取走链接里带的框选范围（仪表盘初始化时用，取一次就清掉）
+function consumePendingUrlBrush() {
+    const range = pendingUrlBrush;
+    pendingUrlBrush = null;
+    return Array.isArray(range) && range.length === 2 ? range : null;
+}
 
 // 「存入我的图书馆」勾选框：本地默认勾选（本机留档安全），远程默认不勾（默认不落盘）
 function syncSaveToggleDefault() {
@@ -126,8 +251,109 @@ function normalizeExtent(extent, fallback = 0) {
     return [min, max];
 }
 
-function getDeterministicFallbackY(bookIndex, blockIndex) {
-    return (bookIndex + 1) * 0.01 + ((blockIndex % 11) - 5) * 0.001;
+// ==========================================
+// ✧ 风格星系的跨书可比性
+// ==========================================
+// 只有出自同一个投影模型（mode = "shared"）的书，坐标才落在同一个基底上、才能画进同一张图。
+// 老书库（v1）是在各自书上单独拟合的，把它们混画在一起会让人读出并不存在的差异。
+function getGalaxyComparability(books) {
+    const shared = [];
+    const others = [];
+    books.forEach((book) => {
+        const meta = normalizeBookMeta(book);
+        const proj = meta && meta.projection;
+        if (proj && proj.mode === 'shared' && proj.axisExtent) shared.push({ book, proj });
+        else others.push(book);
+    });
+
+    const modelIds = Array.from(new Set(shared.map(item => item.proj.modelId || 'unknown')));
+    if (modelIds.length > 1) {
+        // 出自不同模型 = 两套基底，同样不能混画
+        return {
+            plotBooks: [], independentBooks: books.slice(),
+            axisExtent: null, axisLabels: [], modelId: null, mixedModel: true
+        };
+    }
+
+    const first = shared[0] || null;
+    return {
+        plotBooks: shared.map(item => item.book),
+        independentBooks: others,
+        axisExtent: first ? first.proj.axisExtent : null,
+        axisLabels: first ? (first.proj.axisLabels || []) : [],
+        modelId: first ? first.proj.modelId : null,
+        mixedModel: false
+    };
+}
+
+// 坐标系范围：优先用模型给出的固定范围，切换选书时点不会乱跳。
+// 若数据的坐标超出该范围（例如上传了一本风格差别很大的书），才扩展范围并如实说明。
+function resolveGalaxyExtent(nodes, fixedExtent) {
+    const xs = nodes.map(d => d.pcaX).filter(isFiniteNumber);
+    const ys = nodes.map(d => d.pcaY).filter(isFiniteNumber);
+    const pad = (range) => {
+        const span = (range[1] - range[0]) || 1;
+        return [range[0] - span * 0.05, range[1] + span * 0.05];
+    };
+
+    if (fixedExtent && Array.isArray(fixedExtent.x) && Array.isArray(fixedExtent.y)) {
+        const x = pad(fixedExtent.x);
+        const y = pad(fixedExtent.y);
+        const outX = xs.some(v => v < x[0] || v > x[1]);
+        const outY = ys.some(v => v < y[0] || v > y[1]);
+        return {
+            x: outX ? [Math.min(x[0], d3.min(xs)), Math.max(x[1], d3.max(xs))] : x,
+            y: outY ? [Math.min(y[0], d3.min(ys)), Math.max(y[1], d3.max(ys))] : y,
+            outOfRange: outX || outY
+        };
+    }
+    return {
+        x: normalizeExtent(d3.extent(xs)),
+        y: normalizeExtent(d3.extent(ys)),
+        outOfRange: false
+    };
+}
+
+// 把「这批点能不能互相比较」写在图下面，别让用户自己去猜
+function renderGalaxyNote(comparability, extent, droppedBlocks) {
+    const el = document.getElementById('galaxy-axis-note');
+    if (!el) return;
+    const lines = [];
+    let warn = false;
+
+    if (comparability.plotBooks.length === 0) {
+        warn = true;
+        lines.push('⚠ 当前选中的书没有共同的坐标基准（多为旧版数据或不同模型生成的坐标），下面按「各书各自计算」的方式摆放：点与点之间的距离不可直接比较。重新上传一次 .txt 即可获得可比坐标。');
+    } else {
+        (comparability.axisLabels || []).forEach(text => lines.push(text));
+        if (comparability.independentBooks.length > 0) {
+            warn = true;
+            const names = comparability.independentBooks.map(getBookDisplayName).join('、');
+            lines.push(`⚠ 《${names}》的坐标是旧版数据、没有共同基准，因此没有画进这张图；重新上传同名 .txt 即可获得可比坐标。`);
+        }
+        if (comparability.mixedModel) {
+            warn = true;
+            lines.push('⚠ 选中的书来自不同的坐标模型，无法直接比较，本图未画入。');
+        }
+        if (extent && extent.outOfRange) {
+            warn = true;
+            lines.push('⚠ 有片段的坐标超出了内置示例书的范围，图已自动扩展显示。');
+        }
+        if (droppedBlocks > 0) {
+            lines.push(`（有 ${droppedBlocks} 个片段缺少坐标数据，未画入。）`);
+        }
+        if (lines.length === 0) {
+            el.hidden = true;
+            el.innerHTML = '';
+            return;
+        }
+    }
+
+    el.hidden = false;
+    el.className = 'galaxy-note' + (warn ? ' galaxy-note-warn' : '');
+    el.innerHTML = lines
+        .map(text => `<span class="galaxy-note-line">${escapeHtml(text)}</span>`)
+        .join('');
 }
 
 
@@ -162,6 +388,8 @@ window.switchTab = function(tabId) {
             }
         }, 50);
     }
+
+    syncUrlState();
 };
 
 // 初始化事件监听器
@@ -174,20 +402,30 @@ function initEventListeners() {
             // 数据变化时，更新所有图表
             refreshAllActiveCharts();
         }
+        syncUrlState();
     });
-    
+
     // 平滑度调整
     document.getElementById('smoothness').addEventListener('input', function(e) {
         smoothness = parseInt(e.target.value);
         if (realData) {
             initChart();
         }
+        syncUrlState();
     });
-    
-    // 导出图像
+
+    // 导出图像 / 导出摘要 / 复制链接
     document.getElementById('exportBtn').addEventListener('click', exportChart);
     const exportSummaryBtn = document.getElementById('exportSummaryBtn');
     if (exportSummaryBtn) exportSummaryBtn.addEventListener('click', exportSummary);
+    const exportSvgBtn = document.getElementById('exportSvgBtn');
+    if (exportSvgBtn) exportSvgBtn.addEventListener('click', exportVectorChart);
+    const exportDataBtn = document.getElementById('exportDataBtn');
+    if (exportDataBtn) exportDataBtn.addEventListener('click', exportTableData);
+    const exportCiteBtn = document.getElementById('exportCiteBtn');
+    if (exportCiteBtn) exportCiteBtn.addEventListener('click', exportCitation);
+    const copyLinkBtn = document.getElementById('copyLinkBtn');
+    if (copyLinkBtn) copyLinkBtn.addEventListener('click', () => copyShareLink(copyLinkBtn));
 
     // 新增：图表类型切换监听
     document.getElementById('chartTypeSelect').addEventListener('change', function(e) {
@@ -196,12 +434,94 @@ function initEventListeners() {
         if (realData) {
             initChart();
         }
+        syncUrlState();
     });
 
     // 上传自定义文本
     const fileInput = document.getElementById('file-upload');
     if (fileInput) fileInput.addEventListener('change', handleFileUpload);
 }
+
+// tablist 键盘操作：← → 切换视图，Home / End 跳到首尾（WAI-ARIA tabs 的惯例）
+function initTabKeyboard() {
+    const tabs = Array.from(document.querySelectorAll('.tab-btn'));
+    if (tabs.length === 0) return;
+
+    tabs.forEach((tab, index) => {
+        tab.addEventListener('keydown', (event) => {
+            let next = null;
+            if (event.key === 'ArrowRight') next = tabs[(index + 1) % tabs.length];
+            else if (event.key === 'ArrowLeft') next = tabs[(index - 1 + tabs.length) % tabs.length];
+            else if (event.key === 'Home') next = tabs[0];
+            else if (event.key === 'End') next = tabs[tabs.length - 1];
+            if (!next) return;
+
+            event.preventDefault();
+            const viewId = next.getAttribute('aria-controls');
+            if (viewId) window.switchTab(viewId);
+            next.focus();
+        });
+    });
+}
+
+// 「载入对比示例」：挑出在当前观察角度下差别最大的两本内置书
+// （帮第一次来的用户一键看到「对比」长什么样，而不是自己盲选）
+function loadComparisonExample() {
+    if (!realData) {
+        setUploadStatus('数据还在加载中，请稍等一下再试。', 'error');
+        return;
+    }
+
+    const candidates = (builtinBookNames.length > 0 ? builtinBookNames : Object.keys(realData))
+        .filter(name => getMetricValues(name, currentMetric).length > 0);
+    if (candidates.length === 0) {
+        setUploadStatus('暂时没有可用来做示例的书。', 'error');
+        return;
+    }
+
+    let picks = [candidates[0]];
+    if (candidates.length > 1) {
+        const ranked = candidates
+            .map(name => ({ name, mean: d3.mean(getMetricValues(name, currentMetric).map(d => d.value)) }))
+            .filter(item => isFiniteNumber(item.mean))
+            .sort((a, b) => a.mean - b.mean);
+        picks = ranked.length > 1 ? [ranked[0].name, ranked[ranked.length - 1].name] : candidates.slice(0, 2);
+    }
+
+    selectedBooks = new Set(picks);
+    syncBookButtonStates();
+    refreshAllActiveCharts();
+    syncUrlState();
+    setUploadStatus(
+        `已选中《${picks.map(getBookDisplayName).join('》《')}》：它们的「${getMetricLabel(currentMetric)}」差别最大，适合先看差异。换「观察角度」可以再挑别的组合。`,
+        'success'
+    );
+}
+
+// 快速开始条：点 ✕ 收起，之后不再自动出现（记在本机浏览器里）
+const QUICKSTART_HIDDEN_KEY = 'wenxin.quickstartHidden';
+
+function applyQuickStartVisibility() {
+    const el = document.getElementById('quickstart');
+    if (!el) return;
+    let hidden = false;
+    try {
+        hidden = window.localStorage.getItem(QUICKSTART_HIDDEN_KEY) === '1';
+    } catch (e) {
+        hidden = false;
+    }
+    el.hidden = hidden;
+}
+
+window.hideQuickStart = function() {
+    const el = document.getElementById('quickstart');
+    if (el) el.hidden = true;
+    try {
+        window.localStorage.setItem(QUICKSTART_HIDDEN_KEY, '1');
+    } catch (e) { /* 存不了就这次会话内收起 */ }
+};
+
+window.loadComparisonExample = loadComparisonExample;
 
 // 根据当前图表类型（热力图 / 折线图）控制「曲线平滑」与「多书对比」控件的显隐
 // 热力图是像素块，没有曲线可平滑，也不支持折线多书对比，故仅折线图下显示
@@ -250,7 +570,11 @@ async function handleFileUpload(event) {
         if (!realData) realData = {};
         realData[result.book] = result.data; // 一律以服务端返回的 result.book 作为键
         selectedBooks.add(result.book);
+        // 保存下来的书要记住服务端发的删除令牌，之后删它时才认得出是「保存这本书的浏览器」
+        if (result.saved && result.deleteToken) rememberDeleteToken(result.book, result.deleteToken);
         addUploadedBookButton(result.book, { deletable: !!result.saved });
+        updateCompareButtonLabel();
+        syncUrlState();
         const nBlocks = result.data && result.data.metadata ? result.data.metadata.totalBlocks : 0;
         const savedMsg = result.saved
             ? '已存入「我的图书馆」，刷新后仍在，可点书名旁 ✕ 删除。'
@@ -323,12 +647,53 @@ function addUploadedBookButton(bookName, { deletable = false } = {}) {
     ));
 }
 
+// 书库删除令牌：保存时服务端发一个，存在本浏览器里，删除时带回去。
+// 这样在线上演示环境里，别人无法凭一个书名就删掉你的书（本机访问不需要令牌）。
+const DELETE_TOKEN_KEY = 'wenxin.deleteTokens';
+
+function readDeleteTokens() {
+    try {
+        const raw = window.localStorage.getItem(DELETE_TOKEN_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+        return {}; // 隐私模式等场景读不到，按没有令牌处理
+    }
+}
+
+function writeDeleteTokens(tokens) {
+    try {
+        window.localStorage.setItem(DELETE_TOKEN_KEY, JSON.stringify(tokens));
+    } catch (e) { /* 写不进去就算了：本机访问本来就不需要令牌 */ }
+}
+
+function rememberDeleteToken(bookName, token) {
+    if (!bookName || !token) return;
+    const tokens = readDeleteTokens();
+    tokens[bookName] = token;
+    writeDeleteTokens(tokens);
+}
+
+function forgetDeleteToken(bookName) {
+    const tokens = readDeleteTokens();
+    if (!(bookName in tokens)) return;
+    delete tokens[bookName];
+    writeDeleteTokens(tokens);
+}
+
+function getDeleteToken(bookName) {
+    return readDeleteTokens()[bookName] || '';
+}
+
 // 从「我的图书馆」删除：确认 → DELETE 接口 → 同步内存/选择/按钮/图表
 async function deleteLibraryBook(bookName) {
     if (!window.confirm(`确定从「我的图书馆」删除《${getBookDisplayName(bookName)}》？此操作不可撤销。`)) return;
     setUploadBusy(true);
     try {
-        const resp = await fetch(`${API_BASE_URL}/api/library/${encodeURIComponent(bookName)}`, { method: 'DELETE' });
+        const headers = {};
+        const token = getDeleteToken(bookName);
+        if (token) headers['X-Delete-Token'] = token;
+        const resp = await fetch(`${API_BASE_URL}/api/library/${encodeURIComponent(bookName)}`, { method: 'DELETE', headers });
         const contentType = resp.headers.get('content-type') || '';
         const result = contentType.includes('application/json') ? await resp.json() : null;
         if (!resp.ok) {
@@ -338,9 +703,11 @@ async function deleteLibraryBook(bookName) {
 
         if (realData) delete realData[bookName];
         selectedBooks.delete(bookName);
+        forgetDeleteToken(bookName);
         document.querySelectorAll('.book-group').forEach(group => {
             if (group.dataset.bookId === bookName) group.remove();
         });
+        syncUrlState();
 
         setUploadStatus((result && result.message) || `已从「我的图书馆」删除《${getBookDisplayName(bookName)}》。`, 'success');
         updateMetricHint();
@@ -423,15 +790,23 @@ function updateBookSelector(books) {
         }));
     });
 
-    // 默认选中第一本书
-    selectBook(books[0].id);
+    // 解读参照只用内置示例书：用户自己上传的书不该拿来当"基准"
+    builtinBookNames = books.filter(book => book.source !== 'library').map(book => book.id);
+
+    if (pendingUrlBooks && pendingUrlBooks.length > 0) {
+        // 链接里指定了选书：按它还原（不存在的书名会在数据加载后自动剔除）
+        pendingUrlBooks = null;
+        syncBookButtonStates();
+    } else {
+        // 默认选中第一本书
+        selectBook(books[0].id);
+    }
 }
 
 function selectBook(bookId) {
     const btn = getBookButtonById(bookId);
 
     if (selectedBooks.has(bookId)) {
-        const btn = getBookButtonById(bookId);
         if (selectedBooks.size > 1) {
             selectedBooks.delete(bookId);
             if (btn) btn.classList.remove('active');
@@ -442,20 +817,33 @@ function selectBook(bookId) {
         if (btn) btn.classList.add('active');
     }
 
-    // 更新对比状态提示文字
-    const compareBtn = document.getElementById('toggleComparison');
-    if (compareBtn) {
-        if (selectedBooks.size > 1) {
-            compareBtn.textContent = `📚 已选 ${selectedBooks.size} 本书进行对比`;
-        } else {
-            compareBtn.textContent = '⇄ 点击上方书名可多选进行对比';
-        }
-    }
-    
+    updateCompareButtonLabel();
+
     // 刷新当前可见的图表
     if (realData) {
         refreshAllActiveCharts();
     }
+    syncUrlState();
+}
+
+// 对比状态提示文字（选书、按链接还原选书后都要更新）
+function updateCompareButtonLabel() {
+    const compareBtn = document.getElementById('toggleComparison');
+    if (!compareBtn) return;
+    if (selectedBooks.size > 1) {
+        compareBtn.textContent = `📚 已选 ${selectedBooks.size} 本书进行对比`;
+    } else {
+        compareBtn.textContent = '⇄ 点击上方书名可多选进行对比';
+    }
+}
+
+// 按 selectedBooks 同步书名按钮的选中态（链接还原、删除后使用）
+function syncBookButtonStates() {
+    document.querySelectorAll('.book-group').forEach(group => {
+        const btn = group.querySelector('.book-btn');
+        if (btn) btn.classList.toggle('active', selectedBooks.has(group.dataset.bookId));
+    });
+    updateCompareButtonLabel();
 }
 
 async function loadRealData() {
@@ -484,6 +872,7 @@ async function loadRealData() {
         if (selectedBooks.size === 0) {
             selectBook(availableBooks[0]); // 如果没选，默认选第一本
         } else {
+            syncBookButtonStates(); // 链接还原 / 书籍变动后，把选中态落到按钮上
             refreshAllActiveCharts();
         }
     } catch (error) {
@@ -659,6 +1048,33 @@ function drawMultiLineChart(svg, booksArray) {
         .text(`${getMetricLabel(currentMetric)} - 对比分析`);
 }
 
+// 章节分界在热力图网格里的位置：格子按行铺开，分界线画在「该章起始所在那一格」的左边框上
+// ——也就是「上一格是上一章、这一格是新的一章」的那条缝。
+// 章节特别多时不再画，否则整张图会被虚线填满、反而看不清颜色。
+function getChapterGridDividers(bookName, data) {
+    const positions = getChapterBlockPositions(bookName);
+    if (!positions || positions.length > 60) return [];
+
+    // 正常情况下数组下标就是第几块；万一有片段缺值被过滤掉，按块号回查，避免画错行
+    const positionOfBlock = new Map();
+    data.forEach((item, index) => positionOfBlock.set(item.block, index));
+
+    // 一个格子可能被相邻几章同时选中（格子覆盖 1 万个词，段落比格子密时就会出现），
+    // 同一格只画一次，避免重复叠线。
+    const seen = new Set();
+    return positions
+        .map(item => {
+            const position = positionOfBlock.has(item.block) ? positionOfBlock.get(item.block) : item.block;
+            return { chapter: item.chapterIndex + 1, position };
+        })
+        .filter(item => item.chapter > 1 && item.position > 0 && item.position < data.length)
+        .filter(item => {
+            if (seen.has(item.position)) return false;
+            seen.add(item.position);
+            return true;
+        });
+}
+
 function drawMultiHeatmap(svg, booksArray) {
     const chartData = booksArray.map(bookId => ({
         book: bookId,
@@ -673,7 +1089,7 @@ function drawMultiHeatmap(svg, booksArray) {
     const containerWidth = svg.node().parentNode.getBoundingClientRect().width;
     const padding = 20;
     const topMargin = 80;
-    const bottomMargin = 50;
+    const bottomMargin = 68; // 图例底下还要留一行「虚线是章节分界」的说明
 
     const chartWidth = (containerWidth - 60 - (chartData.length - 1) * padding) / chartData.length;
 
@@ -712,6 +1128,8 @@ function drawMultiHeatmap(svg, booksArray) {
         .interpolator(d3.piecewise(d3.interpolateRgb, ["#2c4a6e", "#f2e7cd", "#a0221a"]))
         .domain([globalMin, globalMax]);
 
+    let drewChapterDividers = false;
+
     chartData.forEach((bookData, index) => {
         const bookId = bookData.book;
         const data = bookData.values;
@@ -733,7 +1151,6 @@ function drawMultiHeatmap(svg, booksArray) {
             .attr("width", blockSize)
             .attr("height", blockSize)
             .attr("fill", d => colorScale(d.value))
-            .attr("tabindex", 0)
             .attr("role", "button")
             .attr("aria-label", d => `${getBookDisplayName(bookId)} 第 ${d.block + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetricValue(d.value)}`)
             .on("mouseover", function(event, d) {
@@ -744,13 +1161,64 @@ function drawMultiHeatmap(svg, booksArray) {
                 d3.select(this).style("stroke", "#e4d9c3").style("stroke-width", "1px");
                 hideTooltip();
             })
-            .on("click", function(event, d) { showDetail(d, bookId); })
-            .on("keydown", function(event, d) {
-                if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    showDetail(d, bookId);
+            .on("click", function(event, d) { showDetail(d, bookId); });
+
+        // 键盘导航：整块热力图只占一个 Tab 停靠点，进来后用方向键逐格移动。
+        // 一本书上百个格子如果都能 Tab 到，键盘用户要按上百次才能走出去。
+        const rects = g.selectAll("rect");
+        rects.attr("tabindex", (d, i) => (i === 0 ? 0 : -1));
+        rects.on("keydown", function(event, d) {
+            const all = rects.nodes();
+            const current = all.indexOf(this);
+            let next = null;
+            if (event.key === 'ArrowRight') next = current + 1;
+            else if (event.key === 'ArrowLeft') next = current - 1;
+            else if (event.key === 'ArrowDown') next = current + cols;
+            else if (event.key === 'ArrowUp') next = current - cols;
+            else if (event.key === 'Home') next = current - (current % cols);
+            else if (event.key === 'End') next = Math.min(n - 1, current - (current % cols) + cols - 1);
+            else if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                showDetail(d, bookId);
+                return;
+            }
+
+            if (next === null) return;
+            event.preventDefault();
+            if (next < 0 || next >= n) return;
+            all.forEach(node => node.setAttribute('tabindex', '-1'));
+            all[next].setAttribute('tabindex', '0');
+            all[next].focus();
+        });
+
+        // 章节分界：虚线，标出「颜色变化大概发生在第几章」
+        const dividers = getChapterGridDividers(bookId, data);
+        if (dividers.length > 0) {
+            const rows = Math.ceil(n / cols);
+            const dividerLayer = g.append("g").attr("class", "chapter-dividers");
+            dividers.forEach(item => {
+                const points = [];
+                for (let row = 0; row < rows; row++) {
+                    const local = item.position - row * cols; // 这一章起始的格子在当前行的第几列
+                    // local === 0 是「这一章正好从某行第一格开始」：分界线要画在这一行的
+                    // 最左边。以前写成 local <= 0，等于把这一行整个跳过，结果是这些
+                    // 分界线一条都画不出来（实测被吞掉 13 条）。
+                    if (local < 0 || local >= cols) continue;
+                    const x = local * blockSize;
+                    points.push([x, row * blockSize], [x, (row + 1) * blockSize]);
                 }
+                if (points.length === 0) return;
+                dividerLayer.append("path")
+                    .attr("d", "M" + points.map(point => point.join(",")).join(" L"))
+                    .attr("fill", "none")
+                    .attr("stroke", "#3a332a")
+                    .attr("stroke-width", 1.2)
+                    .attr("stroke-dasharray", "3,3")
+                    .attr("opacity", 0.75)
+                    .attr("pointer-events", "none");
+                drewChapterDividers = true;
             });
+        }
 
         g.append("text")
             .attr("x", (cols * blockSize) / 2)
@@ -775,7 +1243,7 @@ function drawMultiHeatmap(svg, booksArray) {
     const [lowLabel, highLabel] = getHeatmapLegend(currentMetric);
     const legendW = 220, legendH = 12;
     const legendX = containerWidth / 2 - legendW / 2;
-    const legendY = totalHeight - 26;
+    const legendY = totalHeight - 46;
 
     const legendGrad = svg.append("defs").append("linearGradient")
         .attr("id", "heatmapLegendGrad")
@@ -807,6 +1275,16 @@ function drawMultiHeatmap(svg, booksArray) {
         .style("fill", "#a0221a")
         .style("font-weight", "bold")
         .text(`高 · ${highLabel}`);
+
+    // 分界线是自动识别出来的，位置只能算近似，这里如实说明
+    if (drewChapterDividers) {
+        svg.append("text")
+            .attr("x", containerWidth / 2).attr("y", totalHeight - 14)
+            .attr("text-anchor", "middle")
+            .style("font-size", "11px")
+            .style("fill", "#98907f")
+            .text("虚线为章节分界（按章节标题自动识别，位置为近似值；章节过多时不显示）");
+    }
 }
 
 // 工具函数
@@ -834,6 +1312,8 @@ function showTooltip(event, data, bookName) {
         .style("top", (event.pageY - 10) + "px");
 
     const keywords = Array.isArray(data.keywords) ? data.keywords.map(escapeHtml).join(', ') : '';
+    // 定位到章节：热力图上那条虚线到底指哪一章，悬停就能看到
+    const chapter = typeof getBlockChapter === 'function' ? getBlockChapter(bookName, data.block) : null;
     tooltip.html(`
         <div style="margin-bottom: 5px;">
             <strong>${escapeHtml(getBookDisplayName(bookName))}</strong>
@@ -841,6 +1321,7 @@ function showTooltip(event, data, bookName) {
         <div style="margin-bottom: 3px;">
             <strong>片段：</strong>第 ${Number(data.block) + 1} 个
         </div>
+        ${chapter ? `<div style="margin-bottom: 3px;"><strong>位置：</strong>${escapeHtml(chapterLabel(chapter))}</div>` : ''}
         <div style="margin-bottom: 3px;">
             <strong>${escapeHtml(getMetricLabel(currentMetric))}:</strong> ${escapeHtml(data.value)}
         </div>
@@ -869,6 +1350,14 @@ function showDetail(data, bookName) {
         ? data.keywords.map(keyword => `<span class="keyword-tag">${escapeHtml(keyword)}</span>`).join('')
         : '';
     const locationText = formatBlockLocation(bookName, data.block) + formatWordCount(data.wordCount);
+    const chapter = getBlockChapter(bookName, data.block);
+    const chapterHtml = chapter
+        ? `<p class="chapter-location">🔖 所在章节：${escapeHtml(chapterTitle(chapter))} · ${escapeHtml(chapterLabel(chapter))}</p>`
+        : '';
+    const overviewText = formatBookOverview(bookName);
+    const overviewHtml = overviewText
+        ? `<p class="book-overview">全书概况：${escapeHtml(overviewText)}</p>`
+        : '';
     const sourceText = data.extended_preview || data.preview || '';
     const previewHtml = data.preview ? `
             <div>
@@ -885,8 +1374,10 @@ function showDetail(data, bookName) {
         <div class="detail-card">
             <h3>📖 ${escapeHtml(displayName)}</h3>
             <p class="block-location">📍 ${escapeHtml(locationText)}</p>
+            ${chapterHtml}
             <div class="value">${escapeHtml(formatMetricValue(data.value, 4))}</div>
             <p><strong>${escapeHtml(getMetricLabel(currentMetric))}</strong></p>
+            ${overviewHtml}
 
             ${keywordsHtml ? `
             <div style="margin: 15px 0;">
@@ -944,11 +1435,130 @@ function getBookBlockCount(bookName) {
     return 0;
 }
 
+// 数据版本兼容：v1 数据没有真实总词数、滑窗参数和章节信息。
+// 这里只在内存里补一份推算值，绝不改写磁盘上的旧文件；
+// 也绝不把 v1 的 totalWords 当成真实词数（那是重叠窗口累加，比真实词数大近十倍）。
+function normalizeBookMeta(bookName) {
+    const bookData = realData && realData[bookName];
+    const raw = bookData && bookData.metadata;
+    if (!raw || typeof raw !== 'object') return null;
+
+    const legacy = Number(raw.schemaVersion) !== 2;
+    const totalBlocks = getBookBlockCount(bookName);
+    const step = isFiniteNumber(raw.step) && raw.step > 0 ? raw.step : 1000;
+    const blockSize = isFiniteNumber(raw.blockSize) && raw.blockSize > 0 ? raw.blockSize : 10000;
+    const analyzedWords = isFiniteNumber(raw.analyzedWords)
+        ? raw.analyzedWords
+        : (legacy && isFiniteNumber(raw.totalWords)
+            ? raw.totalWords
+            : (totalBlocks > 0 ? (totalBlocks - 1) * step + blockSize : null));
+
+    return {
+        legacy,
+        totalBlocks,
+        totalWords: legacy || !isFiniteNumber(raw.totalWords) ? null : raw.totalWords,
+        analyzedWords,
+        blockSize,
+        step,
+        chapters: Array.isArray(raw.chapters) && raw.chapters.length > 0 ? raw.chapters : null,
+        projection: raw.projection || null
+    };
+}
+
+// 某一章：片段 i 覆盖第 [i*step, i*step+blockSize) 个词，
+// 取片段中点所在的章（跨章片段不会被硬塞给上一章）。
+function getBlockChapter(bookName, blockIndex) {
+    const meta = normalizeBookMeta(bookName);
+    if (!meta || !meta.chapters) return null;
+    const idx = Number(blockIndex);
+    if (!isFiniteNumber(idx) || idx < 0) return null;
+    const center = idx * meta.step + meta.blockSize / 2;
+    return meta.chapters.find(ch => center >= ch.wordStart && center < ch.wordEnd) || null;
+}
+
+// 章节分界落在第几块（可以带小数）：片段 i 的中点对应第 i*step + blockSize/2 个词，
+// 反过来就能把章节标题的词位置换算成片段位置。
+// 返回 null 表示这本书没有可用的章节信息。
+//
+// 一章从「中点落在这一章里的第一个片段」开始：片段 i 的中点在第
+// i*step + blockSize/2 个词处，所以这一格就是 ceil((wordStart - blockSize/2) / step)。
+// 取整方向不能用 Math.round——小数部分小于 0.5 时该片段的中点还在上一章里，
+// 四舍五入会把分界线画到上一章的最后一格上（实测 91 条里有 47 条偏了一格）。
+function chapterBlockOf(meta, chapter) {
+    const raw = (chapter.wordStart - meta.blockSize / 2) / meta.step;
+    return Number.isFinite(raw) ? Math.ceil(raw) : 0;
+}
+
+function getChapterBlockPositions(bookName) {
+    const meta = normalizeBookMeta(bookName);
+    if (!meta || !meta.chapters || meta.chapters.length < 2) return null;
+
+    return meta.chapters.map((chapter, index) => ({
+        chapterIndex: index,
+        title: chapter.title,
+        part: chapter.part || null,
+        block: chapterBlockOf(meta, chapter)
+    }));
+}
+
+// 滑窗在书末就停了：最后一个片段的中点 = (totalBlocks-1)*step + blockSize/2 个词，
+// 起点在这之后的章一个片段都没有。这些章在走势图上没有刻度、在热力图里没有分界线，
+// 是数据里真的没有，不是画错——所以要照实说，而不是假装章节都在图里。
+function chaptersWithoutBlocks(bookName) {
+    const meta = normalizeBookMeta(bookName);
+    if (!meta || !meta.chapters) return [];
+    const lastCenter = (meta.totalBlocks - 1) * meta.step + meta.blockSize / 2;
+    return meta.chapters
+        .map((chapter, index) => ({ index, wordStart: chapter.wordStart }))
+        .filter(chapter => chapter.wordStart > lastCenter)
+        .map(chapter => chapter.index + 1);
+}
+
+// 章号一律带口径说明：这是按章节标题自动识别出来的，不是人工标注的章号。
+// 分「部」的小说（《白牙》每部从 CHAPTER I 重新编号）尤其需要——第 16 章的
+// 原始标题确实写着 CHAPTER II，不加说明就成了自相矛盾的两句话。
+function chapterLabel(chapter) {
+    return chapter ? `第 ${chapter.index + 1} 章（按标题自动识别）` : '';
+}
+
+// 章节标题：有「部」时带上部名，否则只显示原始标题。
+function chapterTitle(chapter) {
+    if (!chapter || !chapter.title) return '';
+    return chapter.part ? `${chapter.part} · ${chapter.title}` : chapter.title;
+}
+
 function formatBlockLocation(bookName, blockIndex) {
     const idx = Number(blockIndex);
     const count = getBookBlockCount(bookName);
     if (!isFiniteNumber(idx) || idx < 0 || count <= 0) return '暂无全书定位';
-    return `第 ${idx + 1}/${count} 个片段 · 约全书 ${(((idx + 1) / count) * 100).toFixed(1)}%`;
+    const chapter = getBlockChapter(bookName, idx);
+    const chapterPart = chapter ? ` · ${chapterLabel(chapter)}` : '';
+    return `第 ${idx + 1}/${count} 个片段${chapterPart} · 约全书 ${(((idx + 1) / count) * 100).toFixed(1)}%`;
+}
+
+// 全书概况：详情面板里给一次「这本书有多长、怎么切的、识别到几章」
+function formatBookOverview(bookName) {
+    const meta = normalizeBookMeta(bookName);
+    if (!meta) return '';
+    const parts = [];
+    if (isFiniteNumber(meta.totalWords)) {
+        parts.push(`全书约 ${meta.totalWords.toLocaleString('zh-CN')} 词`);
+    } else if (isFiniteNumber(meta.analyzedWords)) {
+        // 老数据没有真实总词数，只能给出滑窗覆盖的词次，如实说明
+        parts.push(`全书长度未记录（按窗口推算约 ${Math.round(meta.analyzedWords).toLocaleString('zh-CN')} 词次）`);
+    }
+    parts.push(`切成 ${meta.totalBlocks} 个片段`);
+    parts.push(`每段 ${meta.blockSize.toLocaleString('zh-CN')} 词、相邻段重叠 ${meta.blockSize - meta.step > 0 ? (meta.blockSize - meta.step).toLocaleString('zh-CN') : 0} 词`);
+    if (meta.chapters) {
+        parts.push(`自动识别到 ${meta.chapters.length} 章`);
+        const tail = chaptersWithoutBlocks(bookName);
+        if (tail.length > 0) {
+            parts.push(`其中末尾 ${tail.length} 章（第 ${tail[0]} 章起）在滑动窗口的截断范围内，没有对应片段`);
+        }
+    } else {
+        parts.push('未识别到章节标题');
+    }
+    return parts.join(' · ');
 }
 
 function formatWordCount(wordCount) {
@@ -1009,19 +1619,45 @@ document.addEventListener('click', (event) => {
 // 📏 指标解读参考区间（R3）：纯数据驱动，不编造固定阈值
 // ==========================================
 
+// 一批书的指标均值范围（只看有数据的书）
+function getMetricMeanRange(bookNames, metric) {
+    const means = bookNames
+        .map(name => {
+            const values = getMetricValues(name, metric).map(d => d.value);
+            return values.length > 0 ? d3.mean(values) : null;
+        })
+        .filter(isFiniteNumber);
+    if (means.length === 0) return null;
+    return { count: means.length, min: d3.min(means), max: d3.max(means) };
+}
+
 function getMetricContextLine(metric) {
     if (!realData) return '';
-    const means = [];
-    Object.keys(realData).forEach(name => {
-        const vals = getMetricValues(name, metric).map(d => d.value);
-        if (vals.length === 0) return;
-        const m = d3.mean(vals);
-        if (isFiniteNumber(m)) means.push(m);
-    });
-    if (means.length < 2) return ''; // 书太少时不硬给“范围”，避免误导
-    const min = d3.min(means);
-    const max = d3.max(means);
-    let line = `参考一下：目前这 ${means.length} 本书的整体水平大约在 ${formatMetricValue(min)} 到 ${formatMetricValue(max)} 之间（会随选书变化，仅供横向比较）。`;
+    const loaded = Object.keys(realData);
+    if (loaded.length === 0) return '';
+
+    // 基准用「服务器上常驻的示例书」——用户自己的书不该拿来当参照物；
+    // 没有内置书（例如只有自己上传的书）时退回全部已加载的书
+    const builtinLoaded = builtinBookNames.filter(name => loaded.includes(name));
+    const baselineNames = builtinLoaded.length > 0 ? builtinLoaded : loaded;
+    const baseline = getMetricMeanRange(baselineNames, metric);
+
+    const selectedNames = Array.from(selectedBooks);
+    const selected = getMetricMeanRange(selectedNames, metric);
+    const sameAsBaseline = selectedNames.length === baselineNames.length
+        && selectedNames.every(name => baselineNames.includes(name));
+
+    const parts = [];
+    if (baseline) {
+        const label = builtinLoaded.length > 0 ? '内置示例书' : '当前已加载的书';
+        parts.push(`参考区间：${label}（${baseline.count} 本）的平均水平大致在 ${formatMetricValue(baseline.min)} – ${formatMetricValue(baseline.max)}，这只是个参照，不是好坏标准。`);
+    }
+    if (selected && !sameAsBaseline) {
+        parts.push(`你选中的 ${selected.count} 本在 ${formatMetricValue(selected.min)} – ${formatMetricValue(selected.max)} 之间。`);
+    }
+    if (parts.length === 0) return '';
+
+    let line = parts.join(' ');
     if (metric === 'hapaxLegomena') {
         line += ' 独特词的数量会受片段长短影响，建议只在本页选中的书之间比较。';
     } else if (metric === 'functionWords') {
@@ -1077,8 +1713,34 @@ function toggleMetric() {
     }
 }
 
+// 导出的必须是「眼前这一张图」。
+// 旧写法写死 #main-chart，于是在「风格星系」「全书对比」下点导出，
+// 拿到的仍是基础趋势的热力图，跟屏幕上的图不是一回事。
+function getExportTarget() {
+    if (currentTab === 'view-galaxy') {
+        return { element: document.querySelector('#galaxy-container svg'), label: '风格星系' };
+    }
+    if (currentTab === 'view-dashboard') {
+        const element = document.querySelector('#adv-mean svg') || document.querySelector('#adv-line svg');
+        return { element, label: '全书对比' };
+    }
+    return {
+        element: document.getElementById('main-chart'),
+        label: chartType === 'line' ? '折线趋势图' : '指纹热力图'
+    };
+}
+
+// 文件名里的书：多本时不再只写第一本的名字（导出的是对比图，不是单书图）
+function exportFileLabel() {
+    const books = Array.from(selectedBooks);
+    if (books.length === 0) return 'Comparison';
+    if (books.length > 1) return '多书对比';
+    return books[0].replace(/\s+/g, '_');
+}
+
 function exportChart() {
-    const svg = document.getElementById('main-chart');
+    const target = getExportTarget();
+    const svg = target.element;
     if (!svg) {
         showError("找不到图表元素");
         return;
@@ -1118,9 +1780,8 @@ function exportChart() {
         
         const link = document.createElement('a');
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const bookName = Array.from(selectedBooks)[0] ? Array.from(selectedBooks)[0].replace(/\s+/g, '_') : 'Comparison';
-        
-        link.download = `文印_${bookName}_${chartType}_${timestamp}.png`;
+
+        link.download = `文印_${exportFileLabel()}_${target.label}_${timestamp}.png`;
         link.href = canvas.toDataURL('image/png');
         
         document.body.appendChild(link); 
@@ -1165,6 +1826,7 @@ function exportSummary() {
         `- 怎么理解：${metricHint}`,
         ...(contextLine ? [`- 解读参考：${contextLine}`] : []),
         `- 选择书籍：${books.map(getBookDisplayName).join('、')}`,
+        `- 在线视图（打开即还原本次选择）：${buildStateUrl()}`,
         ''
     ];
 
@@ -1187,6 +1849,14 @@ function exportSummary() {
         lines.push('');
     });
 
+    // 方法说明：写清这次是怎么算的，别人照着能复现
+    const methods = buildMethodsParagraph(books);
+    if (methods) {
+        lines.push('## 方法说明');
+        lines.push(methods);
+        lines.push('');
+    }
+
     lines.push('> 说明：本摘要用于记录当前页面的选择。图中的数值与位置只是风格方面的数据，请结合作品原文与具体片段理解，不宜单独当作文学质量高低的评判。');
 
     const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
@@ -1198,6 +1868,217 @@ function exportSummary() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(link.href);
+}
+
+// ==========================================
+// ⤓ 导出：数据表 / 引用 / 矢量图
+// ==========================================
+
+function downloadBlob(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const link = document.createElement('a');
+    link.download = filename;
+    link.href = URL.createObjectURL(blob);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+}
+
+function exportTimestamp() {
+    return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+}
+
+// 导出的书名清单：当前选中、且在这个观察角度下确实有数据
+function getExportBooks() {
+    if (!realData || selectedBooks.size === 0) return [];
+    return Array.from(selectedBooks).filter(book => getMetricValues(book, currentMetric).length > 0);
+}
+
+// 按片段序号取出某指标的原始条目（按 block 对齐，避免四个指标之间错位）
+function getBlockSeriesMap(bookName, metric) {
+    const map = new Map();
+    const series = realData && realData[bookName] ? realData[bookName][metric] : null;
+    if (Array.isArray(series)) {
+        series.forEach(item => {
+            if (item && isFiniteNumber(item.block)) map.set(Number(item.block), item);
+        });
+    }
+    return map;
+}
+
+// 选中书籍的共同坐标基底。
+//
+// 关键点：判定必须落在「本次选中的每一本」上。旧写法先 filter 掉没有投影的书
+// （v1 数据没有 projection 字段）再判断剩下的全共享，于是混选一本旧书时
+// 摘要照样宣称「各书坐标落在同一基底上，可直接比较」——当着旧书的面说假话。
+function getSharedProjection(books) {
+    const entries = books.map(name => {
+        const meta = normalizeBookMeta(name);
+        return { name, projection: meta ? meta.projection : null };
+    });
+    const legacy = entries.filter(e => !e.projection || e.projection.mode !== 'shared' || !e.projection.modelId);
+    const modelIds = new Set(entries.map(e => e.projection && e.projection.modelId).filter(Boolean));
+    const allShared = entries.length > 0 && legacy.length === 0 && modelIds.size === 1;
+
+    return {
+        model: allShared ? entries[0].projection : null,
+        allShared,
+        legacyBooks: legacy.map(e => e.name),
+        mixedModels: legacy.length === 0 && modelIds.size > 1
+    };
+}
+
+// 跨书比较是否成立，用一句话说清楚；不成立时点名是哪几本拖了后腿
+function buildComparabilitySentence(books) {
+    const { model, allShared, legacyBooks, mixedModels } = getSharedProjection(books);
+    if (allShared) {
+        const ratio = (model.explainedVarianceRatio || []).map(v => `${(v * 100).toFixed(1)}%`).join(' / ');
+        return `功能词投影由统一的坐标模型计算（模型编号 ${model.modelId}${ratio ? `，前两个主成分解释方差 ${ratio}` : ''}），因此各书的坐标落在同一基底上，可直接比较。`;
+    }
+    if (legacyBooks.length > 0) {
+        const names = legacyBooks.map(name => `《${getBookDisplayName(name)}》`).join('、');
+        return `功能词投影由统一的坐标模型计算，但${names}是旧版数据、没有共同坐标基准，${legacyBooks.length > 1 ? '这几本' : '这一本'}的坐标不参与跨书比较；其余书之间可直接比较。`;
+    }
+    if (mixedModels) {
+        return '选中的书来自不同的坐标模型，坐标没有落在同一基底上，不宜跨书解读。';
+    }
+    return '功能词坐标由各书单独拟合，只可在同一本书内部比较，不宜跨书解读。';
+}
+
+// 方法说明（自动生成）：把这次分析用的参数如实写下来，别人照着能复现
+function buildMethodsParagraph(books) {
+    const metas = books.map(name => normalizeBookMeta(name)).filter(Boolean);
+    if (metas.length === 0) return '';
+
+    const blockSizes = Array.from(new Set(metas.map(meta => meta.blockSize)));
+    const steps = Array.from(new Set(metas.map(meta => meta.step)));
+    const totalBlocks = metas.reduce((sum, meta) => sum + (meta.totalBlocks || 0), 0);
+    const chapterCounts = metas.map(meta => (meta.chapters ? meta.chapters.length : 0)).filter(n => n > 0);
+
+    const parts = [];
+    parts.push(`本次分析使用「文印」文学指纹工具，共分析 ${books.length} 本书、${totalBlocks} 个文本块。`);
+    parts.push(`文本经 Project Gutenberg 页眉页脚清理与常见缩写还原后，按每块 ${blockSizes.join('/')} 词、相邻块重叠 ${blockSizes.map((size, i) => size - steps[i]).join('/')} 词的滑动窗口切分。`);
+    parts.push('计算指标包括平均句长、用词重复度（Simpson\'s D）、独特词丰富度（Honoré R）与功能词二维投影。');
+    parts.push(buildComparabilitySentence(books));
+    if (chapterCounts.length > 0) {
+        parts.push(`章节边界由章节标题自动识别（本次识别到 ${chapterCounts.join('、')} 章），用于定位片段所在的章节；章号是识别结果，不是人工标注的章号。`);
+    }
+    parts.push(`生成时间：${new Date().toLocaleString('zh-CN')}。在线视图：${buildStateUrl()}`);
+    return parts.join('');
+}
+
+// 导出数据表（CSV）：每个片段一行，四个指标并列，可直接用 Excel / R / SPSS 打开
+function exportTableData() {
+    const books = getExportBooks();
+    if (books.length === 0) {
+        showError('当前没有可导出的分析数据。请先选择书籍或上传文本。');
+        return;
+    }
+
+    const header = ['书名', '片段序号', '所在章节', '起始词位置', '平均句长', '用词重复度', '独特词丰富度', '风格走向_横轴', '风格走向_纵轴', '关键词'];
+    const rows = [header];
+
+    books.forEach(book => {
+        const meta = normalizeBookMeta(book);
+        const totalBlocks = getBookBlockCount(book);
+        const series = {
+            sentenceLength: getBlockSeriesMap(book, 'sentenceLength'),
+            simpsonIndex: getBlockSeriesMap(book, 'simpsonIndex'),
+            hapaxLegomena: getBlockSeriesMap(book, 'hapaxLegomena'),
+            functionWords: getBlockSeriesMap(book, 'functionWords')
+        };
+
+        for (let i = 0; i < totalBlocks; i += 1) {
+            const chapter = getBlockChapter(book, i);
+            const words = series.functionWords.get(i) || series.sentenceLength.get(i) || {};
+            const value = (key) => {
+                const item = series[key].get(i);
+                return item && isFiniteNumber(item.value) ? String(item.value) : '';
+            };
+            const style = series.functionWords.get(i);
+            rows.push([
+                book,
+                String(i + 1),
+                chapter ? `${chapterLabel(chapter)} ${chapterTitle(chapter)}` : '',
+                meta ? String(i * meta.step + 1) : '', // 起始词位置从第 1 个词数起
+                value('sentenceLength'),
+                value('simpsonIndex'),
+                value('hapaxLegomena'),
+                style && isFiniteNumber(style.value) ? String(style.value) : '',
+                style && isFiniteNumber(style.value_y) ? String(style.value_y) : '',
+                Array.isArray(words.keywords) ? words.keywords.join(' ') : ''
+            ]);
+        }
+    });
+
+    const csv = rows.map(row => row.map(cell => {
+        const text = String(cell ?? '');
+        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    }).join(',')).join('\r\n');
+
+    // 带 BOM：Excel 打开中文 CSV 默认按本地编码解析，没有 BOM 会乱码
+    downloadBlob('﻿' + csv, `文印_数据表_${exportTimestamp()}.csv`, 'text/csv;charset=utf-8');
+}
+
+// 导出引用条目（BibTeX）：给报告、论文的参考文献用
+function exportCitation() {
+    const books = getExportBooks();
+    if (books.length === 0) {
+        showError('当前没有可导出的分析数据。请先选择书籍或上传文本。');
+        return;
+    }
+
+    const metas = books.map(name => normalizeBookMeta(name)).filter(Boolean);
+    const totalBlocks = metas.reduce((sum, meta) => sum + (meta.totalBlocks || 0), 0);
+    // 只有在选中书共用同一个模型时才敢把模型编号写进条目
+    const sharedModel = getSharedProjection(books).model;
+    const now = new Date();
+    const key = `wenxin${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    // 本机打开时 url 是 localhost，别人点开是打不开的，得在 note 里说清楚
+    const localUrlNote = isLocalHost() ? '；在线视图为本机地址（localhost），仅供本机打开' : '';
+
+    // 每个字段末尾都要有逗号（BibTeX 靠逗号分字段，漏一个会整条报错、
+    // 丢掉除标题外的全部字段）；最后一行 url 后面不能有逗号。
+    const entry = [
+        `@misc{${key},`,
+        `  title        = {文印·文学指纹分析：${books.map(name => `{${getBookDisplayName(name)}}`).join('、')}},`,
+        `  author       = {{文印（文学指纹分析工具）}},`,
+        `  year         = {${now.getFullYear()}},`,
+        `  month        = {${monthNames[now.getMonth()]}},`,
+        `  howpublished = {在线交互式分析（Keim \\& Oelke 2007 指标口径）},`,
+        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNote}},`,
+        `  url          = {${buildStateUrl()}}`,
+        '}',
+        ''
+    ].join('\n');
+
+    downloadBlob(entry, `文印_引用_${exportTimestamp()}.bib`, 'application/x-bibtex;charset=utf-8');
+}
+
+// 导出矢量图（SVG）：论文排版放大不糊
+function exportVectorChart() {
+    const target = getExportTarget();
+    const svg = target.element;
+    if (!svg) {
+        showError('找不到图表元素');
+        return;
+    }
+
+    let source = new XMLSerializer().serializeToString(svg);
+    if (!source.match(/^<svg[^>]+xmlns="http:\/\/www\.w3\.org\/2000\/svg"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    const styleString = `
+        <style>
+            text { font-family: 'Microsoft YaHei', sans-serif; fill: #2f2a23; }
+            .heatmap-rect { stroke: #e4d9c3; stroke-width: 1px; }
+            .axis path, .axis line { fill: none; stroke: #98907f; shape-rendering: crispEdges; }
+        </style>`;
+    source = source.replace('</svg>', styleString + '</svg>');
+
+    downloadBlob(source, `文印_${exportFileLabel()}_${target.label}_${exportTimestamp()}.svg`, 'image/svg+xml;charset=utf-8');
 }
 
 function showLoading(message) {
@@ -1266,6 +2147,13 @@ function initStyleGalaxy() {
         return;
     }
 
+    // 可比的（同一个坐标基底）才画进同一张图；实在一本可比都没有时，
+    // 退回各书各自的坐标来画，只是下面会明确写清「不可直接比较」
+    const comparability = getGalaxyComparability(books);
+    const independentMode = comparability.plotBooks.length === 0;
+    const plotBooks = independentMode ? books : comparability.plotBooks;
+    const skippedBooks = new Set(independentMode ? [] : comparability.independentBooks);
+
     const container = document.getElementById('galaxy-container');
     // 重要：如果容器不可见（clientWidth=0），则中止，防止错误
     if (!container || container.clientWidth === 0) return;
@@ -1308,6 +2196,10 @@ function initStyleGalaxy() {
             swatch.style.background = colorScale(book);
             item.appendChild(swatch);
             item.appendChild(document.createTextNode(getBookDisplayName(book)));
+            if (skippedBooks.has(book)) {
+                item.classList.add('galaxy-legend-skipped');
+                item.appendChild(document.createTextNode('（未画入）'));
+            }
             legendEl.appendChild(item);
         });
     }
@@ -1331,8 +2223,9 @@ function initStyleGalaxy() {
     });
 
     let allNodes = [];
+    let droppedBlocks = 0;
 
-    books.forEach((bookName, bookIndex) => {
+    plotBooks.forEach((bookName) => {
         const positionData = getMetricValues(bookName, 'functionWords');
         const displayData = getMetricValues(bookName, currentMetric);
 
@@ -1340,14 +2233,18 @@ function initStyleGalaxy() {
             positionData.forEach((d, i) => {
                 const metricItem = displayData[i];
                 if (!metricItem || !isFiniteNumber(d.value) || !isFiniteNumber(metricItem.value)) return;
-                const pcaY = isFiniteNumber(d.value_y) ? d.value_y : getDeterministicFallbackY(bookIndex, Number(d.block) || i);
+                // 没有第二个坐标就画不出位置，宁可少画一个点也不编一个
+                if (!isFiniteNumber(d.value_y)) {
+                    droppedBlocks += 1;
+                    return;
+                }
 
                 allNodes.push({
                     id: `${bookName}_${d.block}`,
                     book: bookName,
                     blockIndex: d.block,
                     pcaX: d.value,
-                    pcaY,
+                    pcaY: d.value_y,
                     realValue: metricItem.value,
                     preview: metricItem.preview,
                     extendedPreview: d.extended_preview || metricItem.preview,
@@ -1357,6 +2254,8 @@ function initStyleGalaxy() {
             });
         }
     });
+
+    renderGalaxyNote(comparability, null, droppedBlocks);
 
     if (allNodes.length === 0) {
         if (loadingEl) {
@@ -1371,11 +2270,13 @@ function initStyleGalaxy() {
         .domain(metricExtent)
         .range([4, 18]);
 
-    const xExtent = normalizeExtent(d3.extent(allNodes, d => d.pcaX));
-    const yExtent = normalizeExtent(d3.extent(allNodes, d => d.pcaY));
+    const galaxyExtent = resolveGalaxyExtent(allNodes, independentMode ? null : comparability.axisExtent);
+    const xExtent = galaxyExtent.x;
+    const yExtent = galaxyExtent.y;
     const padding = 60;
     const xScale = d3.scaleLinear().domain(xExtent).range([padding, width - padding]);
     const yScale = d3.scaleLinear().domain(yExtent).range([padding, height - padding]);
+    renderGalaxyNote(comparability, galaxyExtent, droppedBlocks);
 
     allNodes.forEach(d => {
         d.r = radiusScale(d.realValue);
@@ -1561,11 +2462,34 @@ function openGalaxyModal(d) {
 
     modal.setAttribute('aria-hidden', 'false');
     modal.style.display = 'flex';
+    document.addEventListener('keydown', trapModalFocus);
     setTimeout(() => {
         modal.classList.add('show');
         const closeButton = modal.querySelector('.galaxy-modal-close');
         if (closeButton) closeButton.focus();
     }, 10);
+}
+
+// 键盘焦点陷阱：弹窗打开时 Tab 只在弹窗内部循环，
+// 否则焦点会跑到背后看不见的页面上，读屏用户会彻底迷失
+function trapModalFocus(event) {
+    const modal = document.getElementById('galaxy-modal');
+    if (!modal || event.key !== 'Tab') return;
+
+    const focusables = Array.from(
+        modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+    ).filter(el => !el.hidden && el.offsetParent !== null);
+    if (focusables.length === 0) return;
+
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+    }
 }
 
 function closeGalaxyModal() {
@@ -1574,6 +2498,7 @@ function closeGalaxyModal() {
 
     modal.classList.remove('show');
     modal.setAttribute('aria-hidden', 'true');
+    document.removeEventListener('keydown', trapModalFocus);
     setTimeout(() => {
         modal.style.display = 'none';
         if (lastGalaxyTrigger && typeof lastGalaxyTrigger.focus === 'function') {
@@ -1781,26 +2706,42 @@ function initMatrixRain() {
     };
 }
 
-function toggleMatrixRain() {
+function setMatrixRain(on) {
     const canvas = document.getElementById('matrix-canvas');
     const btn = document.getElementById('btn-matrix');
-    
-    isMatrixOn = !isMatrixOn;
+    if (!canvas || !btn) return;
+
+    isMatrixOn = !!on;
 
     if (isMatrixOn) {
-        initMatrixRain(); 
-        canvas.classList.add('active'); 
+        initMatrixRain();
+        canvas.classList.add('active');
         btn.classList.add('active');
         btn.innerHTML = "■ 停止文本雨";
+        btn.setAttribute('aria-pressed', 'true');
     } else {
-        canvas.classList.remove('active'); 
+        canvas.classList.remove('active');
         btn.classList.remove('active');
         btn.innerHTML = "⋮ 激活文本雨";
-        
+        btn.setAttribute('aria-pressed', 'false');
+
         setTimeout(() => {
             if (matrixInterval) clearInterval(matrixInterval);
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
         }, 1000);
+    }
+}
+
+function toggleMatrixRain() {
+    setMatrixRain(!isMatrixOn);
+}
+
+// 系统是否要求「减少动态效果」。只用于决定默认状态，手动开关不受影响。
+function prefersReducedMotion() {
+    try {
+        return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (e) {
+        return false;
     }
 }

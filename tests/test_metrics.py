@@ -23,9 +23,13 @@ from src.metrics import (
     calc_sentence_length,
     calc_simpsons_index,
     calc_hapax_legomena,
+    fit_pca_projection,
+    function_word_matrix,
     get_top_keywords,
+    project_blocks,
 )
 from src.data_loader import get_blocks, load_clean_text
+from src.projection import build_model, compute_model_id, load_model, save_model
 
 
 class TestAverageSentenceLength(unittest.TestCase):
@@ -122,6 +126,164 @@ class TestLoadCleanText(unittest.TestCase):
         self.assertIn("real body text", cleaned)
         self.assertNotIn("START OF THE PROJECT GUTENBERG", cleaned)
         self.assertNotIn("license noise", cleaned)
+
+
+class TestFunctionWordMatrix(unittest.TestCase):
+    """功能词矩阵：必须按行归一化，否则第一主成分会退化成「这一段有多长」。"""
+
+    VOCABULARY = ["the", "and", "of", "a", "to", "he", "she", "it"]
+
+    def test_rows_sum_to_one(self):
+        blocks = [
+            "the the and of a",
+            "he she it the and of a to",
+            "the and of",
+        ]
+        matrix, vocabulary = function_word_matrix(blocks, vocabulary=self.VOCABULARY)
+        self.assertEqual(list(vocabulary), self.VOCABULARY)
+        for row in matrix:
+            self.assertAlmostEqual(float(sum(row)), 1.0, places=9)
+
+    def test_same_usage_different_length_gives_same_row(self):
+        """同样的用词比例，长短不同也应该落在同一个点上。"""
+        short = "the the and of"
+        long = "the the and of the the and of"
+        matrix, _ = function_word_matrix([short, long], vocabulary=self.VOCABULARY)
+        for a, b in zip(matrix[0], matrix[1]):
+            self.assertAlmostEqual(float(a), float(b), places=9)
+
+    def test_row_without_function_words_stays_zero(self):
+        """一个功能词都没有的块保持全 0，不能除零变成 nan。"""
+        matrix, _ = function_word_matrix(["river mountain"], vocabulary=self.VOCABULARY)
+        self.assertEqual(float(sum(matrix[0])), 0.0)
+
+    def test_empty_blocks_returns_none(self):
+        matrix, vocabulary = function_word_matrix([], vocabulary=self.VOCABULARY)
+        self.assertIsNone(matrix)
+        self.assertEqual(vocabulary, [])
+
+
+class TestSharedProjection(unittest.TestCase):
+    """共享投影：同一段文字在任何一本书里都得到同一坐标。"""
+
+    VOCABULARY = ["the", "and", "of", "a", "to", "he", "she", "it"]
+
+    BLOCKS_A = [
+        "the the and of a to",
+        "he she it the and",
+        "of a to the the the",
+    ]
+    BLOCKS_B = [
+        "she she it it the",
+        "a a to to of and",
+        "he the of a it she",
+    ]
+
+    def _matrix(self, blocks):
+        matrix, _ = function_word_matrix(blocks, vocabulary=self.VOCABULARY)
+        return matrix
+
+    def test_same_block_same_coordinates_across_books(self):
+        """在 A∪B 上拟合，A 的坐标与单独投影 A 完全一致——这就是「可比」。"""
+        matrix_all = self._matrix(self.BLOCKS_A + self.BLOCKS_B)
+        model = fit_pca_projection(matrix_all)
+        together = project_blocks(matrix_all, model)
+        alone = project_blocks(self._matrix(self.BLOCKS_A), model)
+
+        for i in range(len(self.BLOCKS_A)):
+            self.assertAlmostEqual(float(together[i][0]), float(alone[i][0]), places=9)
+            self.assertAlmostEqual(float(together[i][1]), float(alone[i][1]), places=9)
+
+    def test_new_block_projects_without_refitting(self):
+        """新文本（比如用户上传的书）用同一个模型投影，旧书的坐标不能变。"""
+        matrix_all = self._matrix(self.BLOCKS_A + self.BLOCKS_B)
+        model = fit_pca_projection(matrix_all)
+        before = project_blocks(matrix_all, model)
+
+        extra = self._matrix(["the and of a to he she it"])
+        project_blocks(extra, model)
+        after = project_blocks(matrix_all, model)
+
+        for i in range(len(self.BLOCKS_A + self.BLOCKS_B)):
+            self.assertAlmostEqual(float(before[i][0]), float(after[i][0]), places=12)
+            self.assertAlmostEqual(float(before[i][1]), float(after[i][1]), places=12)
+
+    def test_sign_is_deterministic(self):
+        """同一份矩阵拟合两次，主成分的方向必须一致；且最大载荷为正。"""
+        matrix = self._matrix(self.BLOCKS_A + self.BLOCKS_B)
+        first = fit_pca_projection(matrix)
+        second = fit_pca_projection(matrix)
+
+        self.assertEqual(first["components"], second["components"])
+        for row in first["components"]:
+            strongest = max(range(len(row)), key=lambda j: abs(row[j]))
+            self.assertGreater(row[strongest], 0)
+
+    def test_explained_variance_ratio_is_finite(self):
+        """所有行相同（方差为 0）时 sklearn 会给出 nan，写进 JSON 会让文件读不出来。"""
+        matrix = self._matrix(["the the and of a to"] * 3)
+        model = fit_pca_projection(matrix)
+        for ratio in model["explainedVarianceRatio"]:
+            self.assertTrue(math.isfinite(ratio))
+
+
+class TestModelPersistence(unittest.TestCase):
+    """模型落盘 / 读回：同一份模型必须给出同一批坐标与同一个 modelId。"""
+
+    VOCABULARY = ["the", "and", "of", "a", "to", "he", "she", "it"]
+
+    def _fit(self):
+        blocks = [
+            "the the and of a to",
+            "he she it the and",
+            "of a to the the the",
+            "she she it it the",
+        ]
+        matrix, vocabulary = function_word_matrix(blocks, vocabulary=self.VOCABULARY)
+        return matrix, build_model(matrix, vocabulary, fitted_on={"books": ["synthetic"]})
+
+    def test_round_trip_keeps_model_id_and_coordinates(self):
+        matrix, model = self._fit()
+        expected = project_blocks(matrix, model)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pca_model.json"
+            save_model(model, path)
+            loaded = load_model(path)
+
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded["modelId"], model["modelId"])
+        self.assertEqual(model["modelId"], compute_model_id(model))
+        self.assertEqual(loaded["components"], model["components"])
+
+        actual = project_blocks(matrix, loaded)
+        for i in range(len(matrix)):
+            self.assertAlmostEqual(float(expected[i][0]), float(actual[i][0]), places=12)
+            self.assertAlmostEqual(float(expected[i][1]), float(actual[i][1]), places=12)
+
+    def test_missing_file_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(load_model(Path(tmp) / "not-there.json"))
+
+    def test_broken_file_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pca_model.json"
+            path.write_text("{ not json", encoding="utf-8")
+            self.assertIsNone(load_model(path))
+
+    def test_incomplete_model_returns_none(self):
+        """缺 mean/components 的文件不用，免得投影时算出莫名其妙的结果。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pca_model.json"
+            path.write_text('{"version": 1}', encoding="utf-8")
+            self.assertIsNone(load_model(path))
+
+    def test_axis_labels_are_plain_language(self):
+        _, model = self._fit()
+        labels = model["axisLabels"]
+        self.assertEqual(len(labels), 2)
+        for label in labels:
+            self.assertIn("占的比例越高", label)
 
 
 if __name__ == "__main__":

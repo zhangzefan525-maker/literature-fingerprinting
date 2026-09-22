@@ -130,6 +130,19 @@ python api_server.py
 python -m unittest discover -s tests -v
 ```
 
+**删除「我的图书馆」里的书**：删除需要保存时签发的令牌（存在保存它的浏览器里），
+本机也一样——`Host` 头是客户端说了算的，拿它当删除授权等于没授权。
+清过浏览器数据、又想删掉本机的旧文件时，可以显式开启本机豁免：
+
+```bash
+# Windows (cmd)
+set ALLOW_LOCAL_DELETE=1 && python api_server.py
+# macOS / Linux / Git Bash
+ALLOW_LOCAL_DELETE=1 python api_server.py
+```
+
+或者直接删掉 `data/library/<书名>.json`。
+
 **Streamlit 经典模式**（⚠️ 已归档，仅作实验性参考；正式产品为上方 D3 版，新用户无需关注）：
 
 ```bash
