@@ -251,6 +251,15 @@
     <script src="static/js/d3-charts.js"></script>
     <script>
         // 挂载综合仪表盘的初始化逻辑 (从原文件底部移入，保持模块化)
+        //
+        // 显示指标数值一律走这个函数（它转发到 d3-charts.js 的 formatMetric）：
+        // 位数跟着指标走，别在这里另写 toFixed(2)，否则「用词重复度」这种
+        // 0.0089–0.0155 区间的指标会被统一压成 0.01，四本书看着一模一样。
+        function fmtMetric(value) {
+            if (typeof formatMetric === 'function') return formatMetric(value);
+            return Number.isFinite(value) ? Number(value).toFixed(2) : '暂无';
+        }
+
         // 1. 全局配置与状态
         const advMargin = {top: 35, right: 20, bottom: 100, left: 50};
         
@@ -470,7 +479,7 @@
                             ? formatBlockLocation(book, item.block)
                             : `第 ${Number(item.block) + 1} 个片段`;
                         const compare = Number.isFinite(mean)
-                            ? `比全书平均（${mean.toFixed(2)}）${dirText}${Math.abs(value - mean).toFixed(2)}`
+                            ? `比全书平均（${fmtMetric(mean)}）${dirText}${fmtMetric(Math.abs(value - mean))}`
                             : '';
                         const keywords = Array.isArray(item.keywords) && item.keywords.length
                             ? `<div class="anomaly-keywords">关键词：${escapeHtml(item.keywords.join('、'))}</div>`
@@ -481,7 +490,7 @@
                         return `
                             <div class="anomaly-item">
                                 <div class="anomaly-head"><span class="anomaly-tag">${dirText}</span>${escapeHtml(location)}</div>
-                                <div class="anomaly-value">${mLabel} ${Number.isFinite(value) ? value.toFixed(2) : ''}${compare ? ` · ${compare}` : ''}</div>
+                                <div class="anomaly-value">${mLabel} ${Number.isFinite(value) ? fmtMetric(value) : ''}${compare ? ` · ${compare}` : ''}</div>
                                 ${preview}
                                 ${keywords}
                             </div>`;
@@ -499,7 +508,7 @@
         const INSIGHT_METRIC = {
             sentenceLength: { up: '中后段句子越写越长', down: '中后段句子越写越短', high: '整体句子最长', low: '整体句子最短' },
             simpsonIndex:  { up: '中后段用词越来越重复', down: '中后段用词越来越丰富', high: '用词重复度最高（词汇较单调）', low: '用词重复度最低（词汇最丰富）' },
-            hapaxLegomena:{ up: '中后段独特词越来越多（用词更丰富）', down: '中后段独特词越来越少', high: '独特词最多（用词最丰富）', low: '独特词最少' },
+            hapaxLegomena:{ up: '中后段用词越来越丰富（独特词占比变高）', down: '中后段用词越来越单调（独特词占比变低）', high: '用词最丰富', low: '用词最单调' },
             functionWords: { up: '中后段风格走向持续偏移', down: '中后段风格走向趋于回归', high: null, low: null }
         };
 
@@ -518,9 +527,9 @@
             if (data.length >= 2 && cfg.high) {
                 const highest = [...data].sort((a, b) => b.currentMean - a.currentMean)[0];
                 const lowest  = [...data].sort((a, b) => a.currentMean - b.currentMean)[0];
-                lines.push(`《${highest.displayName || highest.name}》${cfg.high}（${highest.currentMean.toFixed(2)}），《${lowest.displayName || lowest.name}》${cfg.low}（${lowest.currentMean.toFixed(2)}）。`);
+                lines.push(`《${highest.displayName || highest.name}》${cfg.high}（${fmtMetric(highest.currentMean)}），《${lowest.displayName || lowest.name}》${cfg.low}（${fmtMetric(lowest.currentMean)}）。`);
             } else if (data.length === 1) {
-                lines.push(`《${data[0].displayName || data[0].name}》的「${mLabel}」整体水平为 ${data[0].currentMean.toFixed(2)}。`);
+                lines.push(`《${data[0].displayName || data[0].name}》的「${mLabel}」整体水平为 ${fmtMetric(data[0].currentMean)}。`);
                 // 单书时给出基准参照：与其他已加载书籍的平均水平对比，让裸数字有意义
                 if (realData && Object.keys(realData).length > 1) {
                     const otherMeans = Object.entries(realData)
@@ -536,8 +545,8 @@
                         const dir = diff > 0 ? '高于' : (diff < 0 ? '低于' : '接近');
                         const cmp = dir === '接近'
                             ? '这本书与它们的水平差不多'
-                            : `这本书比它们${dir}约 ${Math.abs(diff).toFixed(2)}`;
-                        lines.push(`作为参照，其它 ${otherMeans.length} 本书的平均水平约为 ${benchmark.toFixed(2)}，${cmp}。`);
+                            : `这本书比它们${dir}约 ${fmtMetric(Math.abs(diff))}`;
+                        lines.push(`作为参照，其它 ${otherMeans.length} 本已加载的书（含你自己上传的）平均水平约为 ${fmtMetric(benchmark)}，${cmp}。`);
                     }
                 }
             } else {
@@ -590,7 +599,7 @@
                     .attr("x", d=>x(d.displayName || d.name)).attr("y", d=>y(d.currentMean)).attr("width", x.bandwidth()).attr("height", d=>h-y(d.currentMean)),
                 exit => exit.transition().duration(500).attr("height", 0).remove()
             )
-            .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>平均: ${d.currentMean.toFixed(2)}`); })
+            .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>平均: ${fmtMetric(d.currentMean)}`); })
             .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
             .on("click", (e, d) => advDrillDown(d));
         }
@@ -615,7 +624,7 @@
                 enter => enter.append("path").attr("class", d => `book-el line-path book-${d.id}`)
                     .attr("fill", "none").attr("stroke-width", 1.5).attr("stroke", d=>d.color)
                     .attr("d", d => line(d.activeSegment))
-                    .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>平均: ${d.currentMean.toFixed(1)}`); })
+                    .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>平均: ${fmtMetric(d.currentMean)}`); })
                     .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
                     .on("click", (e, d) => advDrillDown(d)),
                 update => update.attr("stroke", d => d.color).attr("d", d => line(d.activeSegment)),
@@ -627,7 +636,7 @@
                 enter => enter.append("circle").attr("class", d => `peak-dot annotation-point book-el book-${d.id}`).attr("r", 4),
                 update => update.attr("cx", d=>x(d.peak.xPercent)).attr("cy", d=>y(d.peak.value)),
                 exit => exit.remove()
-            ).on("mouseover", (e, d) => showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>最高点: ${d.peak.value.toFixed(1)}`))
+            ).on("mouseover", (e, d) => showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>最高点: ${fmtMetric(d.peak.value)}`))
              .on("mouseout", hideAdvTooltip);
 
             const brush = d3.brushX().extent([[0, 0], [w, h]]).on("end", advBrushed);
@@ -736,7 +745,7 @@
                             <strong style="color:${book.color};font-size:14px">${escapeHtml(book.displayName || book.name)}</strong>
                             <span style="font-size:10px; color:#98907f; cursor:pointer;" onclick="removeSelection('${book.id}')">✕ 移除</span>
                         </div>
-                        <div style="font-size:10px; color:#98907f; margin-bottom:5px; padding-left:5px;">平均: ${book.currentMean.toFixed(2)}</div>
+                        <div style="font-size:10px; color:#98907f; margin-bottom:5px; padding-left:5px;">平均: ${fmtMetric(book.currentMean)}</div>
                 `;
 
                 topBlocks.forEach((b, i) => {
@@ -745,7 +754,7 @@
                     const copyTxt = b.extendedPreview || b.preview || '';
                     bookHtml += `
                         <div class="drill-item" style="border-left-color:${book.color}; margin-bottom: 5px;">
-                            <strong>#${i+1} 最高点: ${b.value.toFixed(1)}</strong>
+                            <strong>#${i+1} 最高点: ${fmtMetric(b.value)}</strong>
                             <div style="margin:2px 0;color:#98907f;font-size:10px">📍 ${escapeHtml(loc)}</div>
                             <p style="margin:0;color:#98907f;line-height:1.2;max-height:50px;overflow:hidden">${b.preview ? escapeHtml(b.preview.substring(0,60)) + '...' : '无预览'}</p>
                             ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:9px">※ ${escapeHtml(keywords)}</div>` : ''}

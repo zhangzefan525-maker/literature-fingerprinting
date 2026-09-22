@@ -229,8 +229,30 @@ function truncateText(value, length = 18) {
     return text.length > length ? text.substring(0, length - 3) + '...' : text;
 }
 
-function formatMetricValue(value, digits = 2) {
-    return isFiniteNumber(value) ? value.toFixed(digits) : '暂无';
+// 每个指标的显示精度（唯一来源，别在各处另写 toFixed）。
+// 原来的 formatMetricValue(value, digits=2) 已并入 formatMetric：
+// 默认 2 位正是「用词重复度」被压成 0.01 的根因，所以不再保留那个容易误用的默认值。
+// 依据是 data/processed/all_books.json 里四本内置书的真实取值范围：
+//   平均句长    14.2 – 32.4       → 2 位够
+//   用词重复度  0.0089 – 0.0155   → 必须 4 位，2 位会把四本书全压成「0.01」，屏幕上看着一模一样
+//   独特词丰富度 1725 – 2516（Honoré R）→ 取整
+//   风格走向    ±0.07（二维坐标）  → 3 位
+const METRIC_DIGITS = {
+    sentenceLength: 2,
+    simpsonIndex: 4,
+    hapaxLegomena: 0,
+    functionWords: 3
+};
+
+function getMetricDigits(metric = currentMetric) {
+    return isFiniteNumber(METRIC_DIGITS[metric]) ? METRIC_DIGITS[metric] : 2;
+}
+
+// 显示指标数值统一走这个函数：位数跟着指标走，四个出口（详情面板 / 图注 / 摘要 / 悬停）口径一致
+function formatMetric(value, metric = currentMetric) {
+    if (!isFiniteNumber(value)) return '暂无';
+    const digits = getMetricDigits(metric);
+    return digits === 0 ? String(Math.round(value)) : value.toFixed(digits);
 }
 
 function getMetricValues(bookName, metric) {
@@ -994,7 +1016,7 @@ function drawMultiLineChart(svg, booksArray) {
             .attr("stroke-width", 1.5)
             .attr("tabindex", 0)
             .attr("role", "button")
-            .attr("aria-label", d => `${getBookDisplayName(bookData.book)} 第 ${d.block + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetricValue(d.value)}`)
+            .attr("aria-label", d => `${getBookDisplayName(bookData.book)} 第 ${d.block + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetric(d.value)}`)
             .style("cursor", "pointer")
             .style("opacity", 0) 
             .on("mouseover", function(event, d) {
@@ -1152,7 +1174,7 @@ function drawMultiHeatmap(svg, booksArray) {
             .attr("height", blockSize)
             .attr("fill", d => colorScale(d.value))
             .attr("role", "button")
-            .attr("aria-label", d => `${getBookDisplayName(bookId)} 第 ${d.block + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetricValue(d.value)}`)
+            .attr("aria-label", d => `${getBookDisplayName(bookId)} 第 ${d.block + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetric(d.value)}`)
             .on("mouseover", function(event, d) {
                 d3.select(this).style("stroke", "#b5472f").style("stroke-width", "2px");
                 showTooltip(event, d, bookId);
@@ -1237,7 +1259,7 @@ function drawMultiHeatmap(svg, booksArray) {
         .style("font-size", "18px")
         .style("font-weight", "bold")
         .style("fill", "#2f2a23")
-        .text(`${getMetricLabel(currentMetric)} - 指纹对比 (统一色标: ${globalMin.toFixed(1)} ~ ${globalMax.toFixed(1)})`);
+        .text(`${getMetricLabel(currentMetric)} - 指纹对比 (统一色标: ${formatMetric(globalMin)} ~ ${formatMetric(globalMax)})`);
 
     // 图例：低（黛蓝）↔ 高（赤），并标注当前指标的具体含义
     const [lowLabel, highLabel] = getHeatmapLegend(currentMetric);
@@ -1375,7 +1397,7 @@ function showDetail(data, bookName) {
             <h3>📖 ${escapeHtml(displayName)}</h3>
             <p class="block-location">📍 ${escapeHtml(locationText)}</p>
             ${chapterHtml}
-            <div class="value">${escapeHtml(formatMetricValue(data.value, 4))}</div>
+            <div class="value">${escapeHtml(formatMetric(data.value))}</div>
             <p><strong>${escapeHtml(getMetricLabel(currentMetric))}</strong></p>
             ${overviewHtml}
 
@@ -1407,7 +1429,7 @@ function updateMetricHint() {
     const hints = {
         sentenceLength: '一句话平均几个词。句子长，读起来更书面、更正式；句子短，更口语、更利落。',
         simpsonIndex: '这本书是不是翻来覆去用同一批词。数值越高越重复（词有点单调）；越低，用词越多样。',
-        hapaxLegomena: '书里有多少「只出现一次的独特词」。这样的词越多，说明作者用词越丰富、越不单调。',
+        hapaxLegomena: '「只出现过一次的词」在全书里占多大比例：比例越高，说明作者用词越丰富、越不单调。这个数已经按篇幅折算过，长短不同的书也能比。',
         functionWords: '不看内容，而看「的、和、是」这类高频小词的使用习惯。点越靠近只说明这些词的用法越像，不等于两本书本身相似。'
     };
     const ctxText = getMetricContextLine(currentMetric);
@@ -1650,16 +1672,16 @@ function getMetricContextLine(metric) {
     const parts = [];
     if (baseline) {
         const label = builtinLoaded.length > 0 ? '内置示例书' : '当前已加载的书';
-        parts.push(`参考区间：${label}（${baseline.count} 本）的平均水平大致在 ${formatMetricValue(baseline.min)} – ${formatMetricValue(baseline.max)}，这只是个参照，不是好坏标准。`);
+        parts.push(`参考区间：${label}（${baseline.count} 本）的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}，这只是个参照，不是好坏标准。`);
     }
     if (selected && !sameAsBaseline) {
-        parts.push(`你选中的 ${selected.count} 本在 ${formatMetricValue(selected.min)} – ${formatMetricValue(selected.max)} 之间。`);
+        parts.push(`你选中的 ${selected.count} 本在 ${formatMetric(selected.min)} – ${formatMetric(selected.max)} 之间。`);
     }
     if (parts.length === 0) return '';
 
     let line = parts.join(' ');
     if (metric === 'hapaxLegomena') {
-        line += ' 独特词的数量会受片段长短影响，建议只在本页选中的书之间比较。';
+        line += ' 独特词丰富度已经按片段篇幅折算过，长短不同的片段与书之间都可以比。';
     } else if (metric === 'functionWords') {
         line += ' 「风格走向」只是高频小词用法的一个参照方向，请结合原文理解。';
     }
@@ -1693,7 +1715,7 @@ function getHeatmapLegend(metric) {
     const legend = {
         sentenceLength: ['短句', '长句'],
         simpsonIndex: ['用词多样', '用词重复'],
-        hapaxLegomena: ['独特词较少', '独特词较多'],
+        hapaxLegomena: ['用词较单调', '用词较丰富'],
         functionWords: ['一端', '另一端']
     };
     return legend[metric] || ['低值', '高值'];
@@ -1813,7 +1835,7 @@ function exportSummary() {
     const metricHint = {
         sentenceLength: '一句话平均几个词。',
         simpsonIndex: '数值越高，用词越重复。',
-        hapaxLegomena: '书里「只出现一次的独特词」越多，用词越丰富。',
+        hapaxLegomena: '「只出现过一次的词」占比越高，用词越丰富；这个数已按篇幅折算，长短不同的书可比。',
         functionWords: '由「的、和、是」这类高频小词的使用习惯得出，仅作参照。'
     }[currentMetric] || '';
     const contextLine = getMetricContextLine(currentMetric);
@@ -1837,8 +1859,8 @@ function exportSummary() {
         lines.push(`## ${getBookDisplayName(book)}`);
         lines.push(`- 参与统计的片段数：${values.length}`);
         lines.push(`- 全书范围：全书共 ${getBookBlockCount(book)} 个片段 · 本次分析其中 ${values.length} 个片段`);
-        lines.push(`- 平均水平：${formatMetricValue(mean)}`);
-        lines.push(`- 最高片段：第 ${Number(peak.block) + 1} 个片段，数值 ${formatMetricValue(peak.value)}`);
+        lines.push(`- 平均水平：${formatMetric(mean)}`);
+        lines.push(`- 最高片段：第 ${Number(peak.block) + 1} 个片段，数值 ${formatMetric(peak.value)}`);
         lines.push(`- 片段位置：${formatBlockLocation(book, peak.block)}${formatWordCount(peak.wordCount)}`);
         if (Array.isArray(peak.keywords) && peak.keywords.length > 0) {
             lines.push(`- 最高片段关键词：${peak.keywords.join('、')}`);
@@ -2012,12 +2034,30 @@ function exportTableData() {
         }
     });
 
-    const csv = rows.map(row => row.map(cell => {
+    const body = rows.map(row => row.map(cell => {
         const text = String(cell ?? '');
         return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     }).join(',')).join('\r\n');
 
+    // 表头前的注释行：滑动窗口是重叠切分，相邻片段共享 9000 个词，
+    // 不写清楚的话，63 行很容易被当成 63 个互相独立的样本拿去做统计检验。
+    // 以 # 开头是 CSV 的通行注释约定（pandas 用 comment='#'、R 用 comment.char='#' 即可跳过）。
+    const windowSpecs = Array.from(new Set(books.map(name => {
+        const meta = normalizeBookMeta(name);
+        return meta && isFiniteNumber(meta.blockSize)
+            ? `每段 ${meta.blockSize} 词 · 相邻重叠 ${meta.overlap} 词 · 步长 ${meta.step} 词`
+            : '窗口参数未知';
+    })));
+    const comments = [
+        '# 文印·文学指纹分析 数据表',
+        `# 生成时间：${new Date().toLocaleString('zh-CN')}`,
+        `# 指标口径：平均句长（词/句）；用词重复度（Simpson，越高越重复）；独特词丰富度（Honoré R，越高用词越丰富）；风格走向_横/纵轴（高频小词用法的二维坐标）`,
+        `# 片段口径：${windowSpecs.join('；')}。同一段原文会被反复计入，请勿把这些行当作互相独立的样本，按行做显著性检验会高估样本量。`,
+        `# 数据行数：${rows.length - 1}`
+    ];
+
     // 带 BOM：Excel 打开中文 CSV 默认按本地编码解析，没有 BOM 会乱码
+    const csv = `${comments.join('\r\n')}\r\n${body}`;
     downloadBlob('﻿' + csv, `文印_数据表_${exportTimestamp()}.csv`, 'text/csv;charset=utf-8');
 }
 
@@ -2034,13 +2074,18 @@ function exportCitation() {
     // 只有在选中书共用同一个模型时才敢把模型编号写进条目
     const sharedModel = getSharedProjection(books).model;
     const now = new Date();
-    const key = `wenxin${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+    // key 必须唯一：只写年月日的话，同一天导两次（换个观察角度、换几本书）就会撞 key，
+    // 文献管理软件会把两条当成同一条。补上时分，再补一个书名首字，尽量不撞。
+    const key = `wenxin${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+        + `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+        + (books.length ? `-${books.length}book` : '');
     const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
     // 本机打开时 url 是 localhost，别人点开是打不开的，得在 note 里说清楚
     const localUrlNote = isLocalHost() ? '；在线视图为本机地址（localhost），仅供本机打开' : '';
 
     // 每个字段末尾都要有逗号（BibTeX 靠逗号分字段，漏一个会整条报错、
     // 丢掉除标题外的全部字段）；最后一行 url 后面不能有逗号。
+    // 这条记录描述的是「本次在线分析」，不是正式出版物，写进参考文献前请自己确认该引什么。
     const entry = [
         `@misc{${key},`,
         `  title        = {文印·文学指纹分析：${books.map(name => `{${getBookDisplayName(name)}}`).join('、')}},`,
@@ -2048,7 +2093,7 @@ function exportCitation() {
         `  year         = {${now.getFullYear()}},`,
         `  month        = {${monthNames[now.getMonth()]}},`,
         `  howpublished = {在线交互式分析（Keim \\& Oelke 2007 指标口径）},`,
-        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNote}},`,
+        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNote}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
         `  url          = {${buildStateUrl()}}`,
         '}',
         ''
@@ -2311,7 +2356,7 @@ function initStyleGalaxy() {
         .attr("stroke-opacity", 0.8)
         .attr("tabindex", 0)
         .attr("role", "button")
-        .attr("aria-label", d => `${getBookDisplayName(d.book)} 第 ${d.blockIndex + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetricValue(d.realValue)}`)
+        .attr("aria-label", d => `${getBookDisplayName(d.book)} 第 ${d.blockIndex + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetric(d.realValue)}`)
         .style("cursor", "pointer")
         .call(d3.drag()
             .on("start", dragstarted)
@@ -2342,7 +2387,7 @@ function initStyleGalaxy() {
 
         showTooltip(event, {
             block: d.blockIndex,
-            value: typeof d.realValue === 'number' ? d.realValue.toFixed(4) : d.realValue,
+            value: formatMetric(d.realValue),
             keywords: d.keywords,
             preview: d.preview 
         }, d.book);
@@ -2425,7 +2470,7 @@ function openGalaxyModal(d) {
         blockEl.textContent = loc || `第 ${Number(d.blockIndex) + 1} 个片段`;
     }
 
-    const valDisplay = isFiniteNumber(d.realValue) ? d.realValue.toFixed(4) : '暂无';
+    const valDisplay = formatMetric(d.realValue);
     const metricEl = document.getElementById('modal-metric-val');
     if (metricEl) metricEl.textContent = `${getMetricLabel(currentMetric)}：${valDisplay}`;
 
@@ -2597,7 +2642,7 @@ function updateHUD(analysisData, metricLabel) {
         </div>
         <div class="hud-row" style="margin-top:8px;">
             <span class="hud-label">区域平均${metricLabel}:</span>
-            <span class="hud-value" style="color:#b5472f">${analysisData.avgMetric.toFixed(2)}</span>
+            <span class="hud-value" style="color:#b5472f">${formatMetric(analysisData.avgMetric)}</span>
         </div>
         <div class="hud-row" style="margin-top:8px;">
             <span class="hud-label">共同关键词:</span>

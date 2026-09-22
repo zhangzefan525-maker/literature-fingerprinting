@@ -29,11 +29,13 @@ import api_server  # noqa: E402
 
 BUILTIN_NAME = "White Fang"
 
-# 结构与真实单书一致的最小桩（足够让路由/合并逻辑消费）
+# 结构与真实单书一致的最小桩（足够让路由/合并逻辑消费）。
+# 注意 hapaxLegomena 是 Honoré R（量级 1700–2500，见 data/processed/all_books.json），
+# 不是「只出现一次的词的个数」——写文案时别照这个桩的数值反推语义。
 FAKE_BOOK = {
     "sentenceLength": [{"block": 0, "value": 1.0, "keywords": ["alpha"], "preview": "hello", "wordCount": 2}],
     "simpsonIndex": [{"block": 0, "value": 0.5, "keywords": ["alpha"], "preview": "hello", "wordCount": 2}],
-    "hapaxLegomena": [{"block": 0, "value": 100.0, "keywords": ["alpha"], "preview": "hello", "wordCount": 2}],
+    "hapaxLegomena": [{"block": 0, "value": 1905.89, "keywords": ["alpha"], "preview": "hello", "wordCount": 2}],
     "functionWords": [{"block": 0, "value": 0.0, "value_y": 0.0, "keywords": ["alpha"],
                        "preview": "hello", "extended_preview": "hello", "wordCount": 2}],
     "metadata": {"totalBlocks": 1, "totalWords": 2, "avgSentenceLength": 1.0, "avgSimpsonIndex": 0.5},
@@ -263,7 +265,7 @@ class LegacyLibraryTestCase(LibraryApiTestCase):
     V1_BOOK = {
         "sentenceLength": [{"block": 0, "value": 2.5, "keywords": ["alpha"], "preview": "hello", "wordCount": 2}],
         "simpsonIndex": [{"block": 0, "value": 0.5, "keywords": ["alpha"], "preview": "hello", "wordCount": 2}],
-        "hapaxLegomena": [{"block": 0, "value": 100.0, "keywords": ["alpha"], "preview": "hello", "wordCount": 2}],
+        "hapaxLegomena": [{"block": 0, "value": 1905.89, "keywords": ["alpha"], "preview": "hello", "wordCount": 2}],
         "functionWords": [{"block": 0, "value": 0.1, "value_y": -0.1, "keywords": ["alpha"],
                            "preview": "hello", "extended_preview": "hello", "wordCount": 2}],
         "metadata": {"totalBlocks": 1, "totalWords": 1020000, "avgSentenceLength": 2.5, "avgSimpsonIndex": 0.5},
