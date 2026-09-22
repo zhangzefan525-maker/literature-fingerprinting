@@ -80,6 +80,21 @@
              于是在「风格星系」「全书对比」页签下操作时，失败是彻底静默的。 -->
         <div id="global-status" class="global-status" role="status" aria-live="polite" hidden></div>
 
+        <!-- 导出与分享：放在标签页之外，三个视图下都点得到。
+             以前这组按钮长在 #view-main 的控件条里，切到「风格星系」「全书对比」就被整体 hidden，
+             getExportTarget() 那两个分支在界面上根本不可达——导出跟随标签页等于白改。 -->
+        <div class="global-toolbar">
+            <div class="control-group export-group" role="group" aria-label="导出与分享">
+                <button id="exportBtn" type="button" title="PNG 图片，适合放进汇报">导出图像</button>
+                <button id="exportSvgBtn" type="button" title="矢量图（SVG），放进论文放大不失真">导出矢量图</button>
+                <button id="exportDataBtn" type="button" title="每个片段的数值、章节与起始位置（CSV），可用 Excel 打开">导出数据表</button>
+                <button id="exportSummaryBtn" type="button" title="本次分析的文字摘要（含方法与参数）">导出摘要</button>
+                <button id="exportCiteBtn" type="button" title="引用条目（BibTeX），可导入 Zotero / EndNote 等文献管理软件">导出引用</button>
+                <button id="copyLinkBtn" type="button" title="把当前指标、选书、视图一起复制成链接，发给同事即可复现">🔗 复制此链接</button>
+            </div>
+            <span class="global-toolbar-hint">图像导出的是当前标签页里的那张图</span>
+        </div>
+
         <!-- ============================================ -->
         <!--  视图 1: 基础图表 (Main Chart View)          -->
         <!-- ============================================ -->
@@ -90,15 +105,6 @@
                         <option value="heatmap" selected>▦ 指纹热力图</option>
                         <option value="line">〰 折线趋势图</option>
                     </select>
-                </div>
-
-                <div class="control-group export-group" role="group" aria-label="导出与分享">
-                    <button id="exportBtn" type="button" title="PNG 图片，适合放进汇报">导出图像</button>
-                    <button id="exportSvgBtn" type="button" title="矢量图（SVG），放进论文放大不失真">导出矢量图</button>
-                    <button id="exportDataBtn" type="button" title="每个片段的数值、章节与起始位置（CSV），可用 Excel 打开">导出数据表</button>
-                    <button id="exportSummaryBtn" type="button" title="本次分析的文字摘要（含方法与参数）">导出摘要</button>
-                    <button id="exportCiteBtn" type="button" title="引用条目（BibTeX），可导入 Zotero / EndNote 等文献管理软件">导出引用</button>
-                    <button id="copyLinkBtn" type="button" title="把当前指标、选书、视图一起复制成链接，发给同事即可复现">🔗 复制此链接</button>
                 </div>
 
                 <div class="control-group" id="smoothnessGroup">
@@ -132,7 +138,7 @@
                 <div class="adv-header">
                     <div>
                         <h2 style="margin:0; color:#2f2a23; font-size: 18px;">✧ 风格星系</h2>
-                        <small style="color:#98907f">每个点的位置，根据书中「的、和、是」这类高频小词的使用习惯计算。点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或水平相似。</small>
+                        <small style="color:#6b6254">每个点的位置，根据书中「的、和、是」这类高频小词的使用习惯计算。点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或水平相似。</small>
                     </div>
                     <div>
                         <button id="restartGalaxyBtn" type="button" onclick="restartGalaxy()" style="padding:5px 15px;">↻ 重新布局</button>
@@ -154,7 +160,7 @@
                     <div id="galaxy-hud" class="galaxy-hud">
                         <div class="hud-title">◎ 悬停查看区域风格</div>
                         <div class="hud-content">
-                            <p style="color:#98907f; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>
+                            <p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>
                         </div>
                     </div>
                     <div id="galaxy-loading" style="color:#2f2a23; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">正在加载...</div>
@@ -170,7 +176,7 @@
                 <div class="adv-header">
                     <div>
                         <h2 style="margin:0; color:#2f2a23; font-size: 18px;">📚 全书对比</h2>
-                        <small style="color:#98907f">选择书籍 · 拖选段落 · 查看片段详情</small>
+                        <small style="color:#6b6254">选择书籍 · 拖选段落 · 查看片段详情</small>
                     </div>
                     <div class="adv-controls">
                         <span>选择书籍: </span>
@@ -334,8 +340,13 @@
                     }))
                     .filter(d => typeof d.value === 'number' && Number.isFinite(d.value));
 
+                // id 会变成 class（book-<id>）用于高亮与选中，必须唯一。
+                // 中文书名按 [^a-zA-Z0-9] 替换会全变成下划线：《白牙》和《野性的呼唤》撞成同一个 id，
+                // 点一本高亮两本。这里复用主视图那套带哈希后缀的 getBookSafeId。
                 advState.data.push({
-                    id: bookName.replace(/[^a-zA-Z0-9]/g, '_'),
+                    id: (typeof getBookSafeId === 'function')
+                        ? getBookSafeId(bookName)
+                        : bookName.replace(/[^a-zA-Z0-9]/g, '_'),
                     name: bookName,
                     displayName: displayName,
                     color: colorScale(bookName),
@@ -555,7 +566,7 @@
                     }
                 }
             } else {
-                lines.push(`所选书籍的「${mLabel}」风格走向各有不同，详见走势图。`);
+                lines.push(`所选这几本书的「${mLabel}」各有各的走势，详见下方走势图。`);
             }
 
             const trendBook = [...data].sort((a, b) => Math.abs(b.trend) - Math.abs(a.trend))[0];
@@ -708,7 +719,7 @@
                         .attr("x", labelX).attr("y", h - 13)
                         .attr("text-anchor", "middle")
                         .style("font-size", "9px")
-                        .style("fill", "#98907f")
+                        .style("fill", "#6b6254")
                         .text(`${index + 1}章`);
                 }
             });
@@ -724,7 +735,7 @@
                 .attr("x", 0).attr("y", -22)
                 .attr("text-anchor", "start")
                 .style("font-size", "10px")
-                .style("fill", "#98907f")
+                .style("fill", "#6b6254")
                 .text(`︱ 底部刻度为章节分界（按《${getBookDisplayName(bookName)}》的章节标题换算）${tailNote}`);
         }
 
@@ -748,9 +759,9 @@
                     <div style="margin-bottom: 20px; border-bottom: 2px dashed #e4d9c3; padding-bottom: 10px;">
                         <div style="padding:5px; margin-bottom:5px; display:flex; justify-content:space-between; align-items:center;">
                             <strong style="color:${book.color};font-size:14px">${escapeHtml(book.displayName || book.name)}</strong>
-                            <span style="font-size:10px; color:#98907f; cursor:pointer;" onclick="removeSelection('${book.id}')">✕ 移除</span>
+                            <span style="font-size:10px; color:#6b6254; cursor:pointer;" onclick="removeSelection('${book.id}')">✕ 移除</span>
                         </div>
-                        <div style="font-size:10px; color:#98907f; margin-bottom:5px; padding-left:5px;">平均: ${fmtMetric(book.currentMean)}</div>
+                        <div style="font-size:10px; color:#6b6254; margin-bottom:5px; padding-left:5px;">平均: ${fmtMetric(book.currentMean)}</div>
                 `;
 
                 topBlocks.forEach((b, i) => {
@@ -760,8 +771,8 @@
                     bookHtml += `
                         <div class="drill-item" style="border-left-color:${book.color}; margin-bottom: 5px;">
                             <strong>#${i+1} 最高点: ${fmtMetric(b.value)}</strong>
-                            <div style="margin:2px 0;color:#98907f;font-size:10px">📍 ${escapeHtml(loc)}</div>
-                            <p style="margin:0;color:#98907f;line-height:1.2;max-height:50px;overflow:hidden">${b.preview ? escapeHtml(b.preview.substring(0,60)) + '...' : '无预览'}</p>
+                            <div style="margin:2px 0;color:#6b6254;font-size:10px">📍 ${escapeHtml(loc)}</div>
+                            <p style="margin:0;color:#6b6254;line-height:1.2;max-height:50px;overflow:hidden">${b.preview ? escapeHtml(b.preview.substring(0,60)) + '...' : '无预览'}</p>
                             ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:9px">※ ${escapeHtml(keywords)}</div>` : ''}
                             ${copyTxt ? `<div style="margin-top:4px;text-align:right;">${copyButtonHtml(copyTxt, 'drill-copy-btn')}</div>` : ''}
                         </div>
