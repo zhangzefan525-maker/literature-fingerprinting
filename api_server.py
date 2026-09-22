@@ -498,7 +498,7 @@ def analyze_upload():
     用户上传文本文件，即时计算文学指纹。
     复用与示例书籍完全相同的 src/* 管线，返回与 all_books.json 单本书一致的结构。
     """
-    from src.data_loader import get_blocks
+    from src.data_loader import get_blocks, detect_language
     from src.pipeline import build_book_data
 
     if _rate_limited(request.remote_addr or "unknown"):
@@ -548,11 +548,20 @@ def analyze_upload():
             "message": "文件清洗后没有剩余正文（可能只有页眉页脚），请换一个文件。"
         }), 400
 
+    # 语言闸门必须排在切块之前：中文没有空格，整本书会被当成 1 个「单词」，
+    # 先切块的话用户永远只会看到「文本太短」，永远看不到真正的原因。
+    ok, reason, lang_stats = detect_language(raw_text)
+    if not ok:
+        app.logger.info("上传文本未通过语言闸门: %s", lang_stats)
+        return jsonify({"status": "error", "message": reason}), 400
+
     blocks = get_blocks(raw_text, block_size=BLOCK_SIZE, overlap=OVERLAP)
     if not blocks:
+        word_count = len(raw_text.split())
         return jsonify({
             "status": "error",
-            "message": f"文本太短，无法生成指纹（至少需要约 {BLOCK_SIZE} 个单词）"
+            "message": f"文本太短，无法生成指纹（至少需要约 {BLOCK_SIZE} 个英文单词，"
+                       f"这份文本约 {word_count} 个）"
         }), 400
 
     # 前端在勾选「存入我的图书馆」时随 multipart 附 save=1

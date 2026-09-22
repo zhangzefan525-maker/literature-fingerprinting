@@ -484,7 +484,39 @@ class ErrorMessageTestCase(LibraryApiTestCase):
             data = {"file": (io.BytesIO(b"short"), "novel.txt")}
             resp = self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("文本太短", resp.get_json()["message"])
+        message = resp.get_json()["message"]
+        self.assertIn("文本太短", message)
+        # 单位说清楚是「英文单词」，并给出这份文本的实际词数，用户才知道差多少
+        self.assertIn("英文单词", message)
+        self.assertIn("这份文本约 1 个", message)
+
+    def test_non_english_text_is_told_why_not_too_short(self):
+        """
+        中文没有空格，整本书会被当成 1 个「单词」→ 切不出块。
+        语言闸门必须排在切块之前，否则用户永远只看到「文本太短」
+        （这里故意把 get_blocks 打成返回空数组：消息仍是语言原因，才算顺序对了）。
+        """
+        chinese = "白牙是一本关于狼的小说。" * 40
+        with mock.patch("src.data_loader.get_blocks", return_value=[]):
+            data = {"file": (io.BytesIO(chinese.encode("utf-8")), "novel.txt")}
+            resp = self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
+        self.assertEqual(resp.status_code, 400)
+        message = resp.get_json()["message"]
+        self.assertIn("不是英文", message)
+        self.assertNotIn("文本太短", message)
+
+    def test_french_text_rejected_as_non_english(self):
+        """有空格的非英文（法文）以前会被静默算出一堆无意义的数值。"""
+        french = (
+            "Le chien etait dans la neige et il ne voulait pas partir. "
+            "Elle regardait les arbres de la foret avec une grande tristesse. "
+        ) * 40
+        with mock.patch("src.data_loader.get_blocks", return_value=["alpha"]), \
+             mock.patch("src.pipeline.build_book_data", return_value=FAKE_BOOK):
+            data = {"file": (io.BytesIO(french.encode("utf-8")), "novel.txt")}
+            resp = self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("不是英文", resp.get_json()["message"])
 
     def test_analysis_failure_returns_chinese_message(self):
         """分析内部报错时给固定中文文案，不把异常字符串回显给用户。"""
