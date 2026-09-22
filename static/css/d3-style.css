@@ -12,10 +12,13 @@
     --border:      #e0d1b0;   /* 边框 淡黄褐 */
     --border-soft: rgba(120, 96, 60, 0.16);
 
-    /* 墨（文字，由深到浅） */
+    /* 墨（文字，由深到浅）。
+       弱化的两级都按 WCAG AA（正文 4.5:1）标定过，底色取最不利的浮层底 #ece0c3：
+       原 --ink-50 #98907f 在羊皮纸底上只有 2.4:1，提示文字基本读不清；
+       现在 --ink-70 约 6.1:1、--ink-50 约 4.6:1（在更亮的 --card 上更高），层级也还分得开。 */
     --ink-100:     #2f2a23;   /* 主文字 松烟墨 */
-    --ink-70:      #6f6557;   /* 次级 */
-    --ink-50:      #98907f;   /* 弱化 */
+    --ink-70:      #5c5346;   /* 次级 */
+    --ink-50:      #6b6254;   /* 弱化 */
 
     /* 国画颜料（柔和、不刺眼） */
     --vermilion:      #b5472f;  /* 朱砂：印章 + 主强调 */
@@ -222,6 +225,13 @@ body::before {
     border-bottom: 1px solid var(--border-soft);
     padding-bottom: 16px;
     flex-wrap: wrap;
+    /* 三个视图之间的切换按钮：往下滚看长图/详情面板时，最该留在手边的就是它。
+       背景取容器底色，吸顶后不会透出下面的内容。 */
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: #fdf9ef;
+    box-shadow: 0 8px 14px -10px rgba(120, 96, 60, 0.55);
 }
 
 .tab-btn {
@@ -270,6 +280,20 @@ body::before {
 .global-status.error   { border-left-color: var(--err); background: rgba(181, 71, 47, 0.08); }
 .global-status.notice  { border-left-color: var(--warn); }
 .global-status[hidden] { display: none; }
+
+/* ---------- 全局导出条（在标签页之外，三个视图共用） ---------- */
+.global-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: -8px 0 18px;
+}
+.global-toolbar-hint {
+    color: var(--ink-50);
+    font-size: 0.78rem;
+}
 
 /* ---------- 视图切换 ---------- */
 .view-section {
@@ -659,6 +683,8 @@ button:hover {
     border: 1px solid var(--border);
     border-left: 3px solid var(--indigo);
     border-radius: 10px;
+    /* 这里刻意不吸顶：吸顶会盖住紧跟在下面的标签页按钮，
+       而且窄屏上它折成 114px 高，占掉屏幕太多。吸顶交给 .tab-navigation。 */
 }
 .metric-bar .control-group {
     flex-shrink: 0;
@@ -1277,6 +1303,12 @@ button:hover {
    ============================================================ */
 
 /* —— 平板及以下 —— */
+/* 副标题是一整句长句，nowrap 在窄屏上会撑出容器（约 561–960px 区间）；
+   到手机上原本就有换行规则，这里把断点提前，避免中间那一段横向溢出 */
+@media (max-width: 960px) {
+    .header-subtitle { white-space: normal; }
+}
+
 @media (max-width: 900px) {
     .container { padding: 24px 20px 22px; }
     .visualization-container { grid-template-columns: 1fr; }
@@ -1461,6 +1493,14 @@ button:hover {
 }
 .book-del:hover { color: var(--err); background: rgba(181, 71, 47, 0.12); }
 .book-del:active { transform: scale(0.9); }
+/* 删除请求在途：置灰并不可点，避免重复确认/重复提交 */
+.book-del:disabled,
+.book-del.deleting {
+    color: var(--ink-50);
+    opacity: 0.45;
+    cursor: progress;
+    background: transparent;
+}
 
 /* ---------- 出处定位 / 指标解读参考 / 复制片段（研究资产化） ---------- */
 .block-location {
@@ -1517,6 +1557,14 @@ button:hover {
 
 /* ---------- 无障碍：尊重系统的「减少动态效果」 ---------- */
 /* 只压掉界面上的过渡/动画，文本雨由脚本决定默认状态（这里不碰它的绘制逻辑） */
+/* ---------- 复制失败：按钮自己变成提示（http 站点没有剪贴板 API） ---------- */
+button.copy-failed,
+button.copy-failed:hover {
+    color: var(--err);
+    border-color: var(--err);
+    cursor: text;
+}
+
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
         animation-duration: 0.01ms !important;

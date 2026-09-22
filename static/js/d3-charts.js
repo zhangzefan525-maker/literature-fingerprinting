@@ -142,18 +142,7 @@ function buildStateUrl() {
 // 「复制此链接」：把当前视图（指标/选书/标签页/图形/框选）发给同事
 function copyShareLink(button) {
     syncUrlState();
-    const flash = () => {
-        if (!button) return;
-        const original = button.innerHTML;
-        button.textContent = '✓ 链接已复制';
-        setTimeout(() => { button.innerHTML = original; }, 1600);
-    };
-    const url = buildStateUrl();
-    if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(url).then(flash).catch(() => { fallbackCopyText(url, flash); });
-    } else {
-        fallbackCopyText(url, flash);
-    }
+    copyTextToClipboard(buildStateUrl(), button, '✓ 链接已复制');
 }
 
 // 取走链接里带的框选范围（仪表盘初始化时用，取一次就清掉）
@@ -707,9 +696,18 @@ function getDeleteToken(bookName) {
     return readDeleteTokens()[bookName] || '';
 }
 
+// 正在删除中的书名。删除是一次网络往返，期间再点 ✕ 会重复发请求、重复弹确认，
+// 而且第二次请求多半拿到 404 弹出「删除失败」，看起来像删除没成功。
+// 用一个 Set 做闸门：在途时直接忽略后续点击，并把该 chip 的 ✕ 临时禁用做视觉提示。
+const _deletingBooks = new Set();
+
 // 从「我的图书馆」删除：确认 → DELETE 接口 → 同步内存/选择/按钮/图表
 async function deleteLibraryBook(bookName) {
+    if (_deletingBooks.has(bookName)) return;
     if (!window.confirm(`确定从「我的图书馆」删除《${getBookDisplayName(bookName)}》？此操作不可撤销。`)) return;
+
+    _deletingBooks.add(bookName);
+    setDeletingBookState(bookName, true);
     setUploadBusy(true);
     try {
         const headers = {};
@@ -751,8 +749,22 @@ async function deleteLibraryBook(bookName) {
         console.error('删除书库书籍失败:', e);
         setUploadStatus('删除失败：无法连接当前分析服务。', 'error');
     } finally {
+        _deletingBooks.delete(bookName);
+        setDeletingBookState(bookName, false);
         setUploadBusy(false);
     }
+}
+
+// 删除在途时把该书的 ✕ 置灰并禁用，避免重复提交
+function setDeletingBookState(bookName, deleting) {
+    document.querySelectorAll('.book-group').forEach(group => {
+        if (group.dataset.bookId !== bookName) return;
+        const del = group.querySelector('.book-del');
+        if (!del) return;
+        del.disabled = deleting;
+        del.classList.toggle('deleting', deleting);
+        del.setAttribute('aria-busy', deleting ? 'true' : 'false');
+    });
 }
 
 // 辅助函数：根据当前 Tab 刷新图表
@@ -1066,7 +1078,7 @@ function drawMultiLineChart(svg, booksArray) {
     chartData.forEach((d, i) => {
         const row = legend.append("g").attr("transform", `translate(0, ${i * 25})`);
         row.append("rect").attr("width", 15).attr("height", 15).attr("fill", colorScale(d.book));
-        row.append("text").attr("x", 20).attr("y", 12).text(getBookDisplayName(d.book)).style("font-size", "12px").style("fill", "#6f6557");
+        row.append("text").attr("x", 20).attr("y", 12).text(getBookDisplayName(d.book)).style("font-size", "12px").style("fill", "#5c5346");
     });
     
     svg.append("text")
@@ -1257,7 +1269,7 @@ function drawMultiHeatmap(svg, booksArray) {
             .attr("text-anchor", "middle")
             .style("font-size", "14px")
             .style("font-weight", "bold")
-            .style("fill", "#6f6557")
+            .style("fill", "#5c5346")
             .text(truncateText(getBookDisplayName(bookId), 18));
     });
 
@@ -1313,7 +1325,7 @@ function drawMultiHeatmap(svg, booksArray) {
             .attr("x", containerWidth / 2).attr("y", totalHeight - 14)
             .attr("text-anchor", "middle")
             .style("font-size", "11px")
-            .style("fill", "#98907f")
+            .style("fill", "#6b6254")
             .text("虚线为章节分界（按章节标题自动识别，位置为近似值；章节过多时不显示）");
     }
 }
@@ -1393,7 +1405,7 @@ function showDetail(data, bookName) {
     const previewHtml = data.preview ? `
             <div>
                 <h4>📄 原文片段</h4>
-                <p style="margin-top: 10px; color: #98907f; font-style: italic;">
+                <p style="margin-top: 10px; color: #6b6254; font-style: italic;">
                     "${escapeHtml(data.preview)}"
                 </p>
                 ${sourceText ? copyButtonHtml(sourceText) : ''}
@@ -1491,6 +1503,11 @@ function normalizeBookMeta(bookName) {
         analyzedWords,
         blockSize,
         step,
+        // 相邻片段重叠词数：旧数据没写这个字段，按「窗口长 − 步长」推出来。
+        // CSV 注释行要如实说明重叠，缺了它会印成「相邻重叠 undefined 词」。
+        overlap: isFiniteNumber(raw.overlap) && raw.overlap >= 0
+            ? raw.overlap
+            : Math.max(0, blockSize - step),
         chapters: Array.isArray(raw.chapters) && raw.chapters.length > 0 ? raw.chapters : null,
         projection: raw.projection || null
     };
@@ -1615,19 +1632,46 @@ function copyFromButton(button) {
     const idx = Number(button && button.dataset.copyIdx);
     const text = _copySources[idx];
     if (text === undefined) return;
-    const flash = () => {
-        const original = button.innerHTML;
-        button.textContent = '✓ 已复制';
-        setTimeout(() => { button.innerHTML = original; }, 1600);
-    };
-    if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text).then(flash).catch(() => { fallbackCopyText(text, flash); });
-    } else {
-        fallbackCopyText(text, flash); // http 等非安全上下文必须走 execCommand 兜底
-    }
+    copyTextToClipboard(text, button, '✓ 已复制');
 }
 
-function fallbackCopyText(text, done) {
+// 复制按钮的反馈。两件事必须做对：
+//   1) 原文案存在 dataset 里——原来每次点都把当前 innerHTML 当成原文案，
+//      1.6 秒内连点两次就会把「✓ 已复制」存下来，按钮从此卡死在提示语上；
+//   2) 失败要说出来——http 站点（非安全上下文）没有 navigator.clipboard，
+//      走 execCommand 兜底也可能被浏览器拒绝，原来是彻底静默的，用户以为复制好了。
+function flashCopyButton(button, ok, okText) {
+    if (!button) return;
+    if (button.dataset.copyLabel === undefined) {
+        button.dataset.copyLabel = button.innerHTML;
+        button.dataset.copyTitle = button.title || '';
+    }
+    if (button._copyTimer) clearTimeout(button._copyTimer);
+    button.textContent = ok ? okText : '请手动复制（Ctrl+C）';
+    button.classList.toggle('copy-failed', !ok);
+    button.title = ok ? button.dataset.copyTitle : '复制没成功，请手动选中后按 Ctrl+C';
+    button._copyTimer = setTimeout(() => {
+        button.innerHTML = button.dataset.copyLabel;
+        button.title = button.dataset.copyTitle;
+        button.classList.remove('copy-failed');
+        button._copyTimer = null;
+    }, ok ? 1600 : 4000);
+}
+
+function copyTextToClipboard(text, button, okText = '✓ 已复制') {
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text)
+            .then(() => { flashCopyButton(button, true, okText); return true; })
+            .catch(() => { const ok = fallbackCopyText(text); flashCopyButton(button, ok, okText); return ok; });
+    }
+    // http 等非安全上下文必须走 execCommand 兜底
+    const ok = fallbackCopyText(text);
+    flashCopyButton(button, ok, okText);
+    return Promise.resolve(ok);
+}
+
+// 返回是否真的复制成功——调用方要据此给用户反馈，不能再默默失败
+function fallbackCopyText(text) {
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.setAttribute('readonly', '');
@@ -1638,7 +1682,7 @@ function fallbackCopyText(text, done) {
     let ok = false;
     try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
     document.body.removeChild(ta);
-    if (ok && typeof done === 'function') done();
+    return ok;
 }
 
 document.addEventListener('click', (event) => {
@@ -1769,11 +1813,19 @@ function exportFileLabel() {
     return books[0].replace(/\s+/g, '_');
 }
 
+// 导出的按钮在三个页签下都看得到，但目标 svg 是各视图渲染时才建的。
+// 拿不到时给一句能自处的话，别只说「找不到图表元素」。
+function getNoChartMessage() {
+    const where = currentTab === 'view-galaxy' ? '风格星系' : (currentTab === 'view-dashboard' ? '全书对比' : '基础趋势分析');
+    return `「${where}」这张图还没画出来，暂时没有可导出的内容。`
+        + '请先在有数据的书上点一下，或稍等图渲染完成再试。';
+}
+
 function exportChart() {
     const target = getExportTarget();
     const svg = target.element;
     if (!svg) {
-        showError("找不到图表元素");
+        showError(getNoChartMessage());
         return;
     }
 
@@ -2053,7 +2105,7 @@ function exportTableData() {
     // 以 # 开头是 CSV 的通行注释约定（pandas 用 comment='#'、R 用 comment.char='#' 即可跳过）。
     const windowSpecs = Array.from(new Set(books.map(name => {
         const meta = normalizeBookMeta(name);
-        return meta && isFiniteNumber(meta.blockSize)
+        return meta && isFiniteNumber(meta.blockSize) && isFiniteNumber(meta.overlap) && isFiniteNumber(meta.step)
             ? `每段 ${meta.blockSize} 词 · 相邻重叠 ${meta.overlap} 词 · 步长 ${meta.step} 词`
             : '窗口参数未知';
     })));
@@ -2116,7 +2168,7 @@ function exportVectorChart() {
     const target = getExportTarget();
     const svg = target.element;
     if (!svg) {
-        showError('找不到图表元素');
+        showError(getNoChartMessage());
         return;
     }
 
@@ -2476,7 +2528,7 @@ function initStyleGalaxy() {
         const hud = document.getElementById('galaxy-hud');
         if(hud) {
             hud.querySelector('.hud-title').innerText = "◎ 悬停查看区域风格";
-            hud.querySelector('.hud-content').innerHTML = '<p style="color:#98907f; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>';
+            hud.querySelector('.hud-content').innerHTML = '<p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>';
         }
         
         hideTooltip();
@@ -2552,7 +2604,7 @@ function openGalaxyModal(d) {
             });
         } else {
             const empty = document.createElement('span');
-            empty.style.color = '#98907f';
+            empty.style.color = '#6b6254';
             empty.textContent = '无关键词';
             keywordContainer.appendChild(empty);
         }
@@ -2693,7 +2745,7 @@ function updateHUD(analysisData, metricLabel) {
 
     if (!analysisData) {
         title.innerText = "◎ 正在分析...";
-        content.innerHTML = `<p style="color:#98907f; font-size:12px;">正在分析这片区域的风格...</p>`;
+        content.innerHTML = `<p style="color:#6b6254; font-size:12px;">正在分析这片区域的风格...</p>`;
         return;
     }
 
@@ -2717,7 +2769,7 @@ function updateHUD(analysisData, metricLabel) {
         <div class="hud-tags">
             ${analysisData.topKeywords.map(k => `<span class="hud-tag">${k}</span>`).join('')}
         </div>
-        <div style="margin-top:10px; padding-top:5px; border-top:1px dashed rgba(46, 42, 36, 0.12); font-size:10px; color:#98907f;">
+        <div style="margin-top:10px; padding-top:5px; border-top:1px dashed rgba(46, 42, 36, 0.12); font-size:10px; color:#6b6254;">
             * 这些片段因写作风格相近而聚集在一起。
         </div>
     `;
