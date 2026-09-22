@@ -253,6 +253,24 @@ body::before {
     box-shadow: 0 4px 12px rgba(47, 42, 35, 0.24);
 }
 
+/* ---------- 全局状态条（三个标签页共用） ---------- */
+.global-status {
+    margin-bottom: 18px;
+    padding: 10px 16px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--indigo);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--ink-100);
+    font-size: 0.88rem;
+    line-height: 1.6;
+}
+.global-status.loading { border-left-color: var(--indigo); color: var(--ink-70); }
+.global-status.success { border-left-color: var(--ok); }
+.global-status.error   { border-left-color: var(--err); background: rgba(181, 71, 47, 0.08); }
+.global-status.notice  { border-left-color: var(--warn); }
+.global-status[hidden] { display: none; }
+
 /* ---------- 视图切换 ---------- */
 .view-section {
     display: none;

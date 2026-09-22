@@ -36,7 +36,7 @@
             <label class="save-toggle" id="save-toggle" for="save-upload" title="勾选后：这次的分析结果会保留下来，刷新页面后仍在；重名时会自动改名，不会覆盖内置示例书。">
                 <input type="checkbox" id="save-upload"> 存入「我的图书馆」
             </label>
-            <span id="upload-status" class="upload-status" aria-live="polite">支持上传英文纯文本小说（.txt，建议 1 万字以上）。分析后会出现在上方的书名列表里，和内置名著放在一起对比。</span>
+            <span id="upload-status" class="upload-status" aria-live="polite">支持上传英文纯文本小说（.txt，建议 1 万个英文单词以上）。分析后会出现在上方的书名列表里，和内置名著放在一起对比。</span>
         </div>
 
         <!-- 全局指标选择器（三个标签页共用同一指标，切换后对所有视图生效） -->
@@ -75,6 +75,11 @@
             </button>
         </div>
         
+        <!-- 全局状态条：三个标签页共用。
+             数据加载 / 分析失败 / 无数据这类反馈原来只写进 #detailPanel，而它在 #view-main 内部，
+             于是在「风格星系」「全书对比」页签下操作时，失败是彻底静默的。 -->
+        <div id="global-status" class="global-status" role="status" aria-live="polite" hidden></div>
+
         <!-- ============================================ -->
         <!--  视图 1: 基础图表 (Main Chart View)          -->
         <!-- ============================================ -->

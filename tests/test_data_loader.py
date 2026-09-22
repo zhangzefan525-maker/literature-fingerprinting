@@ -25,6 +25,7 @@ from src.data_loader import (
     BLOCK_SIZE,
     OVERLAP,
     clean_text,
+    detect_language,
     get_blocks,
     get_chapter_spans,
     load_clean_text,
@@ -250,6 +251,79 @@ class TestCleanText(unittest.TestCase):
         if not path.exists():  # pragma: no cover - 取决于仓库内容
             self.skipTest("缺少语料")
         self.assertEqual(load_clean_text(path), clean_text(path.read_text(encoding="utf-8")))
+
+
+class TestDetectLanguage(unittest.TestCase):
+    """
+    上传入口的语言闸门。
+
+    两个信号各管一边：非 ASCII 占比管中文（没空格，会被当成 1 个「单词」，
+    结果只会报「文本太短」）；英文停用词命中率管法文这类有空格的非英文
+    （非 ASCII 只有千分之几，光看字符集抓不住，但算出来的数值全无意义）。
+
+    这里的阈值不是拍脑袋：下面用四本真实英文小说锁定余量，
+    任何一边漂了，测试会先红。
+    """
+
+    BUILTIN_BOOKS = (
+        "The Adventures of Huckleberry Finn.txt",
+        "The Adventures of Tom Sawyer.txt",
+        "The call of the wild.txt",
+        "White Fang.txt",
+    )
+
+    def _read_builtin(self, name):
+        path = ROOT / "data" / "raw" / name
+        if not path.exists():  # pragma: no cover - 取决于仓库内容
+            self.skipTest(f"缺少语料 {name}")
+        return path.read_text(encoding="utf-8")
+
+    def test_real_english_novels_pass_with_margin(self):
+        """四本内置书必须通过，且离阈值有足够余量（否则下次调阈值就是拍脑袋）。"""
+        for name in self.BUILTIN_BOOKS:
+            with self.subTest(book=name):
+                ok, reason, stats = detect_language(self._read_builtin(name))
+                self.assertTrue(ok, f"{name} 被误判：{reason}")
+                self.assertLess(stats["nonAsciiRatio"], 0.05, "非 ASCII 占比余量变薄了")
+                self.assertGreater(stats["stopwordHitRatio"], 0.40, "停用词命中率余量变薄了")
+
+    def test_chinese_text_rejected_by_non_ascii(self):
+        text = "白牙是一本关于狼的小说。" * 40
+        ok, reason, stats = detect_language(text)
+        self.assertFalse(ok)
+        self.assertIn("不是英文", reason)
+        self.assertGreater(stats["nonAsciiRatio"], 0.9)  # 中文实测约 1.00
+
+    def test_french_text_rejected_by_stopwords_even_though_ascii(self):
+        """法文是「有空格的非英文」：非 ASCII 占比很低，只能靠停用词命中率抓住。"""
+        text = (
+            "Le chien etait dans la neige et il ne voulait pas partir. "
+            "Elle regardait les arbres de la foret avec une grande tristesse. "
+        ) * 40
+        ok, reason, stats = detect_language(text)
+        self.assertFalse(ok, f"法文样本没被拦住（命中率 {stats['stopwordHitRatio']}）")
+        self.assertIn("不是英文", reason)
+        self.assertLess(stats["nonAsciiRatio"], 0.15)  # 证明拦住它的不是字符集那条
+        self.assertLess(stats["stopwordHitRatio"], 0.15)
+
+    def test_short_english_sample_is_not_judged(self):
+        """短样本的词频不可靠，只跳过第二条——太短这件事交给「文本太短」分支说。"""
+        ok, reason, _ = detect_language("He said he do not know about the river.")
+        self.assertTrue(ok, f"短英文被误判：{reason}")
+
+    def test_english_with_typographic_quotes_passes(self):
+        """中文排版常见的弯引号、破折号不该把人误伤成「非英文」。"""
+        text = "“He said he was not going,” she said—and the river went on. " * 40
+        ok, reason, _ = detect_language(text)
+        self.assertTrue(ok, f"带排版符号的英文被误判：{reason}")
+
+    def test_empty_and_blank_are_not_rejected_here(self):
+        """空文本由调用方（内容为空 / 清洗后为空）给提示，这里不抢答。"""
+        for text in ("", "   \n  "):
+            with self.subTest(text=repr(text)):
+                ok, reason, _ = detect_language(text)
+                self.assertTrue(ok)
+                self.assertIsNone(reason)
 
 
 if __name__ == "__main__":

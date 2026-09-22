@@ -63,6 +63,83 @@ def load_clean_text(filepath):
     with open(filepath, 'r', encoding='utf-8') as f:
         return clean_text(f.read())
 
+# ---------------------------------------------------------------
+# 语言闸门：本工具的四个指标都建立在英文分词与英文功能词表上，
+# 非英文文本喂进来只会得到两种坏结果——
+#   中文（无空格）：整本书被当成 1 个「单词」，切不出块，用户看到的是「文本太短」；
+#   法文等有空格的语言：能切块，但算出来的是没有意义的数值，而且一路静默地画在图上。
+# 所以在上传入口先判一次语言，给出人能看懂的原因。
+# 两个信号各管一边，缺一不可（阈值来自四本内置书的实测，见 tests/test_data_loader.py）：
+#   1) 非 ASCII 字符占比：英文实测最高 0.0168，阈值 0.15 有约 9 倍余量；中文约 1.00。
+#   2) 英文停用词命中率：英文实测 0.497–0.565，法语合成样本 0.046，
+#      阈值 0.15 对英文有约 3.3 倍余量。光靠第 1 条抓不到法语（非 ASCII 仅 0.002）。
+# ---------------------------------------------------------------
+_NON_ASCII_LIMIT = 0.15          # 非 ASCII 字符占比上限
+_STOPWORD_HIT_LIMIT = 0.15       # 英文停用词命中率下限
+_STOPWORD_MIN_TOKENS = 200       # 词元太少时第 2 条不可靠，直接跳过（交给「文本太短」分支）
+_STOPWORD_SAMPLE_CHARS = 20000   # 判定用样本：前 2 万个字符（约 3500 个英文词元），够稳又不用扫全篇
+_ASCII_TOKEN_RE = re.compile(r"[A-Za-z']+")
+
+_STOPWORD_CACHE = None
+
+
+def _english_stopwords():
+    """英文停用词表（nltk）。取不到（离线且没装语料）时返回空集合，闸门退化为只看非 ASCII。"""
+    global _STOPWORD_CACHE
+    if _STOPWORD_CACHE is None:
+        try:
+            from nltk.corpus import stopwords
+            _STOPWORD_CACHE = set(stopwords.words('english'))
+        except Exception:
+            _STOPWORD_CACHE = set()
+    return _STOPWORD_CACHE
+
+
+def detect_language(text):
+    """
+    判断文本是否适合本工具分析（英文）。
+
+    返回 (ok, reason, stats)：
+      ok      是否通过
+      reason  不通过时的中文原因（直接可以给用户看）；通过时为 None
+      stats   判定依据的实测值，便于测试与排查
+    """
+    sample = text or ''
+    total_chars = len(sample)
+    non_ascii = sum(1 for ch in sample if ord(ch) > 127)
+    non_ascii_ratio = (non_ascii / total_chars) if total_chars else 0.0
+
+    tokens = _ASCII_TOKEN_RE.findall(sample[:_STOPWORD_SAMPLE_CHARS].lower())
+    stopwords_set = _english_stopwords()
+    hits = sum(1 for tok in tokens if tok in stopwords_set)
+    hit_ratio = (hits / len(tokens)) if tokens else 0.0
+
+    stats = {
+        "totalChars": total_chars,
+        "nonAsciiRatio": round(non_ascii_ratio, 4),
+        "tokens": len(tokens),
+        "stopwordHitRatio": round(hit_ratio, 4),
+    }
+
+    if non_ascii_ratio > _NON_ASCII_LIMIT:
+        return (
+            False,
+            f"这份文本看起来不是英文（非英文字符约占 {non_ascii_ratio:.0%}）。"
+            "本工具目前只分析英文小说，中文、日文等文本暂时算不出有意义的结果。",
+            stats,
+        )
+
+    if len(tokens) >= _STOPWORD_MIN_TOKENS and hit_ratio < _STOPWORD_HIT_LIMIT:
+        return (
+            False,
+            f"这份文本看起来不是英文（英文常用词 the/of/and 之类只占 {hit_ratio:.0%}）。"
+            "本工具目前只分析英文小说，请换一份英文文本再试。",
+            stats,
+        )
+
+    return True, None, stats
+
+
 def get_blocks(text, block_size=BLOCK_SIZE, overlap=OVERLAP):
     """
     滑动窗口切分 (论文核心逻辑)

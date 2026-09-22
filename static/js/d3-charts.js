@@ -14,7 +14,7 @@ function isLocalHost() {
     return LOCAL_HOSTNAMES.has(hostname);
 }
 
-const DEFAULT_UPLOAD_STATUS = '支持上传英文纯文本小说（.txt，建议 1 万字以上）。分析后会出现在上方的书名列表里，和内置名著放在一起对比。';
+const DEFAULT_UPLOAD_STATUS = '支持上传英文纯文本小说（.txt，建议 1 万个英文单词以上）。分析后会出现在上方的书名列表里，和内置名著放在一起对比。';
 
 // 全局变量
 let realData = null;
@@ -890,7 +890,16 @@ async function loadRealData() {
         updateMetricHint(); // 参考区间跟随当前已加载书集合
 
         // 确保 selectedBooks 中的书在数据中存在
-        selectedBooks = new Set(Array.from(selectedBooks).filter(book => availableBooks.includes(book)));
+        const requestedBooks = Array.from(selectedBooks);
+        selectedBooks = new Set(requestedBooks.filter(book => availableBooks.includes(book)));
+        // 链接里点了名、但这台服务器上已经没有的书：必须说出来。
+        // 原来只是悄悄换成第一本书，用户会以为自己看的还是同事分享的那几本。
+        const droppedBooks = requestedBooks.filter(book => !availableBooks.includes(book));
+        if (droppedBooks.length > 0) {
+            setGlobalStatus('notice',
+                `链接里的这 ${droppedBooks.length} 本书在这台服务器上找不到：${droppedBooks.map(getBookDisplayName).join('、')}`
+                + '（可能已被删除，或链接来自别的部署）。下面显示的是现有的书。');
+        }
         if (selectedBooks.size === 0) {
             selectBook(availableBooks[0]); // 如果没选，默认选第一本
         } else {
@@ -973,7 +982,7 @@ function drawMultiLineChart(svg, booksArray) {
         .attr("x", width / 2)
         .attr("y", chartHeight + 38)
         .attr("text-anchor", "middle")
-        .text("阅读进度（每个片段约 1 万字）");
+        .text("阅读进度（每个片段约 1 万个单词）");
 
     g.append("text")
         .attr("class", "axis-label")
@@ -2126,7 +2135,53 @@ function exportVectorChart() {
     downloadBlob(source, `文印_${exportFileLabel()}_${target.label}_${exportTimestamp()}.svg`, 'image/svg+xml;charset=utf-8');
 }
 
+// 顶部全局状态条：三个标签页都能看到。
+// 这一批 show* 原来只写 #detailPanel，而 #detailPanel 长在 #view-main 里，
+// 于是切到「风格星系」「全书对比」之后，加载失败、分析失败、无数据全是静默的。
+let _globalStatusTimer = null;
+
+function setGlobalStatus(kind, message) {
+    const el = document.getElementById('global-status');
+    if (!el) return;
+    if (_globalStatusTimer) { clearTimeout(_globalStatusTimer); _globalStatusTimer = null; }
+    if (!message) {
+        el.hidden = true;
+        el.textContent = '';
+        el.className = 'global-status';
+        return;
+    }
+    el.hidden = false;
+    el.className = `global-status ${kind || ''}`.trim();
+    el.textContent = message;
+    // 「成功」「提示」过几秒自己收起，免得一条过期消息一直挂在页面上；
+    // 「错误」「加载中」留在原地，等下一次状态更新来替换。
+    if (kind === 'success' || kind === 'notice') {
+        _globalStatusTimer = setTimeout(() => setGlobalStatus(null, ''), 6000);
+    }
+}
+
+// 星系图的「正在加载…」占位：成功时隐藏，失败时改成能看懂的原因。
+// 不然它那句初始文案会永远留在画布正中间。
+function setGalaxyLoading(text) {
+    const el = document.getElementById('galaxy-loading');
+    if (!el) return;
+    if (text === null || text === undefined) {
+        el.style.display = 'none';
+        return;
+    }
+    el.style.display = 'block';
+    el.textContent = text;
+}
+
+// 星系图画不出来（画布里连 svg 都没有）时，把原因写在画布中间，而不是只丢进主视图的详情面板
+function showGalaxyError(message) {
+    const container = document.getElementById('galaxy-container');
+    if (!container || container.querySelector('svg')) return;
+    setGalaxyLoading(message);
+}
+
 function showLoading(message) {
+    setGlobalStatus('loading', message);
     const detailPanel = document.getElementById('detailPanel');
     if (!detailPanel) return;
     detailPanel.innerHTML = `
@@ -2139,6 +2194,7 @@ function showLoading(message) {
 }
 
 function showSuccess(message) {
+    setGlobalStatus('success', message);
     const detailPanel = document.getElementById('detailPanel');
     if (!detailPanel) return;
     detailPanel.innerHTML = `
@@ -2150,6 +2206,8 @@ function showSuccess(message) {
 }
 
 function showError(message) {
+    setGlobalStatus('error', message);
+    showGalaxyError(message);
     const detailPanel = document.getElementById('detailPanel');
     if (!detailPanel) return;
     detailPanel.innerHTML = `
@@ -2161,6 +2219,7 @@ function showError(message) {
 }
 
 function showNoDataMessage(message = '请在上方选择一本已有数据的书，或上传文本进行分析。') {
+    setGlobalStatus('notice', message);
     const detailPanel = document.getElementById('detailPanel');
     if (!detailPanel) return;
     detailPanel.innerHTML = `
@@ -2184,11 +2243,7 @@ function initStyleGalaxy() {
 
     const books = Array.from(selectedBooks);
     if (books.length === 0) {
-        const loadingEl = document.getElementById('galaxy-loading');
-        if (loadingEl) {
-            loadingEl.style.display = 'block';
-            loadingEl.textContent = "请先在上方选择书籍";
-        }
+        setGalaxyLoading('请先在上方选择书籍');
         return;
     }
 
@@ -2200,15 +2255,27 @@ function initStyleGalaxy() {
     const skippedBooks = new Set(independentMode ? [] : comparability.independentBooks);
 
     const container = document.getElementById('galaxy-container');
-    // 重要：如果容器不可见（clientWidth=0），则中止，防止错误
-    if (!container || container.clientWidth === 0) return;
+    // 如果容器不可见（clientWidth=0）就先别画，否则会算出一堆 NaN。
+    // 但也不能直接 return：刚从别的页签切过来时布局可能还没完成，
+    // 一走了之的话「正在加载…」会永远留在画布中间。这里重试有限次，超时就如实说明。
+    if (!container || container.clientWidth === 0) {
+        const tries = (container && container.dataset.galaxyRetry) ? Number(container.dataset.galaxyRetry) : 0;
+        if (!container) return;
+        if (tries < 20) {
+            container.dataset.galaxyRetry = String(tries + 1);
+            requestAnimationFrame(() => initStyleGalaxy());
+        } else {
+            setGalaxyLoading('图没能画出来：容器尺寸为 0。请切到别的页签再切回来试试。');
+        }
+        return;
+    }
+    delete container.dataset.galaxyRetry;
 
     const width = container.clientWidth;
     const height = container.clientHeight;
 
     d3.select("#galaxy-container").selectAll("svg").remove();
-    const loadingEl = document.getElementById('galaxy-loading');
-    if (loadingEl) loadingEl.style.display = 'none';
+    setGalaxyLoading(null);
 
     const svg = d3.select("#galaxy-container").append("svg")
         .attr("width", width)
