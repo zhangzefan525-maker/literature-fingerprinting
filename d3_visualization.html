@@ -53,6 +53,15 @@
             <div class="metric-hint" id="metric-hint"></div>
         </div>
 
+        <!-- 三步快速开始：给第一次来的用户一个明确起点 -->
+        <div class="quickstart" id="quickstart">
+            <span class="quickstart-step"><b>①</b> 上方点书名，可以多选几本一起比</span>
+            <span class="quickstart-step"><b>②</b> 换「观察角度」，看不同指标下的差别</span>
+            <span class="quickstart-step"><b>③</b> 点图中任意一个点，看它对应的原文和所在章节</span>
+            <button type="button" class="quickstart-demo" onclick="loadComparisonExample()">载入对比示例</button>
+            <button type="button" class="quickstart-close" onclick="hideQuickStart()" aria-label="不再显示快速开始">✕</button>
+        </div>
+
         <!-- 新增：顶部 Tab 切换导航 -->
         <div class="tab-navigation" role="tablist" aria-label="分析视图">
             <button id="tab-view-main" class="tab-btn active" role="tab" aria-selected="true" aria-controls="view-main" onclick="switchTab('view-main')">
@@ -76,8 +85,15 @@
                         <option value="heatmap" selected>▦ 指纹热力图</option>
                         <option value="line">〰 折线趋势图</option>
                     </select>
-                    <button id="exportBtn" type="button">导出图像</button>
-                    <button id="exportSummaryBtn" type="button">导出摘要</button>
+                </div>
+
+                <div class="control-group export-group" role="group" aria-label="导出与分享">
+                    <button id="exportBtn" type="button" title="PNG 图片，适合放进汇报">导出图像</button>
+                    <button id="exportSvgBtn" type="button" title="矢量图（SVG），放进论文放大不失真">导出矢量图</button>
+                    <button id="exportDataBtn" type="button" title="每个片段的数值、章节与起始位置（CSV），可用 Excel 打开">导出数据表</button>
+                    <button id="exportSummaryBtn" type="button" title="本次分析的文字摘要（含方法与参数）">导出摘要</button>
+                    <button id="exportCiteBtn" type="button" title="引用条目（BibTeX），可导入 Zotero / EndNote 等文献管理软件">导出引用</button>
+                    <button id="copyLinkBtn" type="button" title="把当前指标、选书、视图一起复制成链接，发给同事即可复现">🔗 复制此链接</button>
                 </div>
 
                 <div class="control-group" id="smoothnessGroup">
@@ -94,7 +110,7 @@
                 <div id="chart-container">
                     <svg id="main-chart" width="100%" height="400"></svg>
                 </div>
-                <div class="detail-panel" id="detailPanel">
+                <div class="detail-panel" id="detailPanel" role="status" aria-live="polite">
                     <h3>▤ 数据详情</h3>
                     <p>点击或悬停图表中的点，即可查看对应文本片段的详细信息</p>
                 </div>
@@ -125,6 +141,7 @@
                     <span>滚轮缩放 · 拖动探索 · 点击看原文</span>
                 </div>
                 <div class="galaxy-legend" id="galaxy-legend"></div>
+                <div class="galaxy-note" id="galaxy-axis-note" hidden></div>
 
                 <!-- 星系图容器 -->
                 <div id="galaxy-container" style="width: 100%; height: 600px; background: #f2e7cd; border-radius: 10px; position: relative; overflow: hidden; cursor: grab;">
@@ -159,7 +176,8 @@
 
                 <div class="insight-panel">
                     <h4>✦ 一句话解读</h4>
-                    <div id="insight-content"><span class="insight-muted">选择书籍后，这里会自动生成大白话解读。</span></div>
+                    <div id="insight-content" aria-live="polite"><span class="insight-muted">选择书籍后，这里会自动生成大白话解读。</span></div>
+                    <div id="anomaly-content" class="anomaly-content" aria-live="polite"></div>
                 </div>
 
                 <div class="dashboard-grid">
@@ -407,6 +425,74 @@
             renderAdvLine(data);
             updateHighlightVisuals();
             renderInsight(data);
+            renderAnomalies(data);
+        }
+
+        // 「值得一看的片段」：向服务端要这本书的异常片段（统计上偏离整体较大的片段）
+        // 注意用请求序号防止旧请求的返回盖掉新结果（切书、切指标时很容易发生）
+        let anomalyRequestId = 0;
+
+        function renderAnomalies(data) {
+            const panel = document.getElementById('anomaly-content');
+            if (!panel) return;
+            if (!data || data.length === 0) {
+                panel.innerHTML = '';
+                return;
+            }
+
+            const book = data[0].name;
+            const displayName = data[0].displayName || book;
+            const requestId = ++anomalyRequestId;
+            panel.innerHTML = '<div class="anomaly-muted">正在找这本书里偏离较大的片段…</div>';
+
+            fetch(`/api/analysis/${encodeURIComponent(book)}?metric=${encodeURIComponent(currentMetric)}`)
+                .then(resp => resp.json().catch(() => null))
+                .then(result => {
+                    if (requestId !== anomalyRequestId) return; // 已经有更新的请求了，丢弃
+                    if (!result || result.status !== 'success') {
+                        panel.innerHTML = '';
+                        return;
+                    }
+                    const items = result.anomalies || [];
+                    const mLabel = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
+                    if (items.length === 0) {
+                        panel.innerHTML = `<div class="anomaly-muted">《${escapeHtml(displayName)}》的「${mLabel}」整体比较均匀，没有特别偏离的片段。</div>`;
+                        return;
+                    }
+
+                    const mean = result.summary && Number(result.summary.mean);
+                    const head = `<div class="anomaly-title">▸ 值得一看的片段（《${escapeHtml(displayName)}》）</div>`;
+                    const cards = items.map(item => {
+                        const value = Number(item.value);
+                        const z = Number(item.zScore);
+                        const dirText = z > 0 ? '偏高' : '偏低';
+                        const location = (typeof formatBlockLocation === 'function')
+                            ? formatBlockLocation(book, item.block)
+                            : `第 ${Number(item.block) + 1} 个片段`;
+                        const compare = Number.isFinite(mean)
+                            ? `比全书平均（${mean.toFixed(2)}）${dirText}${Math.abs(value - mean).toFixed(2)}`
+                            : '';
+                        const keywords = Array.isArray(item.keywords) && item.keywords.length
+                            ? `<div class="anomaly-keywords">关键词：${escapeHtml(item.keywords.join('、'))}</div>`
+                            : '';
+                        const preview = item.preview
+                            ? `<div class="anomaly-preview">"${escapeHtml(item.preview)}"</div>`
+                            : '';
+                        return `
+                            <div class="anomaly-item">
+                                <div class="anomaly-head"><span class="anomaly-tag">${dirText}</span>${escapeHtml(location)}</div>
+                                <div class="anomaly-value">${mLabel} ${Number.isFinite(value) ? value.toFixed(2) : ''}${compare ? ` · ${compare}` : ''}</div>
+                                ${preview}
+                                ${keywords}
+                            </div>`;
+                    }).join('');
+                    const foot = '<div class="anomaly-muted">这里的「偏离」只是统计意义上离整体较远（离均值超过 2 个标准差，或超出四分位距范围），不代表写得好或不好。点开左侧曲线可以查看它前后的变化。</div>';
+                    panel.innerHTML = head + cards + foot;
+                })
+                .catch(() => {
+                    if (requestId !== anomalyRequestId) return;
+                    panel.innerHTML = ''; // 拿不到就不占地方，不打扰用户
+                });
         }
 
         // 一句话解读：把图表自动翻译成大白话
@@ -519,6 +605,9 @@
             g.select(".x-axis").call(d3.axisBottom(x).ticks(5).tickFormat(d3.format(".0%")));
             g.select(".y-axis").transition().duration(500).call(d3.axisLeft(y).ticks(5));
 
+            // 章节刻度：标出「这一段的起伏大概在第几章」
+            renderChapterTicks(g, w, h, data);
+
             const line = d3.line().curve(d3.curveBasis).x(d => x(d.xPercent)).y(d => y(d.value));
 
             const paths = g.select(".content-area").selectAll(".line-path").data(data, d=>d.id);
@@ -543,7 +632,86 @@
 
             const brush = d3.brushX().extent([[0, 0], [w, h]]).on("end", advBrushed);
             g.select(".brush").call(brush);
-            if (!advState.brushRange) g.select(".brush").call(brush.move, null);
+
+            // 分享链接里带了框选范围就还原（只取一次）
+            if (typeof consumePendingUrlBrush === 'function') {
+                const pendingBrush = consumePendingUrlBrush();
+                if (pendingBrush) advState.brushRange = pendingBrush;
+            }
+
+            if (advState.brushRange) {
+                // 换算成像素区间后画出来；已经在正确位置就不动它，
+                // 否则 brush.move 会再触发一次 end 事件，形成来回刷新的死循环
+                const target = advState.brushRange.map(v => x(v));
+                const current = d3.brushSelection(g.select(".brush").node());
+                const alreadyThere = current
+                    && Math.abs(current[0] - target[0]) < 0.5
+                    && Math.abs(current[1] - target[1]) < 0.5;
+                if (!alreadyThere) g.select(".brush").call(brush.move, target);
+            } else {
+                g.select(".brush").call(brush.move, null);
+            }
+        }
+
+        // 走势图的章节刻度：横轴按片段序号等分，而章节标题给的是词位置，
+        // 靠「片段中点 = i*step + blockSize/2 个词」换算成横轴比例。
+        // 以当前第一本选中的书为准——每本书的章节划分不同，混着标会读错。
+        function renderChapterTicks(g, w, h, data) {
+            const layer = g.selectAll(".chapter-ticks").data([null]).join("g").attr("class", "chapter-ticks");
+            if (!data || data.length === 0) { layer.selectAll("*").remove(); return; }
+
+            const bookName = data[0].name;
+            const meta = (typeof normalizeBookMeta === 'function') ? normalizeBookMeta(bookName) : null;
+            layer.selectAll("*").remove();
+            if (!meta || !meta.chapters) return;
+
+            // 位置与热力图的分界线用同一个函数取值（getChapterBlockPositions），
+            // 两图才不会各算各的。旧写法自己拿 blockSpan 算浮点比例，分母还跟
+            // 热力图不一致，同一章在两图里的位置能差一格。
+            const positions = (typeof getChapterBlockPositions === 'function')
+                ? getChapterBlockPositions(bookName) : null;
+            const blockCount = meta.totalBlocks - 1;
+            if (!positions || !Number.isFinite(blockCount) || blockCount <= 0) return;
+
+            const x = d3.scaleLinear().domain([0, 1]).range([0, w]);
+            let drawn = 0;
+            let lastLabelX = -Infinity;
+            positions.forEach((item, index) => {
+                if (index === 0) return;
+                const fraction = item.block / blockCount;
+                if (!Number.isFinite(fraction) || fraction <= 0 || fraction >= 1) return;
+
+                drawn++;
+                layer.append("line")
+                    .attr("x1", x(fraction)).attr("x2", x(fraction))
+                    .attr("y1", h - 10).attr("y2", h)
+                    .attr("stroke", "#b3a58a").attr("stroke-width", 1);
+                // 章特别短时每 5 章的数字会挤在一起，挤就不标，宁可少标也不要糊成一片
+                const labelX = x(fraction);
+                if ((index + 1) % 5 === 0 && labelX - lastLabelX >= 24) {
+                    lastLabelX = labelX;
+                    layer.append("text")
+                        .attr("x", labelX).attr("y", h - 13)
+                        .attr("text-anchor", "middle")
+                        .style("font-size", "9px")
+                        .style("fill", "#98907f")
+                        .text(`${index + 1}章`);
+                }
+            });
+            if (drawn === 0) return;
+
+            // 滑窗切到书末就停了，末尾几章可能一个片段都没有 —— 那是数据里真的没有，
+            // 不是刻度画丢了，得在图上说明，免得读者以为后面没章节。
+            const tail = (typeof chaptersWithoutBlocks === 'function')
+                ? chaptersWithoutBlocks(bookName) : [];
+            const tailNote = tail.length > 0 ? `；末尾 ${tail.length} 章没有对应片段，未标出` : '';
+
+            layer.append("text")
+                .attr("x", 0).attr("y", -22)
+                .attr("text-anchor", "start")
+                .style("font-size", "10px")
+                .style("fill", "#98907f")
+                .text(`︱ 底部刻度为章节分界（按《${getBookDisplayName(bookName)}》的章节标题换算）${tailNote}`);
         }
 
         // 4. 交互核心
@@ -660,6 +828,8 @@
                 advState.brushRange = [x0/w, x1/w];
                 updateAdvCharts();
             }
+            // 框选范围也写进网址（复制链接时能还原这次框选）
+            if (typeof syncUrlState === 'function') syncUrlState();
         }
 
         window.advReset = function() {
@@ -670,6 +840,7 @@
             updateDrillPanel();
             updateHighlightVisuals();
             updateAdvCharts();
+            if (typeof syncUrlState === 'function') syncUrlState();
         }
 
         function renderFilters() {

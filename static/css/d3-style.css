@@ -327,6 +327,73 @@ button:hover {
     box-shadow: 0 4px 12px rgba(47, 42, 35, 0.22);
 }
 
+/* ---------- 三步快速开始 ---------- */
+.quickstart {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 18px;
+    margin-bottom: 18px;
+    padding: 10px 14px;
+    background: var(--card);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    font-size: 0.85rem;
+    color: var(--ink-70);
+}
+
+.quickstart-step b {
+    color: var(--vermilion);
+    margin-right: 4px;
+}
+
+.quickstart-demo {
+    padding: 5px 12px;
+    font-size: 0.82rem;
+    background: var(--vermilion);
+    color: #fdfaf3;
+}
+
+.quickstart-demo:hover {
+    background: #9c3a26;
+}
+
+.quickstart-close {
+    margin-left: auto;
+    padding: 2px 8px;
+    background: transparent;
+    color: var(--ink-50);
+    font-size: 0.85rem;
+}
+
+.quickstart-close:hover {
+    background: var(--elev);
+    color: var(--ink-100);
+    transform: none;
+    box-shadow: none;
+}
+
+/* ---------- 导出与分享按钮组 ---------- */
+.export-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+.export-group button {
+    padding: 6px 12px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    background: var(--card);
+    color: var(--ink-100);
+    border: 1px solid var(--border);
+}
+.export-group button:hover {
+    background: var(--panel);
+    color: var(--vermilion);
+    box-shadow: none;
+}
+
 /* ---------- 主图表区 ---------- */
 .visualization-container {
     display: grid;
@@ -625,6 +692,29 @@ button:hover {
     align-items: center;
     gap: 6px;
 }
+.galaxy-legend-skipped {
+    color: var(--ink-50);
+    text-decoration: line-through;
+}
+/* 星系下方的坐标说明 / 不可比提示 */
+.galaxy-note {
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    color: var(--ink-70);
+    font-size: 0.8rem;
+    line-height: 1.6;
+}
+.galaxy-note-warn {
+    background: #fdf1e0;
+    border-color: #e3c091;
+    color: #6b4a1c;
+}
+.galaxy-note-line {
+    display: block;
+}
 .galaxy-legend-swatch {
     display: inline-block;
     width: 12px;
@@ -644,6 +734,12 @@ button:hover {
 .heatmap-rect:hover {
     stroke: var(--vermilion);
     stroke-width: 2px;
+}
+
+/* 键盘焦点：格子很小，用外描边让当前焦点位置一眼可见 */
+.heatmap-rect:focus {
+    outline: 2px solid var(--vermilion);
+    outline-offset: 1px;
 }
 
 /* ---------- 高级视图头 ---------- */
@@ -726,6 +822,73 @@ button:hover {
 .insight-muted {
     color: var(--ink-50);
     font-size: 13px;
+}
+
+/* ---------- 「值得一看的片段」（异常片段） ---------- */
+.anomaly-content {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--border);
+}
+
+.anomaly-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-100);
+    margin-bottom: 8px;
+}
+
+.anomaly-muted {
+    color: var(--ink-50);
+    font-size: 12.5px;
+    line-height: 1.7;
+}
+
+.anomaly-item {
+    background: var(--card);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+}
+
+.anomaly-head {
+    font-size: 12.5px;
+    color: var(--ink-70);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.anomaly-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--vermilion);
+    color: #fdfaf3;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.anomaly-value {
+    font-size: 13px;
+    color: var(--ink-100);
+    margin-top: 4px;
+}
+
+.anomaly-preview {
+    font-size: 12px;
+    color: var(--ink-50);
+    font-style: italic;
+    line-height: 1.6;
+    margin-top: 4px;
+}
+
+.anomaly-keywords {
+    font-size: 12px;
+    color: var(--ink-70);
+    margin-top: 4px;
 }
 
 .dash-card {
@@ -1300,6 +1463,22 @@ button:hover {
     line-height: 1.6;
 }
 
+/* 详情面板：所在章节 + 全书概况 */
+.chapter-location {
+    font-size: 0.85rem;
+    color: var(--ink-70);
+    margin: 4px 0;
+}
+
+.book-overview {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-soft);
+    font-size: 0.78rem;
+    color: var(--ink-50);
+    line-height: 1.7;
+}
+
 .copy-block-btn {
     font-family: inherit;
     font-size: 0.75rem;
@@ -1317,3 +1496,14 @@ button:hover {
 .copy-block-btn:active { transform: translateY(1px); }
 
 .modal-copy-row { text-align: right; }
+
+/* ---------- 无障碍：尊重系统的「减少动态效果」 ---------- */
+/* 只压掉界面上的过渡/动画，文本雨由脚本决定默认状态（这里不碰它的绘制逻辑） */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}

@@ -9,4 +9,7 @@ services:
       pip install -r requirements.txt &&
       python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab'); nltk.download('stopwords')" &&
       python generate_data.py
-    startCommand: gunicorn api_server:app --bind 0.0.0.0:$PORT
+    # workers 固定 1：语料缓存在进程内存里，多 worker 会各存一份（免费版内存吃紧），
+    # 而且每次冷启动都要重新解析几百 KB 的 JSON。
+    # timeout 180：默认 30 秒会把大文件上传/分析直接掐断。
+    startCommand: gunicorn api_server:app --bind 0.0.0.0:$PORT --workers 1 --timeout 180
