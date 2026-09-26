@@ -983,6 +983,14 @@ button:hover {
     font-weight: 600;
 }
 
+/* 条形图的 0 基线：只在指标出现负值（如「风格走向」）时绘制 */
+.zero-line {
+    stroke: var(--ink-50);
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+    pointer-events: none;
+}
+
 .drill-panel {
     background: var(--card);
     border-radius: 8px;
