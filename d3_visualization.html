@@ -592,8 +592,20 @@
                 return config.order === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
             });
 
+            // 「风格走向」带正负号（PCA 横坐标，内置书里有均值为负的）。坐标轴必须以 0 为基线：
+            // 下界写死 0 时，负均值算出的柱高是负数，SVG 不渲染这个 rect——书明明被选中、
+            // 却被画成"没有数据"。全正的指标仍然得到 [0, max*1.1]，外观与改动前一致。
+            const means = data.map(d => d.currentMean).filter(isFiniteNumber);
+            const maxMean = d3.max(means);
+            const minMean = d3.min(means);
+            const yMax = (maxMean > 0 ? maxMean : 0) * 1.1;
+            const yMin = (minMean < 0 ? minMean : 0) * 1.1;
             const x = d3.scaleBand().range([0, w]).domain(sortedData.map(d=>d.displayName || d.name)).padding(0.3);
-            const y = d3.scaleLinear().range([h, 0]).domain([0, d3.max(data, d=>d.currentMean)*1.1 || 10]);
+            const y = d3.scaleLinear().range([h, 0]).domain(yMax === 0 && yMin === 0 ? [0, 10] : [yMin, yMax]);
+            // 柱子一律从 0 基线长出；负值向下长
+            const zeroY = y(0);
+            const barY = d => Math.min(y(d.currentMean), zeroY);
+            const barH = d => Math.abs(y(d.currentMean) - zeroY);
 
             g.select(".x-axis").transition().duration(500).call(d3.axisBottom(x))
                 .selectAll("text")
@@ -606,13 +618,21 @@
 
             g.select(".y-axis").transition().duration(500).call(d3.axisLeft(y).ticks(5));
 
+            // 出现负值时才画零线：读者得看得出柱子是从哪儿往上/往下长的
+            g.select(".content-area").selectAll("line.zero-line")
+                .data(yMin < 0 ? [0] : [])
+                .join("line")
+                .attr("class", "zero-line")
+                .attr("x1", 0).attr("x2", w)
+                .attr("y1", y(0)).attr("y2", y(0));
+
             const bars = g.select(".content-area").selectAll("rect").data(sortedData, d=>d.id);
             bars.join(
                 enter => enter.append("rect").attr("class", d => `book-el book-${d.id}`)
-                    .attr("x", d=>x(d.displayName || d.name)).attr("y", h).attr("width", x.bandwidth()).attr("height", 0).attr("fill", d=>d.color)
-                    .call(e => e.transition().duration(750).attr("y", d=>y(d.currentMean)).attr("height", d=>h-y(d.currentMean))),
+                    .attr("x", d=>x(d.displayName || d.name)).attr("y", zeroY).attr("width", x.bandwidth()).attr("height", 0).attr("fill", d=>d.color)
+                    .call(e => e.transition().duration(750).attr("y", barY).attr("height", barH)),
                 update => update.transition().duration(750)
-                    .attr("x", d=>x(d.displayName || d.name)).attr("y", d=>y(d.currentMean)).attr("width", x.bandwidth()).attr("height", d=>h-y(d.currentMean)),
+                    .attr("x", d=>x(d.displayName || d.name)).attr("y", barY).attr("width", x.bandwidth()).attr("height", barH),
                 exit => exit.transition().duration(500).attr("height", 0).remove()
             )
             .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>平均: ${fmtMetric(d.currentMean)}`); })
@@ -887,6 +907,9 @@
                         if (active) advState.activeBooks.add(book.name);
                         else advState.activeBooks.delete(book.name);
                         updateAdvCharts();
+                        // 筛选也是一次选择变更：不写回网址的话，「复制此链接」发出的
+                        // 还是被点掉之前的那批书
+                        if (typeof syncUrlState === 'function') syncUrlState();
                     });
             });
         }

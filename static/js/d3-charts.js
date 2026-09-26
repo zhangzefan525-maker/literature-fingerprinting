@@ -124,7 +124,8 @@ function buildStateUrl() {
     if (chartType !== 'heatmap') params.set('chart', chartType);
     if (smoothness !== DEFAULT_SMOOTHNESS) params.set('smooth', String(smoothness));
     if (currentTab !== VIEW_IDS[0]) params.set('view', currentTab);
-    const books = Array.from(selectedBooks);
+    // 「全书对比」页上以该页的书籍筛选为准，链接打开后看到的就是同一批书
+    const books = Array.from(getActiveBookSet());
     if (books.length > 0) params.set('books', books.join('|'));
 
     // advState 定义在页面内的另一段脚本里，取不到就当没有框选
@@ -1807,7 +1808,7 @@ function getExportTarget() {
 
 // 文件名里的书：多本时不再只写第一本的名字（导出的是对比图，不是单书图）
 function exportFileLabel() {
-    const books = Array.from(selectedBooks);
+    const books = Array.from(getActiveBookSet());
     if (books.length === 0) return 'Comparison';
     if (books.length > 1) return '多书对比';
     return books[0].replace(/\s+/g, '_');
@@ -1881,14 +1882,16 @@ function exportChart() {
 }
 
 function exportSummary() {
-    if (!realData || selectedBooks.size === 0) {
-        showError('当前没有可导出的分析数据。请先选择书籍或上传文本。');
-        return;
-    }
-
-    const books = Array.from(selectedBooks).filter(book => getMetricValues(book, currentMetric).length > 0);
+    // 用 getExportBooks() 而不是直接读 selectedBooks：「全书对比」页上的书籍筛选
+    // 也要算数，否则点掉的书仍会在摘要里占一整节
+    const books = getExportBooks();
     if (books.length === 0) {
-        showError('当前选择的书籍暂时没有可用于这个观察角度的数据，请换一个角度，或换一本书再试。');
+        const pool = getActiveBookSet();
+        if (!realData || !pool || pool.size === 0) {
+            showError('当前没有可导出的分析数据。请先选择书籍或上传文本。');
+        } else {
+            showError('当前选择的书籍暂时没有可用于这个观察角度的数据，请换一个角度，或换一本书再试。');
+        }
         return;
     }
 
@@ -1907,6 +1910,7 @@ function exportSummary() {
         `- 当前视图：${currentTab === 'view-main' ? (chartType === 'line' ? '基础趋势分析 · 折线趋势图' : '基础趋势分析 · 指纹热力图') : currentTab === 'view-galaxy' ? '风格星系' : '全书对比'}`,
         `- 观察角度：${metricLabel}`,
         `- 怎么理解：${metricHint}`,
+        `- 统计范围：${describeExportScope()}`,
         ...(contextLine ? [`- 解读参考：${contextLine}`] : []),
         `- 选择书籍：${books.map(getBookDisplayName).join('、')}`,
         `- 在线视图（打开即还原本次选择）：${buildStateUrl()}`,
@@ -1914,12 +1918,23 @@ function exportSummary() {
     ];
 
     books.forEach(book => {
-        const values = getMetricValues(book, currentMetric);
+        // 框选生效时只统计框选内的片段，和屏幕上显示的是同一批
+        const allValues = getMetricValues(book, currentMetric);
+        const brush = getBrushBlockRange(book);
+        const values = brush ? allValues.filter((d, i) => i >= brush.from && i <= brush.to) : allValues;
+        lines.push(`## ${getBookDisplayName(book)}`);
+        lines.push(`- 参与统计的片段数：${values.length}（全书共 ${getBookBlockCount(book)} 个片段）`);
+        if (brush) {
+            lines.push(`- 本次统计的片段：第 ${brush.from + 1}–${brush.to + 1} 个片段`);
+        }
+        if (values.length === 0) {
+            // 这本书比框选的区段还短，一个片段都没落进来。不能继续往下算均值。
+            lines.push('- 框选范围内没有这本书的片段，本节的均值、最高片段均无法给出。');
+            lines.push('');
+            return;
+        }
         const mean = d3.mean(values, d => d.value);
         const peak = values.reduce((best, current) => current.value > best.value ? current : best, values[0]);
-        lines.push(`## ${getBookDisplayName(book)}`);
-        lines.push(`- 参与统计的片段数：${values.length}`);
-        lines.push(`- 全书范围：全书共 ${getBookBlockCount(book)} 个片段 · 本次分析其中 ${values.length} 个片段`);
         lines.push(`- 平均水平：${formatMetric(mean)}`);
         lines.push(`- 最高片段：第 ${Number(peak.block) + 1} 个片段，数值 ${formatMetric(peak.value)}`);
         lines.push(`- 片段位置：${formatBlockLocation(book, peak.block)}${formatWordCount(peak.wordCount)}`);
@@ -1972,10 +1987,65 @@ function exportTimestamp() {
     return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 }
 
+// 当前屏幕上真正参与分析的那几本书。
+// 「全书对比」页有自己的书籍筛选（chips，存在 advState.activeBooks 里）：在那一页上，
+// 屏幕显示的就是筛选后的那几本，所以导出和分享链接都得跟它走——否则用户明明点掉了
+// 一本书，导出的摘要里却还有它一整节。
+function getActiveBookSet() {
+    try {
+        if (currentTab === 'view-dashboard'
+            && typeof advState !== 'undefined' && advState
+            && Array.isArray(advState.data) && advState.data.length > 0) {
+            return advState.activeBooks;
+        }
+    } catch (e) {
+        // advState 定义在页面内的另一段脚本里，取不到就按全局选书走
+    }
+    return selectedBooks;
+}
+
 // 导出的书名清单：当前选中、且在这个观察角度下确实有数据
 function getExportBooks() {
-    if (!realData || selectedBooks.size === 0) return [];
-    return Array.from(selectedBooks).filter(book => getMetricValues(book, currentMetric).length > 0);
+    const source = getActiveBookSet();
+    if (!realData || !source || source.size === 0) return [];
+    return Array.from(source).filter(book => getMetricValues(book, currentMetric).length > 0);
+}
+
+// 「全书对比」页上走势图被框选的范围（0–1 的阅读进度比例）；没框选时返回 null。
+// 那一页的均值、片段数都按这个范围算，导出必须跟着走——否则同一份分析在屏幕上
+// 和导出物里是两个数，用户把导出的数字贴进论文就会和图上看到的对不上。
+function getActiveBrushRange() {
+    try {
+        if (typeof advState === 'undefined' || !advState) return null;
+        const range = advState.brushRange;
+        if (!Array.isArray(range) || range.length !== 2 || !range.every(isFiniteNumber)) return null;
+        const lo = Math.max(0, Math.min(range[0], range[1]));
+        const hi = Math.min(1, Math.max(range[0], range[1]));
+        return hi > lo ? [lo, hi] : null;
+    } catch (e) {
+        return null; // advState 定义在页面内的另一段脚本里，取不到就当作没框选
+    }
+}
+
+// 框选范围换算成某本书的片段下标区间。用的是屏幕上那套算法：
+// 第 i 个片段的 xPercent = i / (片段数 - 1)，落在 [min, max] 内才算选中。
+// 片段下标与块下标是同一个编号（四个指标每个块各一条记录）。
+function getBrushBlockRange(bookName) {
+    const range = getActiveBrushRange();
+    if (!range) return null;
+    const len = getMetricValues(bookName, currentMetric).length;
+    if (!len) return { from: 0, to: -1, count: 0 };
+    const denom = len - 1 || 1;
+    const from = Math.ceil(range[0] * denom);
+    const to = Math.floor(range[1] * denom);
+    return { from, to, count: Math.max(0, to - from + 1) };
+}
+
+// 导出物里那句范围说明：框选时点名范围，没框选时明写「全书」
+function describeExportScope() {
+    const range = getActiveBrushRange();
+    if (!range) return '全书全部片段';
+    return `走势图框选的 ${(range[0] * 100).toFixed(1)}%–${(range[1] * 100).toFixed(1)}% 区段（与「全书对比」页上的数字同一口径）`;
 }
 
 // 按片段序号取出某指标的原始条目（按 block 对齐，避免四个指标之间错位）
@@ -2072,7 +2142,10 @@ function exportTableData() {
             functionWords: getBlockSeriesMap(book, 'functionWords')
         };
 
+        // 框选生效时只导框选内的片段（屏幕上的均值就是按这些片段算的）
+        const brush = getBrushBlockRange(book);
         for (let i = 0; i < totalBlocks; i += 1) {
+            if (brush && (i < brush.from || i > brush.to)) continue;
             const chapter = getBlockChapter(book, i);
             const words = series.functionWords.get(i) || series.sentenceLength.get(i) || {};
             const value = (key) => {
@@ -2113,6 +2186,7 @@ function exportTableData() {
         '# 文印·文学指纹分析 数据表',
         `# 生成时间：${new Date().toLocaleString('zh-CN')}`,
         `# 指标口径：平均句长（词/句）；用词重复度（Simpson，越高越重复）；独特词丰富度（Honoré R，越高用词越丰富）；风格走向_横/纵轴（高频小词用法的二维坐标）`,
+        `# 统计范围：${describeExportScope()}`,
         `# 片段口径：${windowSpecs.join('；')}。同一段原文会被反复计入，请勿把这些行当作互相独立的样本，按行做显著性检验会高估样本量。`,
         `# 数据行数：${rows.length - 1}`
     ];
@@ -2130,8 +2204,13 @@ function exportCitation() {
         return;
     }
 
-    const metas = books.map(name => normalizeBookMeta(name)).filter(Boolean);
-    const totalBlocks = metas.reduce((sum, meta) => sum + (meta.totalBlocks || 0), 0);
+    // 片段数与摘要/CSV 同口径：有框选时只算框选内的片段
+    const totalBlocks = books.reduce((sum, book) => {
+        const brush = getBrushBlockRange(book);
+        if (brush) return sum + brush.count;
+        const meta = normalizeBookMeta(book);
+        return sum + ((meta && meta.totalBlocks) || 0);
+    }, 0);
     // 只有在选中书共用同一个模型时才敢把模型编号写进条目
     const sharedModel = getSharedProjection(books).model;
     const now = new Date();
@@ -2154,7 +2233,7 @@ function exportCitation() {
         `  year         = {${now.getFullYear()}},`,
         `  month        = {${monthNames[now.getMonth()]}},`,
         `  howpublished = {在线交互式分析（Keim \\& Oelke 2007 指标口径）},`,
-        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNote}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
+        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNote}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
         `  url          = {${buildStateUrl()}}`,
         '}',
         ''
