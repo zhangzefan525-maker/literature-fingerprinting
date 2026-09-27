@@ -1096,3 +1096,119 @@ REMOTE=$(git rev-parse FETCH_HEAD)
 **还没做的：脚本本身没改。** 上面那三行守卫仍是原样，「拉取失败 → 白重启一次、且迟迟追不上
 新提交」还会继续发生。修法是检查 fetch 退出码，并改成比对 `origin/master`；那是生产机上的
 root 脚本，确认后再动，改动前会先备份原文件。
+
+---
+
+## 第十批：折叠区展开之后，层级还在（2026-09-28）
+
+第九批把 6 个导出按钮分成「常用 2 个 + 收起来的 4 个」，方向是对的，但**一展开层级就没了**：
+那 4 个低频按钮用的是和「导出图像」「复制此链接」一模一样的样式，7 个按钮长得一样，
+而展开那一刻恰恰是最需要层级的时候。这一批补上展开态的层级，并顺手修掉三件确定是错的事。
+
+### 1. 一条线，一句规则
+
+`#copyLinkBtn` 与 `#exportMoreBtn` 之间加了一条 `.export-divider`（1px × 18px）。规则一句话说得完：
+**线左边一律实心，线右边一律次要样式**——连切换钮自己也用次要样式，因为「更多导出」本身也是低频动作。
+一条规则管到底，展开后层级不会消失。
+
+次要样式是 `background: transparent` + `border-color: transparent` + `color: var(--ink-70)` + `font-weight: 500`。
+**保留 1px 边框、只把颜色设透明**：写 `border: none` 会让盒子各边小 1px，两排按钮的边缘对不齐。
+（中文 Windows 上 YaHei 没有 500 这一档，会落到 400，所以目标平台上实际看到的对比是 600→400。）
+
+这里踩到两个**不报错的坑**，属于「特异性输了，但没有任何提示」那一类：
+- `#exportMoreBtn` 同时命中 `.export-group button`（0,1,1）。单独写 `.export-more-toggle`（0,1,0）
+  会被整个盖掉，四个属性一条都不生效。必须写 `.export-group .export-more-toggle`。
+- `.export-more button` 与 `.export-group button` 同为 (0,1,1)，只靠源码顺序赢。写成
+  `.export-group .export-more button` 就不再依赖顺序。
+
+实测（1400px、展开态）：切换钮与 4 个低频按钮的 `backgroundColor` 全是 `rgba(0, 0, 0, 0)`、
+`fontWeight` 是 `500`、`borderTopWidth` 仍是 `1px`；「导出图像」仍是 `rgb(253, 249, 239)` / `600`；
+7 个按钮 `height` 都是 33，`top`/`bottom` 完全相同；分隔线 18px、垂直居中（偏移 7.5px）。
+
+### 2. 箭头不再靠 JS 改文字（旧写法有两个 bug）
+
+旧代码是 `this.textContent = willOpen ? '收起导出 ▴' : '更多导出 ▾'`，两个问题：
+
+1. **同一个控件两个名字。** 读屏用户第一次听到「更多导出」，第二次回到同一个按钮听到「收起导出」。
+   而且「收起导出」还 overclaim——它只收起 6 个导出里的 4 个。
+2. `textContent =` 会把箭头那个节点整个删掉。
+
+现在箭头是按钮里一个 `aria-hidden` 的 `<span class="export-caret">▾</span>`，**按钮文字永远不变**，
+朝向由 CSS 按 `aria-expanded` 旋转：
+
+```css
+.export-caret { display: inline-block; font-size: 0.72em; transition: var(--transition-control); }
+.export-more-toggle[aria-expanded="true"] .export-caret { transform: rotate(180deg); }
+```
+
+`display: inline-block` 不能省——inline 盒子不可 transform，旋转会静默失效。
+朝向由 `aria-expanded` 决定而不是由 JS 改写，**可见状态与无障碍状态同源**，
+不可能出现「读屏说已展开、箭头还是 ▾」。
+
+实测：完整展开+收起一个来回之后，`#exportMoreBtn.textContent` 仍是 `更多导出 ▾`、`.export-caret`
+仍在 DOM 里（旧写法这两条都会挂）；展开时 `transform` 是 `matrix(-1, 0, 0, -1, 0, 0)`、收起时是 `none`。
+
+### 3. Escape 收起 + 焦点归位
+
+Escape 监听挂在 **`.export-group`** 上，不挂 `document`：keydown 只会从组内有焦点的子元素冒泡上来，
+「焦点在组内」这条前提是白拿的，于是**结构上**不可能抢走星系弹窗的同一个 Escape。
+收起后显式把焦点还给切换钮——面板里的按钮会跟着一起 hidden，浏览器接着把焦点丢给 `<body>`。
+不写 `preventDefault` / `stopPropagation`：Escape 在这条路径上没有浏览器默认行为，拦下来只会让别的监听者收不到。
+
+实测：焦点在组内按 Escape → `hidden: true`、`aria-expanded: "false"`、
+`document.activeElement.id === 'exportMoreBtn'`；焦点在组外（`#chartTypeSelect`）按 Escape → 面板纹丝不动。
+Tab 顺序：收起时从切换钮直接跳到 `#chartTypeSelect`（跳过那 4 个）；展开后依次是
+`exportSvgBtn` → `exportDataBtn` → `exportSummaryBtn` → `exportCiteBtn` → `#chartTypeSelect`
+（顺带证明分隔线不参与 Tab）。
+
+### 4. 不再靠 `display: contents`
+
+`.export-more` 原来是 `display: contents`（全仓唯一一处），只为了让 4 个按钮成为父级 flex 的直接子项，
+收起靠 `[hidden] { display: none !important }` 压过它。现在它是真容器：
+`display: flex; flex-wrap: wrap; align-items: center; gap: 8px;`——4 个按钮自成一个 flex 项，
+窄屏整体换行、不会散到两行，320px 下也不撑宽页面。
+
+### 5. 窄屏那条线：实测之后决定撤掉（≤379px）
+
+分隔线落在行尾时什么也没标。它该不该出现的条件**不是屏幕多宽，而是右边有没有东西**，CSS 判不了，
+只能取实测的换行起点。逐档量下来：≥372px 时它与「更多导出」同排（7.5px 居中偏移）；≤368px 时被挤到
+上一行末尾、跟「复制此链接」同排。取 **379px** 为界。代价是不对称的——多藏几像素只是少一道装饰
+（层级由次要样式扛着，不靠这条线），少藏了就是在小屏上留一道看不懂的竖线，所以宁向往宽里取。
+
+不用别的办法的理由：把线做成切换钮的 `border-left`，它会跟着换行跑到行首；做成绝对定位的伪元素，
+它不参与换行也就永远画在那儿——两种都是在另一个位置重犯同一个错。
+
+实测：320 / 360（含触屏、按钮 44px）`display: none`、页面无横向溢出；380 / 390 / 978 / 1400 为 `block`
+且与切换钮同排；触屏下按钮 44px 而分隔线仍是 18px（没被拉长）。
+
+### 6. 三处旧说法：两处已过时，一处实测仍然成立
+
+- **README 第 985–991 行**（`display: contents` 的说明）——**已过时**，见上面第 4 条。
+- **README 第 1021–1022 行**（「`aria-expanded` 与按钮文字（`更多导出 ▾` / `收起导出 ▴`）同步翻转」）
+  ——**已过时**，按钮文字现在不变，见第 2 条。
+- **README 第 948 行**（`.global-toolbar` 33 / 33 / 0）——**实测仍然成立，不用改**。这一条本来也被列进
+  「可能被本批改写」：本批多了一个分隔线和一层嵌套容器，间距比原来多约 9px，担心把那条工具条挤成两行。
+  在同一个视口（978×702、默认收起态）复量，`export-group` 仍是 `rows === 1`、`.global-toolbar` 仍是 **33px**。
+  展开态下这条工具条在 978px 是 **63px**（多出的 4 个按钮要占一行），但把那道分隔线从 DOM 里删掉重测
+  同样是 63px，说明那是展开本身的代价，不是这一批引入的。
+  窄屏逐档：320–360 折 4 行、390–420 3 行、480–760 2 行、900 起 1 行。
+
+### 7. 验证
+
+闸门：`node --check static/js/d3-charts.js` 通过；`d3_visualization.html` 两个内联脚本块
+`new vm.Script()` 通过；`python -m unittest discover -s tests` 仍是 **151 项**。
+本批仍然只改前端，测试网覆盖不到，全部靠实测（CDP，结果见上）。
+
+交叉回归：6 个导出动作全部仍能触发（`copyLinkBtn` 复制成功，按钮自己变成「✓ 链接已复制」）；
+三个页签来回切，折叠区状态不被重置、工具条始终可见（这正是工具条放在视图外面的原因）；
+`?view=view-dashboard&books=…&brush=0.3000-0.7000` 深链仍还原（`advState.brushRange` 为 `[0.3, 0.7]`、
+`drillAuto` 为 true、3 张详情卡）。控制台错误只有既有的 `favicon.ico` 404。
+
+### 8. 没做的
+
+- **不改浮层/下拉**：仓库里一个浮层控件都没有（`role="menu"`、`aria-haspopup` 全仓 0 处），
+  做第一处要新增点击外部关闭、定位避让、焦点进出管理，风险面远大于收益。
+- **不动主按钮的实心外观与位置**：那是既有语言，不改。
+- **原计划里的「不预先隐藏窄屏分隔线」被推翻了**：当时的判断是「线领头换行需要视口 <281px，真实设备到不了」，
+  实测发现真正会看到的问题不是领头换行，而是它在 320–368px 拖在上一行末尾，所以改成了上面的 379px 断点。
+- 一行未动：`src/`、`api_server.py`、`data/processed/`、文本雨、分词与任何指标算法。

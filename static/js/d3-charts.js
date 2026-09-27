@@ -488,7 +488,8 @@ function initEventListeners() {
     });
 
     // 导出图像 / 导出摘要 / 复制链接
-    document.getElementById('exportBtn').addEventListener('click', exportChart);
+    const exportBtn = document.getElementById('exportBtn');
+    if (exportBtn) exportBtn.addEventListener('click', exportChart);
     const exportSummaryBtn = document.getElementById('exportSummaryBtn');
     if (exportSummaryBtn) exportSummaryBtn.addEventListener('click', exportSummary);
     const exportSvgBtn = document.getElementById('exportSvgBtn');
@@ -500,16 +501,32 @@ function initEventListeners() {
     const copyLinkBtn = document.getElementById('copyLinkBtn');
     if (copyLinkBtn) copyLinkBtn.addEventListener('click', () => copyShareLink(copyLinkBtn));
     // 「更多导出」是个纯显隐开关：四个低频按钮平时收在 #export-more 里（[hidden] 让它们
-    // 连 Tab 都进不去），点一下展开。aria-expanded 是标准属性，读屏会念出「已展开/已折叠」。
+    // 连 Tab 都进不去），点一下就地展开。aria-expanded 是标准属性，读屏会念出「已展开/已折叠」。
+    // 这里只翻这两个状态，**不碰按钮文字**：切到「收起导出」会让同一个控件的可访问名变来变去,
+    // 而且用 textContent 整体重写会把箭头那个 span 一起删掉。箭头朝向交给 CSS 按 aria-expanded 转。
+    const exportGroup = document.querySelector('.export-group');
     const exportMoreBtn = document.getElementById('exportMoreBtn');
-    if (exportMoreBtn) {
+    const exportMore = document.getElementById('export-more');
+    if (exportGroup && exportMoreBtn && exportMore) {
+        const setExportMore = function(open) {
+            exportMore.hidden = !open;
+            exportMoreBtn.setAttribute('aria-expanded', String(open));
+        };
+
         exportMoreBtn.addEventListener('click', function() {
-            const more = document.getElementById('export-more');
-            if (!more) return;
-            const willOpen = more.hidden;
-            more.hidden = !willOpen;
-            this.setAttribute('aria-expanded', String(willOpen));
-            this.textContent = willOpen ? '收起导出 ▴' : '更多导出 ▾';
+            setExportMore(exportMore.hidden);
+        });
+
+        // Escape 收起。监听挂在 .export-group 上而不是 document：keydown 只会从组内有焦点的
+        // 子元素冒泡上来，「焦点在组内」这条前提是白拿的，所以结构上不可能抢走别处（星系弹窗）
+        // 的同一个 Escape。收起必须显式把焦点还给切换钮——面板里的按钮会跟着一起 hidden，
+        // 浏览器接着把焦点丢给 <body>，键盘用户当场丢位置。
+        // 不写 preventDefault / stopPropagation：Escape 在这条路径上没有浏览器默认行为，
+        // 拦下来只会让别的监听者收不到。
+        exportGroup.addEventListener('keydown', function(e) {
+            if (e.key !== 'Escape' || exportMore.hidden) return;
+            setExportMore(false);
+            exportMoreBtn.focus();
         });
     }
 
