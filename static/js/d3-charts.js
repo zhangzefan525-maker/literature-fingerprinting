@@ -107,7 +107,10 @@ function applyUrlState(state) {
     }
     if (state.brush) pendingUrlBrush = state.brush;
 
-    if (state.tab) window.switchTab(state.tab);
+    // 按链接还原视图时不滚：这时数据还没到、三个视图都是空盒子，滚过去只会落在
+    // 一个「正在加载…」上；而且浏览器自己的滚动位置还原会跟这里抢。
+    // 打开链接的人该先看到的是「这台机器上有哪些书、选中了哪几本」。
+    if (state.tab) window.switchTab(state.tab, { scroll: false });
 
     updateMetricHint();
 }
@@ -339,6 +342,17 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
         lines.push('⚠ 当前选中的书没有共同的坐标基准（多为旧版数据或不同模型生成的坐标），下面按「各书各自计算」的方式摆放：点与点之间的距离不可直接比较。重新上传一次 .txt 即可获得可比坐标。');
     } else {
         (comparability.axisLabels || []).forEach(text => lines.push(text));
+        // 可比时用的是与内置示例书共用的那套固定坐标范围（resolveGalaxyExtent 的
+        // fixedExtent 分支），不随选书改变，所以只选一两本时点会挤在画布中间一小块。
+        // 实测 1440 与 900 两种宽度下点云都只占到画布宽度的三成——这是设计，不是画坏了，
+        // 但页面从来没说过，用户容易以为图出问题了。
+        //
+        // 条件必须卡在这里：独立模式（各书各自算，范围不共享）下这句话是假话，
+        // 而且会和同一个面板上的「各书各自计算」告警直接打架；outOfRange 时范围已经
+        // 被扩展过去容纳超界的数据，点也不再挤在中间，说了反而误导。
+        if (extent && !extent.outOfRange) {
+            lines.push('（坐标范围与内置示例书共用、不随选书改变，所以只选一两本时点会集中在中间一小块；这是正常的。）');
+        }
         if (comparability.independentBooks.length > 0) {
             warn = true;
             const names = comparability.independentBooks.map(getBookDisplayName).join('、');
@@ -370,8 +384,44 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
 }
 
 
+// 吸顶的页签条挡在视口顶端，滚上去的内容标题会正正压在它底下，所以要先量它多高。
+// 这个高度不是常量：窄屏（≤560px）改过字号和内边距，三个按钮 flex-wrap 换行后还会更高，
+// 与其在 CSS 里写一个必然在某些宽度下遮住标题的 scroll-margin-top，不如每次实测。
+function stickyTabsOffset() {
+    const nav = document.querySelector('.tab-navigation');
+    if (!nav) return 0;
+    // +8：页签条底下还挂着 box-shadow(0 8px 14px -10px)，留一点缝免得标题贴着边
+    return Math.ceil(nav.getBoundingClientRect().height) + 8;
+}
+
+// 元素在文档里的**布局**位置（offsetTop 逐级相加），不含 CSS transform。
+// 这里不能用 getBoundingClientRect()：.view-section 每次显示都会重跑一遍
+// fadeIn 动画（CSS `animation: fadeIn 0.4s`，from 状态是 translateY(10px)），
+// 切页签的那一刻量到的是被动画挪下去 10px 的假位置，照着它滚就会多滚 10px——
+// 正好把这行注释下面留的那点缝吃干净，标题还会压进吸顶条两像素。
+// offsetTop 反映的是布局盒，动画在跑也不受影响。
+function layoutOffsetTop(el) {
+    let top = 0;
+    for (let node = el; node; node = node.offsetParent) top += node.offsetTop;
+    return top;
+}
+
+// 把某个视图的顶部滚到吸顶条下沿。用 window.scrollTo 而不是 scrollIntoView：
+// 吸顶高度是动态的，反正都要实测，直接算 Y 更短、更显式，也能自己夹住顶部。
+function scrollToSection(section) {
+    if (!section) return;
+    const top = layoutOffsetTop(section) - stickyTabsOffset();
+    // behavior 必须显式传，而且必须自己问 prefersReducedMotion()：
+    // JS 传进来的 behavior 会覆盖 CSS，CSS 里那条 scroll-behavior: auto !important
+    // （prefers-reduced-motion 媒体查询下）保护不了这条路。
+    window.scrollTo({
+        top: Math.max(0, top),
+        behavior: prefersReducedMotion() ? 'auto' : 'smooth'
+    });
+}
+
 // Tab 切换逻辑
-window.switchTab = function(tabId) {
+window.switchTab = function(tabId, options) {
     currentTab = tabId;
 
     // 同步 tab/tabpanel 语义，让键盘和读屏用户知道当前视图
@@ -390,6 +440,12 @@ window.switchTab = function(tabId) {
 
     const activeSection = document.getElementById(tabId);
     if (activeSection) {
+        // 滚到刚切出来的这块内容。放在这里、不进下面的 setTimeout：
+        // 视图顶部的 Y 只由它上面的内容决定（header/选书/上传/工具条都是固定高），
+        // 图表渲染在视图内部、位于这个锚点之下，撑高多少都不移动它。
+        // 上面压着约 630px 的工具区，不滚的话切了页签也看不见图。
+        if (!options || options.scroll !== false) scrollToSection(activeSection);
+
         // 延迟一点点以确保 DOM 布局已更新
         setTimeout(() => {
             if (tabId === 'view-main' && realData) {
@@ -472,7 +528,10 @@ function initTabKeyboard() {
             event.preventDefault();
             const viewId = next.getAttribute('aria-controls');
             if (viewId) window.switchTab(viewId);
-            next.focus();
+            // 不让 focus 参与滚动：focus() 默认会把元素滚进视口，而页签条是吸顶的、
+            // 本来就在视口里，可它会在平滑滚动还在途中时把页面拽回去，两个偏移打架。
+            // 滚动只归 switchTab 里的 scrollToSection 管。
+            next.focus({ preventScroll: true });
         });
     });
 }
@@ -537,18 +596,18 @@ window.hideQuickStart = function() {
 
 window.loadComparisonExample = loadComparisonExample;
 
-// 根据当前图表类型（热力图 / 折线图）控制「曲线平滑」与「多书对比」控件的显隐
-// 热力图是像素块，没有曲线可平滑，也不支持折线多书对比，故仅折线图下显示
+// 根据当前图表类型控制「曲线平滑」的显隐：热力图是像素块，没有曲线可平滑。
+//
+// 「多书对比」那行提示曾经也一并藏起来，理由是「热力图不支持多书对比」——那是错的：
+// drawMultiHeatmap 本来就按 booksArray 循环，每本书各占一列（列数 ceil(sqrt(n))，
+// 可用宽度按书数均分），选 3 本会并排画出三张网格。也就是说那句「可多选对比」的提示
+// 在热力图下同样为真，跟着藏起来等于把一句真话收走了。
+// 它本身只是个 <div> 提示语（没有点击处理器），显不显示都不影响图表行为。
 function updateChartTypeUI() {
-    const compareBtn = document.getElementById('toggleComparison');
     const smoothnessGroup = document.getElementById('smoothnessGroup');
-    const isHeatmap = chartType === 'heatmap';
 
-    if (compareBtn) {
-        compareBtn.style.display = isHeatmap ? 'none' : 'block';
-    }
     if (smoothnessGroup) {
-        smoothnessGroup.style.display = isHeatmap ? 'none' : 'flex';
+        smoothnessGroup.style.display = chartType === 'heatmap' ? 'none' : 'flex';
     }
 }
 
@@ -1054,7 +1113,8 @@ function drawMultiLineChart(svg, booksArray) {
     const xScale = d3.scaleLinear().domain([0, maxBlocks]).range([0, width]);
     const yScale = d3.scaleLinear().domain([yMin, yMax]).range([height - margin.top - margin.bottom, 0]);
 
-    const colorScale = d3.scaleOrdinal(['#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d', '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72']).domain(booksArray);
+    // 取色统一走 colorForBook（按全库顺序，不按点选顺序），
+    // 否则同一本书在这张图和「全书对比」页会是两个颜色
 
     const chartHeight = height - margin.top - margin.bottom;
     g.append("g").attr("transform", `translate(0,${chartHeight})`).call(d3.axisBottom(xScale));
@@ -1098,7 +1158,7 @@ function drawMultiLineChart(svg, booksArray) {
         g.append("path")
             .datum(smoothed)
             .attr("fill", "none")
-            .attr("stroke", colorScale(bookData.book))
+            .attr("stroke", colorForBook(bookData.book))
             .attr("stroke-width", 2.5)
             .attr("d", line)
             .style("opacity", 0.8)
@@ -1115,7 +1175,7 @@ function drawMultiLineChart(svg, booksArray) {
             .attr("cx", (d, i) => xScale(i))
             .attr("cy", d => yScale(d.value))
             .attr("r", 3) 
-            .attr("fill", colorScale(bookData.book))
+            .attr("fill", colorForBook(bookData.book))
             .attr("stroke", "#fdfaf3")
             .attr("stroke-width", 1.5)
             .attr("role", "button")
@@ -1179,7 +1239,7 @@ function drawMultiLineChart(svg, booksArray) {
     const legend = svg.append("g").attr("transform", `translate(${width + 20}, ${margin.top})`);
     chartData.forEach((d, i) => {
         const row = legend.append("g").attr("transform", `translate(0, ${i * 25})`);
-        row.append("rect").attr("width", 15).attr("height", 15).attr("fill", colorScale(d.book));
+        row.append("rect").attr("width", 15).attr("height", 15).attr("fill", colorForBook(d.book));
         row.append("text").attr("x", 20).attr("y", 12).text(getBookDisplayName(d.book)).style("font-size", "12px").style("fill", "#5c5346");
     });
     
@@ -1947,6 +2007,43 @@ function getBookDisplayName(name) {
 }
 
 // ==========================================
+// 🎨 书名 → 颜色：三张图共用同一份映射
+// ==========================================
+// 热力图/折线图、风格星系、全书对比原来各建一个 d3.scaleOrdinal，range 一模一样，
+// 但 domain 不一样（前两个是「当前选中的书」按点选顺序，看板是「全库」），于是
+// 同一本书在不同页签是不同颜色——《白牙》在星系里是青色、到了看板变成赭色。
+// 现在统一以全库顺序（Object.keys(realData)）为唯一 domain：看板的取值一位都不变，
+// 另外两处（折线图、星系）向它看齐。
+//
+// 旁注：#b5472f 同时是 --vermilion 强调色（hover 描边、选中态、峰值点），
+// 排在 0 号槽的那本书会和强调色同色。这是既有现象，不是这里引入的。
+const BOOK_COLOR_RANGE = [
+    '#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d',
+    '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72'
+];
+
+// 与 getBookSafeId 同一套 Java 风格字符串哈希：纯函数、确定性、不碰 Math.random
+function bookColorHash(value) {
+    const text = String(value ?? '');
+    let hash = 0;
+    for (let i = 0; i < text.length; i += 1) {
+        hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+    }
+    return Math.abs(hash);
+}
+
+// 命中全库顺序时与旧 scaleOrdinal 逐位等价（d3 就是 range[domainIndex % range.length]），
+// 所以看板配色零变化。查不到只可能发生在数据加载之前，而那时三张图都还没开始画
+// （initChart / initAdvancedData / initStyleGalaxy 都会在 !realData 时提前返回），
+// 所以按名字哈希取色这条分支是纯防御，不追求与索引分支同色。
+function colorForBook(name) {
+    const keys = (realData && typeof realData === 'object') ? Object.keys(realData) : [];
+    const index = keys.indexOf(String(name));
+    const slot = index >= 0 ? index : bookColorHash(name);
+    return BOOK_COLOR_RANGE[slot % BOOK_COLOR_RANGE.length];
+}
+
+// ==========================================
 // ✧ 风格星系的轴词：只说实话
 // ==========================================
 // 说明里举的「高频小词」例子必须来自真实模型，不能写死。本项目语料是英文小说，
@@ -1996,6 +2093,26 @@ function renderAxisWordHints() {
     if (hint) hint.textContent = getAxisWordsHint();
     const paren = document.getElementById('galaxy-guide-axis-words');
     if (paren) paren.textContent = getAxisWordsParen();
+}
+
+// 星系图例里「大小 = …」那行要点出当前观察角度是哪个指标。
+//
+// 不点出来的话，那个全局下拉的名字（「观察角度」）会让人以为它改的是点的位置——
+// 位置其实恒为高频小词坐标（initStyleGalaxy 里 positionData 永远取 functionWords），
+// 只有圆点大小跟着指标走。
+//
+// 特例：指标就是「风格走向」时不能写成「数值高低」，因为那会暗示两套独立编码。
+// functionWords 的 value 恰恰就是 PCA 第一主成分（见 src/pipeline.py：item["x"] 作
+// value、item["y"] 作 value_y），而横向位置用的就是同一个 pcaX——同源，得说出来。
+function updateGalaxySizeHint() {
+    const el = document.getElementById('galaxy-guide-size');
+    if (!el) return;
+    const label = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
+    if (currentMetric === 'functionWords') {
+        el.textContent = `大小 = 「${label}」的数值高低（与横向位置同源）`;
+        return;
+    }
+    el.textContent = `大小 = 「${label}」的数值高低`;
 }
 
 // 指纹热力图图例：低值（黛蓝）↔ 高值（赤）在每个指标下的具体含义
@@ -2140,13 +2257,22 @@ function collectExportAxisNote() {
         return `图中各书的数值取的是框选区段 ${rangeText} 内的分段平均，不是全书平均`;
     }
     if (currentTab !== 'view-galaxy') return '';
+    // 「大小 = …」那行在 #galaxy-guide 里，不在 SVG 里，导出只序列化 SVG，
+    // 于是导出的星系图上有「颜色 ↔ 书名」的图例，却没有任何一句解释圆点大小。
+    // 导出的图是要放进论文/汇报的那份产物，这句得跟图走，排在最前（它是图例的核心句）。
+    const parts = [];
+    const sizeEl = document.getElementById('galaxy-guide-size');
+    const sizeText = sizeEl ? (sizeEl.textContent || '').trim() : '';
+    if (sizeText) parts.push(sizeText);
     const note = document.getElementById('galaxy-axis-note');
-    if (!note || note.hidden) return '';
-    // 横轴、纵轴在 DOM 里是两个子节点，直接取整块的 textContent 会把它们粘成
-    // 一句「…比例越高纵轴越靠上…」，读起来像缺了标点
-    const parts = note.children.length
-        ? Array.from(note.children).map(c => (c.textContent || '').trim()).filter(Boolean)
-        : [(note.textContent || '').trim()];
+    if (note && !note.hidden) {
+        // 横轴、纵轴在 DOM 里是两个子节点，直接取整块的 textContent 会把它们粘成
+        // 一句「…比例越高纵轴越靠上…」，读起来像缺了标点
+        const noteParts = note.children.length
+            ? Array.from(note.children).map(c => (c.textContent || '').trim()).filter(Boolean)
+            : [(note.textContent || '').trim()];
+        noteParts.forEach(text => { if (text) parts.push(text); });
+    }
     return parts.join('；').replace(/\s+/g, ' ');
 }
 
@@ -2158,7 +2284,10 @@ function exportLegendLineHeight() { return 18; }
 // 折行优先断在「；」处（那是前后两段轴的天然断点），单段超长才按 46 字硬折。
 function wrapAxisNote(axisNote) {
     const MAX = 46;
-    const MAX_LINES = 6;
+    // 上限从 6 提到 7：星系的说明多了「大小 = …」一行（大小那行 + 两条轴说明 +
+    // 范围说明 实测正好折到 6 行），刚好顶到上限就没有余量了，再多一条告警就会
+    // 从尾部吃掉一整段。高度和画字都走这个函数，改了不会失配。
+    const MAX_LINES = 7;
     const lines = [];
     String(axisNote).split('；').forEach((seg, idx) => {
         // 分号被 split 吃掉了，除第一段外都要补回来
@@ -2813,6 +2942,9 @@ function initStyleGalaxy() {
 
     // 说明文案里的轴词例子跟着当前书目走（一本都没选时自动清空，退回泛称）
     renderAxisWordHints();
+    // 「大小 = …」跟着当前指标走；放在这里而不是 renderAxisWordHints 里，
+    // 那个函数的名字管的是轴词。指标切换会走 refreshAllActiveCharts → 本函数。
+    updateGalaxySizeHint();
 
     const books = Array.from(selectedBooks);
     if (books.length === 0) {
@@ -2865,10 +2997,6 @@ function initStyleGalaxy() {
     feMerge.append("feMergeNode").attr("in", "coloredBlur");
     feMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
-    const colorScale = d3.scaleOrdinal()
-        .domain(books)
-        .range(['#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d', '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72']);
-
     // 颜色图例：让用户知道每种颜色对应哪本书
     const legendEl = document.getElementById('galaxy-legend');
     if (legendEl) {
@@ -2878,7 +3006,7 @@ function initStyleGalaxy() {
             item.className = 'galaxy-legend-item';
             const swatch = document.createElement('span');
             swatch.className = 'galaxy-legend-swatch';
-            swatch.style.background = colorScale(book);
+            swatch.style.background = colorForBook(book);
             item.appendChild(swatch);
             item.appendChild(document.createTextNode(getBookDisplayName(book)));
             if (skippedBooks.has(book)) {
@@ -2889,8 +3017,11 @@ function initStyleGalaxy() {
         });
     }
 
-    books.forEach((book) => {
-        const baseColor = d3.color(colorScale(book));
+    // 只给真正画进这张图的书建渐变：圆点来自 plotBooks（图例仍遍历 books，
+    // 那是为了把「未画入」的书也列出来），给跳过不画的书建渐变只会留下一批
+    // 没有任何 url(#…) 引用的死 defs
+    plotBooks.forEach((book) => {
+        const baseColor = d3.color(colorForBook(book));
         const highlight = baseColor.brighter(1.5);
         const shadow = baseColor.darker(1.2);
 
@@ -3004,7 +3135,7 @@ function initStyleGalaxy() {
         .enter().append("circle")
         .attr("r", d => d.r)
         .attr("fill", d => `url(#grad-${getBookSafeId(d.book)})`)
-        .attr("stroke", d => d3.color(colorScale(d.book)).darker(0.5))
+        .attr("stroke", d => d3.color(colorForBook(d.book)).darker(0.5))
         .attr("stroke-width", 0.5)
         .attr("stroke-opacity", 0.8)
         .attr("role", "button")
@@ -3051,12 +3182,12 @@ function initStyleGalaxy() {
             .transition().duration(motionDuration(200))
             .attr("r", d.r)
             .style("filter", null)
-            .attr("stroke", d3.color(colorScale(d.book)).darker(0.5))
+            .attr("stroke", d3.color(colorForBook(d.book)).darker(0.5))
             .attr("stroke-width", 0.5);
 
         g.selectAll("circle")
              .transition().duration(motionDuration(200))
-             .attr("stroke", node => d3.color(colorScale(node.book)).darker(0.5))
+             .attr("stroke", node => d3.color(colorForBook(node.book)).darker(0.5))
              .attr("stroke-width", 0.5)
              .attr("stroke-opacity", 0.8);
         

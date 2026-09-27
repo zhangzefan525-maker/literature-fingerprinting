@@ -131,6 +131,8 @@
                 </div>
             </div>
             
+            <!-- 这是提示语，不是控件：没有点击处理器，文字由 updateCompareButtonLabel
+                 按当前选中书数改写。热力图与折线图都支持多书，所以它在两种图形下都显示。 -->
             <div class="comparison-mode" id="toggleComparison">
                 ⇄ 点击上方书名可多选进行对比
             </div>
@@ -163,7 +165,7 @@
                 <div class="galaxy-guide">
                     <span>每个圆点 = 一段文本（约 1 万词）</span>
                     <span>颜色 = 不同书</span>
-                    <span>大小 = 数值高低</span>
+                    <span id="galaxy-guide-size">大小 = 数值高低</span>
                     <span>位置 = 高频小词<span id="galaxy-guide-axis-words"></span>的用法</span>
                     <!-- 手指没有滚轮，也没有「悬停」。触屏设备上写「滚轮缩放」是教用户
                          做一个做不到的动作，所以两种指针对应两句，由 CSS 按 hover 能力选。 -->
@@ -353,11 +355,7 @@
             const metric = currentMetric;
             advState.data = [];
             const books = Object.keys(realData);
-            
-            const colorScale = d3.scaleOrdinal()
-                .domain(books)
-                .range(['#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d', '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72']);
-            
+
             books.forEach(bookName => {
                 const rawMetricData = realData[bookName][metric];
                 if (!rawMetricData) return;
@@ -386,7 +384,8 @@
                         : bookName.replace(/[^a-zA-Z0-9]/g, '_'),
                     name: bookName,
                     displayName: displayName,
-                    color: colorScale(bookName),
+                    // 取色统一走 colorForBook：这本书在折线图、风格星系里也是同一个颜色
+                    color: colorForBook(bookName),
                     fullData: trendData
                 });
             });
