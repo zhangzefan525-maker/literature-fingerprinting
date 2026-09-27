@@ -1116,10 +1116,68 @@ button:hover {
 .sort-control:hover {
     background: var(--vermilion-soft);
     color: var(--vermilion-ink);   /* 同上：11px 小字压在朱砂淡底上，需 4.5:1 */
+    /* 它是 <button> 而不再是 <span>，会白捡 button:hover 的位移和投影——
+       一个 11px 的行内小控件不该在悬停时跳起来。抹掉，恢复 span 时代的样子。 */
+    transform: none;
+    box-shadow: none;
 }
 
 .sort-control i {
     font-size: 10px;
+}
+
+/* 片段详情卡右上角的「✕ 收起」。同样是从 <span> 改成 <button>（为了键盘够得到），
+   同样要把 button 的默认外观和 button:hover 的位移/投影一起抹掉；
+   font-weight 也要显式写回 400，否则继承 button{font-weight:600} 会比原来重。
+   悬停改成变色 + 下划线，比单纯变背景更能说明这里可以点。 */
+.drill-remove-btn {
+    font-size: 10px;
+    font-weight: 400;
+    color: #6b6254;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    font-family: inherit;
+    line-height: inherit;
+    transition: var(--transition-control);
+}
+
+.drill-remove-btn:hover {
+    background: none;
+    transform: none;
+    box-shadow: none;
+    color: var(--vermilion-ink);
+    text-decoration: underline;
+}
+
+/* 一次性的操作反馈（目前只有「至少要留一本书」这一条被拒的选书）。
+   必须挂在 body 直下：.container 有 backdrop-filter，会成为 fixed 后代的包含块，
+   挂进容器里 height/bottom 就会被按容器的两千多像素高去解析——弹窗踩过同一个坑。 */
+.selection-notice {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%) translateY(8px);
+    max-width: min(92vw, 460px);
+    padding: 10px 16px;
+    background: rgba(47, 42, 35, 0.94);
+    color: #f5efe2;
+    font-size: 13px;
+    line-height: 1.5;
+    text-align: center;
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(47, 42, 35, 0.3);
+    /* 压在弹窗（9999）和浮动按钮（9999）下面，避免盖住它们 */
+    z-index: 9500;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.selection-notice.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
 }
 
 /* 「整体水平对比」标题后面那截口径说明：框选生效时会写「（框选区段 0.0%–30.0%）」，

@@ -12,7 +12,6 @@
     <script>window.d3 || document.write('<script src="https://d3js.org/d3.v7.min.js"><\/script>');</script>
     <!-- 图标字体只有 8 个装饰性图标，取不到时 <i> 渲染成空元素、不影响功能，故走 CDN -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="static/css/d3-style.css">
 </head>
 <body>
@@ -229,36 +228,6 @@
             </div>
         </div>
 
-        <!-- 悬浮详情页模态框 (公用) -->
-        <div id="galaxy-modal" class="galaxy-modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="modal-book-title" aria-hidden="true">
-            <div class="galaxy-modal-content">
-                <button type="button" class="galaxy-modal-close" aria-label="关闭原文详情" onclick="closeGalaxyModal()">&times;</button>
-                
-                <div class="modal-header">
-                    <h2 id="modal-book-title">书籍标题</h2>
-                    <div class="modal-badges">
-                        <span id="modal-block-id" class="badge">第 1 个片段</span>
-                        <span id="modal-metric-val" class="badge badge-highlight">数值 0.00</span>
-                    </div>
-                </div>
-
-                <div class="modal-section">
-                    <h4>※ 核心关键词</h4>
-                    <div id="modal-keywords" class="keyword-container"></div>
-                </div>
-
-                <div class="modal-section">
-                    <h4>📜 原文深度阅读</h4>
-                    <div class="text-scroll-area">
-                        <p id="modal-long-text">正在加载文本...</p>
-                    </div>
-                    <div class="modal-copy-row">
-                        <button type="button" id="modal-copy-btn" class="copy-block-btn" hidden>⧉ 复制全文</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- 题跋落款（页脚） -->
         <footer class="footer">
             <span class="footer-text">文印 · 文学指纹交互分析系统</span>
@@ -266,6 +235,40 @@
         </footer>
 
         
+    </div>
+
+    <!-- 悬浮详情页模态框 (公用)
+         必须放在 .container 外面：.container 有 backdrop-filter，而 backdrop-filter 会让
+         元素成为 fixed 后代的包含块，于是覆盖层的 height:100% 解析成容器的两千多像素高
+         而不是视口高，弹窗会有一大半跑到屏幕外（桌面 1258x802 实测内容底超出视口 278px）。
+         放在 body 直下、与 #btn-matrix 同级，position:fixed 才按视口解析。 -->
+    <div id="galaxy-modal" class="galaxy-modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="modal-book-title" aria-hidden="true">
+        <div class="galaxy-modal-content">
+            <button type="button" class="galaxy-modal-close" aria-label="关闭原文详情" onclick="closeGalaxyModal()">&times;</button>
+            
+            <div class="modal-header">
+                <h2 id="modal-book-title">书籍标题</h2>
+                <div class="modal-badges">
+                    <span id="modal-block-id" class="badge">第 1 个片段</span>
+                    <span id="modal-metric-val" class="badge badge-highlight">数值 0.00</span>
+                </div>
+            </div>
+
+            <div class="modal-section">
+                <h4>※ 核心关键词</h4>
+                <div id="modal-keywords" class="keyword-container"></div>
+            </div>
+
+            <div class="modal-section">
+                <h4>📜 原文深度阅读</h4>
+                <div class="text-scroll-area">
+                    <p id="modal-long-text">正在加载文本...</p>
+                </div>
+                <div class="modal-copy-row">
+                    <button type="button" id="modal-copy-btn" class="copy-block-btn" hidden>⧉ 复制全文</button>
+                </div>
+            </div>
+        </div>
     </div>
     
     <script src="static/js/d3-charts.js"></script>
@@ -455,6 +458,7 @@
             renderAdvMean(data);
             renderAdvLine(data);
             updateHighlightVisuals();
+            updateDrillPanel();
             renderInsight(data);
             renderAnomalies(data);
         }
@@ -537,6 +541,20 @@
             functionWords: { up: '中后段风格走向持续偏移', down: '中后段风格走向趋于回归', high: null, low: null }
         };
 
+        // 取一本书在「当前框选区段」内的指标值。口径必须和 initAdvancedData 一致：
+        // 同样的 xPercent = i / (片段数 - 1)，同样剔掉非有限值，否则参照数和走势图上
+        // 画出来的线段不是同一批数（initAdvancedData 剔过、这里原来没剔）。
+        // 没有框选时就是全书。
+        function bookSegmentValues(bookData, metric) {
+            const raw = (bookData && bookData[metric]) || [];
+            const range = advState.brushRange;
+            return raw
+                .map((d, i) => ({ xPercent: i / (raw.length - 1 || 1), value: d.value }))
+                .filter(d => typeof d.value === 'number' && Number.isFinite(d.value))
+                .filter(d => !range || (d.xPercent >= range[0] && d.xPercent <= range[1]))
+                .map(d => d.value);
+        }
+
         function renderInsight(data) {
             const panel = document.getElementById('insight-content');
             if (!panel) return;
@@ -562,12 +580,16 @@
                 lines.push(`《${highest.displayName || highest.name}》${cfg.high}（${fmtMetric(highest.currentMean)}），《${lowest.displayName || lowest.name}》${cfg.low}（${fmtMetric(lowest.currentMean)}）。`);
             } else if (data.length === 1) {
                 lines.push(`《${data[0].displayName || data[0].name}》的「${mLabel}」${brushScope ? '在框选区段内平均' : '整体水平'}为 ${fmtMetric(data[0].currentMean)}。`);
-                // 单书时给出基准参照：与其他已加载书籍的平均水平对比，让裸数字有意义
+                // 单书时给出基准参照：与其他已加载书籍的平均水平对比，让裸数字有意义。
+                // 参照必须和左边那个数**同口径**。这一整段上面刚说过「下面这些数字只统计
+                // 框选的那一段」，而原先是拿「其它书的全书平均」去减「本书的区段平均」，
+                // 再把差值说成「这本书比它们高约 X」——一本书的区段数减另一批书的全书数，
+                // 差出来的东西没有含义。所以这里给其它书套上同一个 xPercent 区间。
                 if (realData && Object.keys(realData).length > 1) {
                     const otherMeans = Object.entries(realData)
                         .filter(([name]) => name !== data[0].name)
                         .map(([, bookData]) => {
-                            const arr = (bookData[currentMetric] || []).map(d => d.value);
+                            const arr = bookSegmentValues(bookData, currentMetric);
                             return arr.length ? d3.mean(arr) : null;
                         })
                         .filter(v => v != null);
@@ -578,7 +600,8 @@
                         const cmp = dir === '接近'
                             ? '这本书与它们的水平差不多'
                             : `这本书比它们${dir}约 ${fmtMetric(Math.abs(diff))}`;
-                        lines.push(`作为参照，其它 ${otherMeans.length} 本已加载的书（含你自己上传的）平均水平约为 ${fmtMetric(benchmark)}，${cmp}。`);
+                        const scopeWord = brushScope ? `在框选的 ${brushScope} 区段内平均` : '平均水平';
+                        lines.push(`作为参照，其它 ${otherMeans.length} 本已加载的书（含你自己上传的）${scopeWord}约为 ${fmtMetric(benchmark)}，${cmp}。`);
                     }
                 }
             } else {
@@ -776,16 +799,31 @@
         }
 
         // 4. 交互核心
+
+        // advState.selectedIds 记的是「哪些书的详情卡展开着」，而图上有哪些书由
+        // selectedBooks 决定——两份状态。用户从顶部按钮或 chip 取消勾选一本书时只动
+        // selectedBooks，selectedIds 里会留着一个图上已经没有的 id。后果不是少点东西，
+        // 而是整页坏掉：updateHighlightVisuals 会因为「还有选中项」把每一本都调暗
+        // （opacity .12），再去点亮那本已经不存在的书——一本都没亮，整页发灰；
+        // 详情卡也还挂着一本已经不在图里的书。
+        // 所以这里统一按「此刻真的画在图上的书」过滤一次，两处都只用过滤后的结果。
+        // 用过滤而不是从 selectedIds 里删：用户重新勾选这本书时，卡还能自动回来。
+        function liveSelectedIds(computedData) {
+            const live = new Set((computedData || getAdvComputed()).map(b => b.id));
+            return advState.selectedIds.filter(id => live.has(id));
+        }
+
         function updateDrillPanel() {
             const panel = document.getElementById('adv-drill-content');
-            if (advState.selectedIds.length === 0) {
+            const computedData = getAdvComputed();
+            const ids = liveSelectedIds(computedData);
+            if (ids.length === 0) {
                 panel.innerHTML = '<div class="empty-tip">点击左侧图表中的书籍<br>或拖拽走势图查看段落详情</div>';
                 return;
             }
             panel.innerHTML = '';
-            const computedData = getAdvComputed();
 
-            advState.selectedIds.forEach(id => {
+            ids.forEach(id => {
                 const book = computedData.find(b => b.id === id);
                 if (!book) return; 
 
@@ -795,7 +833,8 @@
                     <div style="margin-bottom: 20px; border-bottom: 2px dashed #e4d9c3; padding-bottom: 10px;">
                         <div style="padding:5px; margin-bottom:5px; display:flex; justify-content:space-between; align-items:center;">
                             <strong style="color:${book.color};font-size:14px">${escapeHtml(book.displayName || book.name)}</strong>
-                            <button type="button" onclick="removeSelection('${book.id}')" aria-label="把《${escapeHtml(book.displayName || book.name)}》移出对比" style="font-size:10px; color:#6b6254; cursor:pointer; background:none; border:none; padding:0; font-family:inherit;">✕ 移除</button>
+                            <button type="button" class="drill-remove-btn" onclick="removeSelection('${book.id}')"
+                                    aria-label="收起《${escapeHtml(book.displayName || book.name)}》的段落详情；这本书仍留在图表和导出里">✕ 收起</button>
                         </div>
                         <div style="font-size:10px; color:#6b6254; margin-bottom:5px; padding-left:5px;">${advMeanLabel()}: ${fmtMetric(book.currentMean)}</div>
                 `;
@@ -841,12 +880,15 @@
         }
 
         function updateHighlightVisuals() {
-            if (advState.selectedIds.length === 0) {
+            // 必须用过滤后的 id：直接遍历 advState.selectedIds 时，一个已经被取消勾选
+            // 的书会让这里「把全部调暗、再点亮一个不存在的元素」，整页停在 12% 不透明度。
+            const ids = liveSelectedIds();
+            if (ids.length === 0) {
                 d3.selectAll(".book-el").classed("dimmed", false).classed("highlighted", false);
                 return;
             }
             d3.selectAll(".book-el").classed("dimmed", true).classed("highlighted", false);
-            advState.selectedIds.forEach(id => {
+            ids.forEach(id => {
                 d3.selectAll(`.book-${id}`).classed("dimmed", false).classed("highlighted", true);
             });
         }
@@ -892,7 +934,14 @@
 
         function advMeanLabel() {
             const range = advBrushPercent();
-            return range ? `区段平均（${range}）` : '平均';
+            // 必须带上指标名。详情卡在换指标后曾经不重画，卡里那个数还是上一个指标的，
+            // 而标签只写「平均」——读者无从看出它已经过期。写清是哪个指标的平均值，
+            // 过期的数字至少能自己露馅。
+            // getMetricLabel 本身就带「平均」二字（「平均句长」），直接拼会成
+            // 「区段平均平均句长」，所以先剥掉前导那个「平均」再拼。
+            const raw = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
+            const bare = String(raw).replace(/^平均/, '');
+            return range ? `区段平均${bare}（${range}）` : `平均${bare}`;
         }
 
         function updateAdvScopeLabel() {

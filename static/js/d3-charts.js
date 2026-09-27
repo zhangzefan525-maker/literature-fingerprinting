@@ -840,14 +840,39 @@ function updateBookSelector(books) {
     }
 }
 
+// 一次性的页面提示。故意挂在 body 直下：.container 有 backdrop-filter，会成为
+// fixed 后代的包含块，挂进容器里 bottom:28px 会被当成「距容器底部 28px」——
+// 容器的两千多像素高意味着提示落在屏幕外（详情弹窗踩的正是这个坑）。
+// 3.4 秒后自己淡出；重复调用只换文字、重置计时，不会叠出第二条。
+let selectionNoticeTimer = null;
+function showSelectionNotice(text) {
+    let el = document.getElementById('selection-notice');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'selection-notice';
+        el.className = 'selection-notice';
+        el.setAttribute('role', 'status');
+        el.setAttribute('aria-live', 'polite');
+        document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.classList.add('show');
+    if (selectionNoticeTimer) clearTimeout(selectionNoticeTimer);
+    selectionNoticeTimer = setTimeout(() => el.classList.remove('show'), 3400);
+}
+
 function selectBook(bookId) {
     const btn = getBookButtonById(bookId);
 
     if (selectedBooks.has(bookId)) {
-        if (selectedBooks.size > 1) {
-            selectedBooks.delete(bookId);
-            if (btn) btn.classList.remove('active');
+        if (selectedBooks.size <= 1) {
+            // 至少要留一本书，否则三个页签都没有东西可画。原来这里直接静默返回，
+            // 用户点了没反应、只能以为坏了；现在把原因说出来。
+            showSelectionNotice('至少要留一本书在图上。想换书，先选另一本，再取消这一本。');
+            return;
         }
+        selectedBooks.delete(bookId);
+        if (btn) btn.classList.remove('active');
     } else {
         // 如果未选中，则添加
         selectedBooks.add(bookId);
@@ -1014,13 +1039,22 @@ function drawMultiLineChart(svg, booksArray) {
     
     g.append("g").attr("class", "grid").call(d3.axisLeft(yScale).tickSize(-width).tickFormat("")).attr("stroke-opacity", 0.1);
 
-    // 坐标轴标签：X 为阅读进度（文本块），Y 为当前指标中文名
-    g.append("text")
-        .attr("class", "axis-label")
-        .attr("x", width / 2)
-        .attr("y", chartHeight + 38)
-        .attr("text-anchor", "middle")
-        .text("阅读进度（每个片段约 1 万个单词）");
+    // 坐标轴标签：X 为「第几个片段」，Y 为当前指标中文名。
+    // X 轴不能叫「阅读进度」：xScale 的 domain 是 [0, maxBlocks]，每本书按**自己的**
+    // 片段序号（d3.line 里 .x((d, i) => xScale(i))）画，而各书片段总数差很多
+    // （野性的呼唤 22 个、哈克贝利·费恩 102 个，4.6 倍）。同一个 x 在两本书里对应的
+    // 阅读位置完全不同，第 50 个片段在 22 个片段的书里根本不存在——「阅读进度」会让人
+    // 把两条线在同一 x 上直接对比，读出不存在的结论。说成百分比也是错的，因为这里
+    // 没有做任何归一化。（看板页的走势图才是归一化到 0–100% 的，那里才叫阅读进度。）
+    ["片段序号（每个片段约 1 万个单词）", "各书片段总数不同，同一个序号不代表相同的阅读位置"]
+        .forEach((line, i) => {
+            g.append("text")
+                .attr("class", "axis-label")
+                .attr("x", width / 2)
+                .attr("y", chartHeight + 38 + i * 14)
+                .attr("text-anchor", "middle")
+                .text(line);
+        });
 
     g.append("text")
         .attr("class", "axis-label")
