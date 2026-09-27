@@ -766,6 +766,19 @@ button:hover {
     color: var(--ink-70);
     font-size: 0.82rem;
 }
+/* 指针能力决定说哪句：触屏没有滚轮，也没有「悬停」。
+   两句都写在 HTML 里，这里按设备择一显示——不用 JS 判断，设备接上鼠标也会自动跟上。 */
+.pointer-hint-touch { display: none; }
+@media (hover: none) {
+    .pointer-hint-hover { display: none; }
+    .pointer-hint-touch { display: inline; }
+    /* 区域风格面板只由 mouseover 触发（见 d3-charts.js 里那个唯一的 .on("mouseover")）。
+       触屏上手指点下去走的是 click，直接弹出全屏原文，这块面板要么永远停在
+       「将鼠标移到任意圆点上」的占位语，要么在合成 mouseover 的一瞬间闪一下又被盖住。
+       与其留一块永远为空的说明，不如在触屏上收起来——原文弹窗里信息更全。 */
+    #galaxy-hud { display: none; }
+}
+
 .galaxy-legend {
     display: flex;
     flex-wrap: wrap;
@@ -1702,6 +1715,21 @@ button:hover {
 .copy-block-btn:active { transform: translateY(1px); }
 
 .modal-copy-row { text-align: right; }
+
+/* 「这一节给的是摘录、不是全文」的说明。写在正文上方、比正文小一号：
+   读者先看到「共约 1 万词，此处显示 1200 字」，再看到正文，就不会把引文当全文。 */
+.modal-text-note {
+    margin: 0 0 8px;
+    color: #6b6254;
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+.excerpt-note {
+    margin: 4px 0 8px;
+    color: #6b6254;
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
 
 /* ---------- 无障碍：尊重系统的「减少动态效果」 ---------- */
 /* 只压掉界面上的过渡/动画，文本雨由脚本决定默认状态（这里不碰它的绘制逻辑） */

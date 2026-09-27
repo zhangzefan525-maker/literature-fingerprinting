@@ -592,8 +592,31 @@ async function handleFileUpload(event) {
         const nBlocks = result.data && result.data.metadata ? result.data.metadata.totalBlocks : 0;
         const savedMsg = result.saved
             ? '已存入「我的图书馆」，刷新后仍在，可点书名旁 ✕ 删除。'
-            : '本次未勾选保存，刷新后不会保留。';
-        setUploadStatus(`「${getBookDisplayName(result.book)}」分析完成，共划分 ${nBlocks} 个片段。${savedMsg}`, 'success');
+            : (result.warning ? '' : '本次未勾选保存，刷新后不会保留。');
+        // 书名跟用户以为的不一致时，必须说出来。三种情况，后果完全不同：
+        //   1) renamedFrom   —— 撞了内置示例书，存成了《X（我的）》，谁都没被覆盖；
+        //   2) replacedExisting —— 同名旧书被这次的结果整份替换掉了，上一版没了；
+        //   3) shadowsExisting  —— 这次没保存，但书名和书库里那本重名：屏幕上看到的是
+        //                          新的，书库里留着的还是旧的，两个「同一本」不同内容。
+        const newName = `《${getBookDisplayName(result.book)}》`;
+        const notes = [];
+        if (result.renamedFrom) {
+            const oldName = `《${getBookDisplayName(result.renamedFrom)}》`;
+            notes.push(result.saved
+                ? `${oldName}是内置示例书的书名，这次存为${newName}，示例书不受影响。`
+                : `${oldName}是内置示例书的书名，这次的分析以${newName}显示。`);
+        }
+        if (result.replacedExisting) {
+            notes.push(`书库里同名的${newName}已被这次的结果整份替换，上一版分析不再保留。`);
+        } else if (result.shadowsExisting) {
+            notes.push(`书名和你已保存的${newName}重名：屏幕上显示的是这次的分析结果，`
+                + '书库里存着的仍是上次保存的那一份（这次未勾选保存）。');
+        }
+        if (result.warning) notes.push(result.warning);
+        setUploadStatus(
+            `「${getBookDisplayName(result.book)}」分析完成，共划分 ${nBlocks} 个片段。${savedMsg}${notes.join('')}`,
+            result.warning ? 'error' : 'success'
+        );
         updateMetricHint();
         refreshAllActiveCharts();
     } catch (e) {
@@ -1102,7 +1125,7 @@ function drawMultiLineChart(svg, booksArray) {
             .on("mouseover", function(event, d) {
                 d3.select(this)
                     .style("opacity", 1)
-                    .transition().duration(100)
+                    .transition().duration(motionDuration(100))
                     .attr("r", 6)
                     .attr("stroke", "#b5472f")
                     .attr("stroke-width", 2);
@@ -1111,7 +1134,7 @@ function drawMultiLineChart(svg, booksArray) {
             })
             .on("mouseout", function(event, d) {
                 d3.select(this)
-                    .transition().duration(200)
+                    .transition().duration(motionDuration(200))
                     .attr("r", 3)
                     .attr("stroke", "#fdfaf3")
                     .attr("stroke-width", 1.5)
@@ -1381,9 +1404,50 @@ function drawMultiHeatmap(svg, booksArray) {
 
     // 图例：低（黛蓝）↔ 高（赤），并标注当前指标的具体含义
     const [lowLabel, highLabel] = getHeatmapLegend(currentMetric);
-    const legendW = 220, legendH = 12;
-    const legendX = containerWidth / 2 - legendW / 2;
-    const legendY = totalHeight - 46;
+    const legendH = 12;
+
+    // 先把两端的标签建出来量宽度：色带宽度原来是写死的 220，两个标签又各贴着色带
+    // 往外排 10px，于是在 320px 宽的屏幕上，左端渲染出来只剩「短句」——「低 · 」整个
+    // 被裁在画布外，读者只看到色带的右端有「高」，左端是什么就没了对照；换成
+    // 「独特词丰富度」这种四个字以上的指标，390px 的 iPhone 也一样中招。
+    // 导出的 PNG 走的是同一个 viewBox，残缺的图例会一起被导出。
+    const lowText = svg.append("text")
+        .style("font-size", "12px")
+        .style("fill", HEATMAP_LOW_INK)
+        .style("font-weight", "bold")
+        .text(`低 · ${lowLabel}`);
+    const highText = svg.append("text")
+        .style("font-size", "12px")
+        .style("fill", HEATMAP_HIGH_INK)
+        .style("font-weight", "bold")
+        .text(`高 · ${highLabel}`);
+
+    const LEGEND_GAP = 10;
+    const LEGEND_SIDE = 8;
+    const MIN_BAR = 60;
+    const avail = containerWidth - LEGEND_SIDE * 2;
+    const lowW = lowText.node().getComputedTextLength();
+    const highW = highText.node().getComputedTextLength();
+    // 色带至少留 MIN_BAR 才看得出渐变；连这个都放不下就把两个标签挪到色带下面一行，
+    // 左对齐 + 右对齐分开写。宁可多占一行，也不能把「低」那一端裁掉。
+    const stacked = lowW + highW + LEGEND_GAP * 4 + MIN_BAR > avail;
+
+    let legendW, legendX, legendY, labelY;
+    if (stacked) {
+        legendW = Math.max(MIN_BAR, Math.min(220, avail - LEGEND_GAP * 2));
+        legendX = (containerWidth - legendW) / 2;
+        legendY = totalHeight - 58;
+        labelY = legendY + legendH + 15;
+        lowText.attr("x", LEGEND_SIDE).attr("y", labelY).attr("text-anchor", "start");
+        highText.attr("x", containerWidth - LEGEND_SIDE).attr("y", labelY).attr("text-anchor", "end");
+    } else {
+        legendW = Math.max(MIN_BAR, Math.min(220, avail - lowW - highW - LEGEND_GAP * 4));
+        legendX = (containerWidth - legendW) / 2;
+        legendY = totalHeight - 46;
+        labelY = legendY + legendH / 2 + 4;
+        lowText.attr("x", legendX - LEGEND_GAP).attr("y", labelY).attr("text-anchor", "end");
+        highText.attr("x", legendX + legendW + LEGEND_GAP).attr("y", labelY).attr("text-anchor", "start");
+    }
 
     const legendGrad = svg.append("defs").append("linearGradient")
         .attr("id", "heatmapLegendGrad")
@@ -1399,22 +1463,6 @@ function drawMultiHeatmap(svg, booksArray) {
         .attr("fill", "url(#heatmapLegendGrad)")
         .attr("stroke", HEATMAP_STROKE)
         .attr("stroke-width", 1);
-
-    svg.append("text")
-        .attr("x", legendX - 10).attr("y", legendY + legendH / 2 + 4)
-        .attr("text-anchor", "end")
-        .style("font-size", "12px")
-        .style("fill", HEATMAP_LOW_INK)
-        .style("font-weight", "bold")
-        .text(`低 · ${lowLabel}`);
-
-    svg.append("text")
-        .attr("x", legendX + legendW + 10).attr("y", legendY + legendH / 2 + 4)
-        .attr("text-anchor", "start")
-        .style("font-size", "12px")
-        .style("fill", HEATMAP_HIGH_INK)
-        .style("font-weight", "bold")
-        .text(`高 · ${highLabel}`);
 
     // 分界线是自动识别出来的，位置只能算近似，这里如实说明
     if (drewChapterDividers) {
@@ -1485,14 +1533,14 @@ function showTooltip(event, data, bookName) {
         .style("left", left + "px")
         .style("top", top + "px")
         .transition()
-        .duration(200)
+        .duration(motionDuration(200))
         .style("opacity", 1);
 }
 
 function hideTooltip() {
     d3.selectAll(".tooltip")
         .transition()
-        .duration(200)
+        .duration(motionDuration(200))
         .style("opacity", 0)
         .remove();
 }
@@ -1515,12 +1563,15 @@ function showDetail(data, bookName) {
         ? `<p class="book-overview">全书概况：${escapeHtml(overviewText)}</p>`
         : '';
     const sourceText = data.extended_preview || data.preview || '';
+    // 引号里显示的和按钮复制到的是两段不同长度的文本（露 150 字、复制 1200 字）。
+    // 这不是错，但不能不说：加一行小字说明复制到的是多长，按钮上也带字数。
     const previewHtml = data.preview ? `
             <div>
                 <h4>📄 原文片段</h4>
                 <p style="margin-top: 10px; color: #6b6254; font-style: italic;">
                     "${escapeHtml(data.preview)}"
                 </p>
+                ${sourceText ? `<p class="excerpt-note">以上为片段开头的引文；复制得到的是更长的摘录，仍非全文（一个片段约 1 万词）。</p>` : ''}
                 ${sourceText ? copyButtonHtml(sourceText) : ''}
             </div>` : '';
 
@@ -1736,9 +1787,15 @@ function registerCopySource(text) {
     return _copySources.push(String(text ?? '')) - 1;
 }
 
-function copyButtonHtml(text, extraClass = '') {
+// 按钮上原先只写「复制片段」。可复制到的从来不是整个片段（那有 1 万词），而是开头
+// 一段摘录；旁边显示的字数又比复制到的短（卡片里只露 60 字、详情页露 150 字，复制的是
+// 1200 字）。把真实字数写在按钮上，粘贴之前就知道拿到的是什么。
+function copyButtonHtml(text, extraClass = '', label = '') {
     if (!text) return '';
-    return `<button type="button" class="copy-block-btn${extraClass ? ` ${extraClass}` : ''}" data-copy-idx="${registerCopySource(text)}">⧉ 复制片段</button>`;
+    const src = String(text);
+    const shown = src.endsWith('...') ? src.length - 3 : src.length;
+    const caption = label || `复制摘录（${shown} 字）`;
+    return `<button type="button" class="copy-block-btn${extraClass ? ` ${extraClass}` : ''}" data-copy-idx="${registerCopySource(text)}">⧉ ${caption}</button>`;
 }
 
 function copyFromButton(button) {
@@ -2060,6 +2117,20 @@ function collectExportLegend() {
 
 // 风格星系的坐标轴含义也只写在图外的 #galaxy-axis-note 里，一并带走
 function collectExportAxisNote() {
+    if (currentTab === 'view-dashboard') {
+        // 「整体水平对比」的柱子高度在框选后变成了区段口径，而说明那句话写在
+        // SVG 外面的 h4 里（#adv-mean-scope）。导出只序列化 SVG，于是导出的图
+        // 看着就是全书平均——一个比屏幕上更错的版本。这句话必须跟着图走。
+        const scope = document.getElementById('adv-mean-scope');
+        const scopeText = scope ? (scope.textContent || '').trim() : '';
+        if (!scopeText) return '';
+        // 只在真的导出这张条形图时加：走势图画的是整条曲线，框选只是高亮，
+        // 给它挂一句「数值取的是区段平均」反而变成新的一句错话。
+        const exportElement = getExportTarget().element;
+        if (!exportElement || exportElement !== document.querySelector('#adv-mean svg')) return '';
+        const rangeText = scopeText.replace(/^（|）$/g, '').replace(/^框选区段\s*/, '');
+        return `图中各书的数值取的是框选区段 ${rangeText} 内的分段平均，不是全书平均`;
+    }
     if (currentTab !== 'view-galaxy') return '';
     const note = document.getElementById('galaxy-axis-note');
     if (!note || note.hidden) return '';
@@ -2721,6 +2792,13 @@ function showNoDataMessage(message = '请在上方选择一本已有数据的书
 let galaxySimulation = null;
 let lastGalaxyTrigger = null;
 
+// 上一次算出来的点位（片段 id → 坐标）。进入星系时，力导向原本每次都从「投影位置」
+// 重新起步、跑约 300 次迭代（约 5 秒）才稳定：切页签、换指标、换书、拖窗都要重看
+// 一遍这场抖动，而且用户手动拖开的那几个点会被拉回原位。有力导布局就必然要收敛，
+// 但没必要每次都从零开始——从上次的结果接着算，几十次迭代就稳了。
+// 「↻ 重新布局」按钮会先清空它，那个按钮的承诺（真的重新排一次）因此不受影响。
+const galaxyPositions = new Map();
+
 function initStyleGalaxy() {
     // 检查是否可见
     if (currentTab !== 'view-galaxy') return;
@@ -2882,6 +2960,14 @@ function initStyleGalaxy() {
         d.r = radiusScale(d.realValue);
         d.x = xScale(d.pcaX);
         d.y = yScale(d.pcaY);
+        // 有上次落点就从上一次接着算（见 galaxyPositions 的说明）。只在落点仍落在
+        // 这一屏里时才用：换了几本书就看不清，坐标尺可能整个变了，旧点位跑到屏外
+        // 反而要花更久才被拉回来。
+        const cached = galaxyPositions.get(d.id);
+        if (cached && cached.x >= 0 && cached.x <= width && cached.y >= 0 && cached.y <= height) {
+            d.x = cached.x;
+            d.y = cached.y;
+        }
     });
 
     const g = svg.append("g");
@@ -2898,6 +2984,10 @@ function initStyleGalaxy() {
         .force("y", d3.forceY(d => yScale(d.pcaY)).strength(0.8))
         .force("collide", d3.forceCollide(d => d.r + 1).strength(1))
         .force("charge", d3.forceManyBody().strength(-15))
+        // 起步 alpha 和衰减率都调过：默认 alpha=1、alphaDecay≈0.023，要跑约 300 次
+        // 迭代（约 5 秒）才到静止。起点通常已经是上一轮的稳态，用不着从零重新退火。
+        .alpha(0.35)
+        .alphaDecay(0.06)
         .alphaTarget(0)
         .on("tick", ticked);
 
@@ -2919,7 +3009,7 @@ function initStyleGalaxy() {
 
     circles.on("mouseover", function(event, d) {
         d3.select(this)
-            .transition().duration(100)
+            .transition().duration(motionDuration(100))
             .attr("r", d.r * 1.5)
             .style("filter", "url(#glow)")
             .attr("stroke", "#2f2a23")
@@ -2930,7 +3020,7 @@ function initStyleGalaxy() {
         const neighbors = findNeighbors(d, allNodeData, 120); 
 
         allCircles.filter(node => neighbors.includes(node))
-            .transition().duration(100)
+            .transition().duration(motionDuration(100))
             .attr("stroke", "#b5472f")
             .attr("stroke-width", 1.5)
             .attr("stroke-opacity", 1);
@@ -2950,14 +3040,14 @@ function initStyleGalaxy() {
     })
     .on("mouseout", function(event, d) {
         d3.select(this)
-            .transition().duration(200)
+            .transition().duration(motionDuration(200))
             .attr("r", d.r)
             .style("filter", null)
             .attr("stroke", d3.color(colorScale(d.book)).darker(0.5))
             .attr("stroke-width", 0.5);
 
         g.selectAll("circle")
-             .transition().duration(200)
+             .transition().duration(motionDuration(200))
              .attr("stroke", node => d3.color(colorScale(node.book)).darker(0.5))
              .attr("stroke-width", 0.5)
              .attr("stroke-opacity", 0.8);
@@ -2973,6 +3063,10 @@ function initStyleGalaxy() {
     .on("click", (event, d) => {
         event.stopPropagation();
         lastGalaxyTrigger = event.currentTarget;
+        // 触屏上点一下会连带触发一次合成的 mouseover（于是弹出小提示框），
+        // 却没有对应的 mouseout——那个提示框会一直挂在屏幕上。点开全屏详情之后
+        // 它更没有存在的必要，直接收掉。
+        hideTooltip();
         openGalaxyModal(d);
     })
     .on("keydown", (event, d) => {
@@ -3004,10 +3098,26 @@ function initStyleGalaxy() {
     // 整片星系只留一个 Tab 停靠点（第一个点），其余靠上面的方向键。
     circles.attr("tabindex", (d, i) => (i === 0 ? 0 : -1));
 
+    // 系统要求「减少动态效果」时，不播这场收敛动画：先把力导向在内存里算完，
+    // 停掉，再一次性画出来。注意 tick() 不触发 "tick" 事件，所以算完要手动调一次
+    // ticked()，否则屏幕上是一片空白。
+    if (prefersReducedMotion()) {
+        galaxySimulation.tick(120);
+        galaxySimulation.stop();
+        ticked();
+    }
+
     function ticked() {
         circles
             .attr("cx", d => d.x)
             .attr("cy", d => d.y);
+        // 顺手记下落点，供下次进入时接着算（用户拖动后的位置也在这里被记下来）。
+        // 复用同一个对象，不然 200 多个点乘以上百次迭代会白白造两万多个临时对象。
+        allNodes.forEach(d => {
+            const slot = galaxyPositions.get(d.id);
+            if (slot) { slot.x = d.x; slot.y = d.y; }
+            else galaxyPositions.set(d.id, { x: d.x, y: d.y });
+        });
     }
 
     function dragstarted(event, d) {
@@ -3069,13 +3179,31 @@ function openGalaxyModal(d) {
     }
 
     const textContainer = document.getElementById('modal-long-text');
-    if (textContainer) textContainer.textContent = d.extendedPreview || d.preview || "暂无详细文本内容...";
+    const excerpt = d.extendedPreview || d.preview || '';
+    if (textContainer) textContainer.textContent = excerpt || "暂无详细文本内容...";
+
+    // 说清「这是摘录，不是全文」。字数按真正显示出来的字符算（_preview 会补省略号，
+    // 那三个点不是原文），不写死 1200——老数据（只有 functionWords 带 extended_preview）
+    // 走到这里时拿到的是 150 字，写死就会变成另一句假话。
+    const noteEl = document.getElementById('modal-text-note');
+    if (noteEl) {
+        const shown = excerpt.endsWith('...') ? excerpt.length - 3 : excerpt.length;
+        const wc = Number(d.wordCount);
+        if (Number.isFinite(wc) && wc > 0) {
+            // 英文平均一个词连同后随空格约 6 个字符，只用来给一个数量级感受
+            const pct = Math.max(1, Math.round(shown / (wc * 6) * 100));
+            noteEl.textContent = `本片段共约 ${wc.toLocaleString('en-US')} 个英文单词，`
+                + `此处显示开头 ${shown} 个字符（约占 ${pct}%），不是全文。`;
+        } else {
+            noteEl.textContent = `此处显示片段开头的 ${shown} 个字符，不是全文。`;
+        }
+    }
 
     const modalCopyBtn = document.getElementById('modal-copy-btn');
     if (modalCopyBtn) {
-        const txt = d.extendedPreview || d.preview || '';
-        if (txt) {
-            modalCopyBtn.dataset.copyIdx = registerCopySource(txt);
+        if (excerpt) {
+            modalCopyBtn.dataset.copyIdx = registerCopySource(excerpt);
+            modalCopyBtn.textContent = `⧉ 复制这段摘录（${excerpt.length} 字符）`;
             modalCopyBtn.hidden = false;
         } else {
             modalCopyBtn.hidden = true;
@@ -3145,6 +3273,9 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 window.restartGalaxy = function() {
+    // 这个按钮承诺的是「重新布局」，所以要先丢掉上一轮的落点缓存——
+    // 留着的话力导向会从上一次的稳态起步，几乎不动，按钮看起来失灵。
+    galaxyPositions.clear();
     initStyleGalaxy();
 };
 
@@ -3365,11 +3496,18 @@ function toggleMatrixRain() {
     setMatrixRain(!isMatrixOn);
 }
 
-// 系统是否要求「减少动态效果」。只用于决定默认状态，手动开关不受影响。
+// 系统是否要求「减少动态效果」。原本只用来决定文本雨的默认开关，而页面里真正会动的
+// 东西（d3 的过渡、星系的力导向收敛）一条都没走这个判断——用户在系统里关了动效，
+// 打开这里照样满屏飞。下面这个函数给所有 d3 过渡用：要减少动效时把时长压成 0
+// （瞬时到位，不是不动：不动的话柱状图会停在上一次的旧高度上）。
 function prefersReducedMotion() {
     try {
         return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
     } catch (e) {
         return false;
     }
+}
+
+function motionDuration(ms) {
+    return prefersReducedMotion() ? 0 : ms;
 }
