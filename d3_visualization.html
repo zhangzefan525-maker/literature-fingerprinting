@@ -36,10 +36,14 @@
 
         <!-- 上传自定义文本（与示例书籍并列分析） -->
         <div class="upload-bar" id="upload-bar" aria-busy="false">
-            <label class="upload-btn" id="upload-btn" for="file-upload">
-                <i class="fas fa-cloud-upload-alt"></i> 上传文本分析
+            <!-- file input 嵌在 label 里面（不是靠 for= 关联的兄弟节点）：label 只是它的外壳，
+                 焦点、可聚焦性、无障碍名字都归 input 自己。原来那个 input 带 display:none，
+                 等于彻底退出 Tab 序列，整个「上传文本分析」键盘根本够不到——只能靠鼠标。
+                 现在改成视觉隐藏（.visually-hidden），看得见的外观仍由 label 提供。 -->
+            <label class="upload-btn" id="upload-btn">
+                <input type="file" id="file-upload" accept=".txt" class="visually-hidden">
+                <i class="fas fa-cloud-upload-alt" aria-hidden="true"></i> 上传文本分析
             </label>
-            <input type="file" id="file-upload" accept=".txt" style="display:none;">
             <label class="save-toggle" id="save-toggle" for="save-upload" title="勾选后：这次的分析结果会保留下来，刷新页面后仍在；重名时会自动改名，不会覆盖内置示例书。">
                 <input type="checkbox" id="save-upload"> 存入「我的图书馆」
             </label>
@@ -201,10 +205,10 @@
                         <div class="dash-card">
                             <h4>
                                 ▤ 整体水平对比<span id="adv-mean-scope" class="adv-scope"></span>
-                                <span class="sort-control" onclick="advCycleSort('mean')" title="点击切换：数值大小 / 书名首字母">
+                                <button type="button" class="sort-control" onclick="advCycleSort('mean')" title="点击切换：数值大小 / 书名首字母">
                                     <span id="sort-text-mean">数值</span>
-                                    <i id="sort-icon-mean" class="fas fa-sort-amount-down"></i>
-                                </span>
+                                    <i id="sort-icon-mean" class="fas fa-sort-amount-down" aria-hidden="true"></i>
+                                </button>
                             </h4>
                             <div id="adv-mean" class="dash-chart-body"></div>
                         </div>
@@ -791,7 +795,7 @@
                     <div style="margin-bottom: 20px; border-bottom: 2px dashed #e4d9c3; padding-bottom: 10px;">
                         <div style="padding:5px; margin-bottom:5px; display:flex; justify-content:space-between; align-items:center;">
                             <strong style="color:${book.color};font-size:14px">${escapeHtml(book.displayName || book.name)}</strong>
-                            <span style="font-size:10px; color:#6b6254; cursor:pointer;" onclick="removeSelection('${book.id}')">✕ 移除</span>
+                            <button type="button" onclick="removeSelection('${book.id}')" aria-label="把《${escapeHtml(book.displayName || book.name)}》移出对比" style="font-size:10px; color:#6b6254; cursor:pointer; background:none; border:none; padding:0; font-family:inherit;">✕ 移除</button>
                         </div>
                         <div style="font-size:10px; color:#6b6254; margin-bottom:5px; padding-left:5px;">${advMeanLabel()}: ${fmtMetric(book.currentMean)}</div>
                 `;
