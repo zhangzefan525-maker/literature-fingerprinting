@@ -1787,14 +1787,22 @@ function registerCopySource(text) {
     return _copySources.push(String(text ?? '')) - 1;
 }
 
+// 「这段摘录有多少字」只有一个算法，两处（卡片按钮、原文弹窗）都从这里取。
+// 以前两处各算各的：卡片把 _preview() 补的那三个省略号减掉再数，弹窗直接数原始长度，
+// 于是同一段文本，卡片写「1200 字」、弹窗写「1203 字符」——数字差 3、单位还不一样，
+// 摆在同一屏上像两个数在打架。统一成：**只数真正复制到的正文字符**（省略号是界面加的，
+// 不是原文），单位用「字符」——正文是英文，说「字」本来就不准。
+function excerptCharCount(text) {
+    const src = String(text ?? '');
+    return src.endsWith('...') ? src.length - 3 : src.length;
+}
+
 // 按钮上原先只写「复制片段」。可复制到的从来不是整个片段（那有 1 万词），而是开头
 // 一段摘录；旁边显示的字数又比复制到的短（卡片里只露 60 字、详情页露 150 字，复制的是
-// 1200 字）。把真实字数写在按钮上，粘贴之前就知道拿到的是什么。
+// 1200 字符）。把真实字数写在按钮上，粘贴之前就知道拿到的是什么。
 function copyButtonHtml(text, extraClass = '', label = '') {
     if (!text) return '';
-    const src = String(text);
-    const shown = src.endsWith('...') ? src.length - 3 : src.length;
-    const caption = label || `复制摘录（${shown} 字）`;
+    const caption = label || `复制摘录（${excerptCharCount(text)} 字符）`;
     return `<button type="button" class="copy-block-btn${extraClass ? ` ${extraClass}` : ''}" data-copy-idx="${registerCopySource(text)}">⧉ ${caption}</button>`;
 }
 
@@ -2545,8 +2553,8 @@ function buildMethodsParagraph(books) {
     const chapterCounts = metas.map(meta => (meta.chapters ? meta.chapters.length : 0)).filter(n => n > 0);
 
     const parts = [];
-    parts.push(`本次分析使用「文印」文学指纹工具，共分析 ${books.length} 本书、${totalBlocks} 个文本块。`);
-    parts.push(`文本经 Project Gutenberg 页眉页脚清理与常见缩写还原后，按每块 ${blockSizes.join('/')} 词、相邻块重叠 ${blockSizes.map((size, i) => size - steps[i]).join('/')} 词的滑动窗口切分。`);
+    parts.push(`本次分析使用「文印」文学指纹工具，共分析 ${books.length} 本书、${totalBlocks} 个片段。`);
+    parts.push(`文本经 Project Gutenberg 页眉页脚清理与常见缩写还原后，按每片段 ${blockSizes.join('/')} 词、相邻片段重叠 ${blockSizes.map((size, i) => size - steps[i]).join('/')} 词的滑动窗口切分。`);
     parts.push('计算指标包括平均句长、用词重复度（Simpson\'s D）、独特词丰富度（Honoré R）与功能词二维投影。');
     parts.push(buildComparabilitySentence(books));
     if (chapterCounts.length > 0) {
@@ -3184,10 +3192,10 @@ function openGalaxyModal(d) {
 
     // 说清「这是摘录，不是全文」。字数按真正显示出来的字符算（_preview 会补省略号，
     // 那三个点不是原文），不写死 1200——老数据（只有 functionWords 带 extended_preview）
-    // 走到这里时拿到的是 150 字，写死就会变成另一句假话。
+    // 走到这里时拿到的是 150 字符，写死就会变成另一句假话。
     const noteEl = document.getElementById('modal-text-note');
     if (noteEl) {
-        const shown = excerpt.endsWith('...') ? excerpt.length - 3 : excerpt.length;
+        const shown = excerptCharCount(excerpt);
         const wc = Number(d.wordCount);
         if (Number.isFinite(wc) && wc > 0) {
             // 英文平均一个词连同后随空格约 6 个字符，只用来给一个数量级感受
@@ -3203,7 +3211,7 @@ function openGalaxyModal(d) {
     if (modalCopyBtn) {
         if (excerpt) {
             modalCopyBtn.dataset.copyIdx = registerCopySource(excerpt);
-            modalCopyBtn.textContent = `⧉ 复制这段摘录（${excerpt.length} 字符）`;
+            modalCopyBtn.textContent = `⧉ 复制这段摘录（${excerptCharCount(excerpt)} 字符）`;
             modalCopyBtn.hidden = false;
         } else {
             modalCopyBtn.hidden = true;

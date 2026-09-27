@@ -44,10 +44,25 @@ def clean_text(content):
     「文本经 Project Gutenberg 页眉页脚清理与常见缩写还原后」就成了假话。
     """
     # 1. 使用正则表达式定位正文起始位置 (Project Gutenberg 的标准标记)
-    start_match = re.search(r"\*\*\* START OF THE PROJECT GUTENBERG EBOOK .* \*\*\*", content)
-    end_match = re.search(r"\*\*\* END OF THE PROJECT GUTENBERG EBOOK .* \*\*\*", content)
+    #
+    # 起始标记这里必须是 .*?（非贪婪）而不是 .*：
+    #   .* 是贪婪的，而且默认不跨行，所以它会在**同一行里**一路吃到最后一个 ***。
+    #   正常情况下 START 独占一行、行内只有一个 ***，两种写法结果相同；但只要
+    #   START 和 END 落到同一行上（复制粘贴时丢了换行、或有人把整本书拼成一行），
+    #   start_match.end() 就会跑到 end_match.start() 的后面，切片变成空串，
+    #   整本书的正文被清光——用户只会看到一句「文件清洗后没有剩余正文」，
+    #   完全看不出是自己那份文件的换行没了。用 .*? 就停在 START 自己的那个 *** 上。
+    #
+    # 「先后顺序」那道判断是最后一道保险：两个位置万一颠倒，宁可不切，
+    # 也不能把正文切没（少剥一层页眉只是数值略有偏差，切光了是什么都没有）。
+    #
+    # 另：老版 Gutenberg 的标记写的是「THIS PROJECT GUTENBERG EBOOK」，原来只认 THE，
+    # 于是这类文件的页眉页脚会整段留在正文里，而导出的说明里写着「文本经 Project
+    # Gutenberg 页眉页脚清理」——那句话就成了假话。两种写法都认。
+    start_match = re.search(r"\*\*\* START OF (?:THE|THIS) PROJECT GUTENBERG EBOOK .*? \*\*\*", content)
+    end_match = re.search(r"\*\*\* END OF (?:THE|THIS) PROJECT GUTENBERG EBOOK .* \*\*\*", content)
 
-    if start_match and end_match:
+    if start_match and end_match and start_match.end() < end_match.start():
         content = content[start_match.end():end_match.start()]
 
     # 2. 预处理文本：换行变空格，合并多个空格

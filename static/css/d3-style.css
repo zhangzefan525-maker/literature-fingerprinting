@@ -1749,3 +1749,63 @@ button.copy-failed:hover {
         scroll-behavior: auto !important;
     }
 }
+
+/* ==========================================================================
+   触屏（手指）上的可点面积
+   --------------------------------------------------------------------------
+   320×760、开触摸模拟实测：页面上有 17 个可点元素小于 44×44——页签 101×37、
+   导出按钮 78×33、书名 chip 148×29、「停止文本雨」93×28，书名旁的删除钮只有
+   27×24。鼠标点得到不等于手指点得到：手指的接触面接近 9mm（≈34px），用户看不清
+   自己到底点中了没有，删除这类不可逆的操作尤其容易点到隔壁那本书上。
+   （WCAG 2.5.8 的及格线是 24×24，2.5.5 的推荐值是 44×44，这里按 44 做。）
+
+   为什么用 (pointer: coarse) 而不是 max-width：这里要表达的是「输入是手指」，
+   不是「屏幕窄」。平板横屏、大屏手机都不窄；反过来，带触摸屏的笔记本主指针是
+   触控板（pointer: fine），在那里把控件撑到 44px 只会让界面变松。
+
+   为什么放在文件最后：得让它盖住上面那些按宽度写的移动端微调（例如 ≤560px 里
+   把 .cyber-btn-float 压成 padding:5px 11px 的那条），否则同一条属性谁在后面谁赢，
+   得回头去改那些块。放最后，规则读起来是「先按屏幕宽调外观，再按输入方式调可点面积」。
+   ========================================================================== */
+@media (pointer: coarse) {
+    .tab-btn,
+    .quickstart-demo,
+    .quickstart-close,
+    .export-group button,
+    .book-btn,
+    .filter-chip,
+    .sort-control,
+    .copy-block-btn,
+    .save-toggle,
+    .upload-btn,
+    .cyber-btn-float,
+    select {
+        min-height: 44px;
+    }
+
+    /* 弹窗右上角那个 × ：字号 28px 但盒子只有二十来像素宽，给足 44×44 */
+    .galaxy-modal-close {
+        min-width: 44px;
+        min-height: 44px;
+        top: 8px;
+        right: 12px;
+    }
+
+    /* 书名旁的删除钮实测 38×22，而它做的是删除。视觉上不能放大——它就嵌在书名
+       chip 里，这个尺寸是设计的一部分——所以只把**命中区**撑大。横向不动（38 已经
+       够宽，再放就会盖住相邻那本书的 chip，反而变成「想选这本却删了那本」），
+       竖直补到 44px——正好是 .book-group 的高度，一格不越界。
+       尺寸要按 padding box 算：定位的 ::before 参照的是 padding box，而 .book-del
+       有 1px 的透明边框，所以盒子高 22 时 padding box 只有 20，top/bottom 各 −11
+       得到的是 42 而不是 44，得给到 −12 才是 44。
+       （用 elementFromPoint 打车上下边缘的点验证；getBoundingClientRect() 量不到 ::before。） */
+    .book-del { position: relative; }
+    .book-del::before {
+        content: '';
+        position: absolute;
+        left: -4px;
+        right: -4px;
+        top: -12px;
+        bottom: -12px;
+    }
+}
