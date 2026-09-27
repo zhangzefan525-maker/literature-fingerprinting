@@ -1855,17 +1855,22 @@ function getBookDisplayName(name) {
 // 后端 src/projection.py 的 axis_labels() 已按主成分载荷算好，形如
 // 「横轴越靠右，the / his / of / he 这类小词在整段里占的比例越高」，
 // 经 projection.axisLabels 传到前端（renderGalaxyNote 已在用同一份数据）。
+// 一条轴可能是两段（正号词一段、负号词一段，用「；」隔开），所以每段都要取。
 // 取不到时（旧版数据 / 不同模型混选 / 退化模型）不编词，退回泛称。
 function getAxisWordsFor(comparability) {
     const labels = (comparability && comparability.axisLabels) || [];
     const words = [];
     labels.forEach(text => {
-        // 只认「，A / B / C 这类小词」里的那段词表，不把整句当词
-        const matched = /，([^，]+?)\s*这类小词/.exec(String(text));
-        if (!matched) return;
-        matched[1].split('/').forEach(word => {
-            const trimmed = word.trim();
-            if (trimmed && words.indexOf(trimmed) < 0) words.push(trimmed);
+        // 只认「，A / B / C 这类小词」里的那段词表，不把整句当词。
+        // 分号也要排除，否则分号前面那段的词表会被一路吞到下一段去。
+        const parts = String(text).match(/，([^，；]+?)\s*这类小词/g) || [];
+        parts.forEach(part => {
+            const matched = /，([^，；]+?)\s*这类小词/.exec(part);
+            if (!matched) return;
+            matched[1].split('/').forEach(word => {
+                const trimmed = word.trim();
+                if (trimmed && words.indexOf(trimmed) < 0) words.push(trimmed);
+            });
         });
     });
     return words.slice(0, 4);
@@ -2034,12 +2039,43 @@ function collectExportAxisNote() {
 
 function exportLegendLineHeight() { return 18; }
 
-// 图例带的高度：每条图例一行，轴说明按每行 46 字折行
+// 轴说明的折行。算高度和画文字**必须**都走这一个函数：以前两边各写各的
+// （高度按 Math.ceil(len/46) 估、画的时候按 i += 46 且硬顶 4 行），一旦说明超过
+// 4 行或长度不是 46 的整数倍，两者就对不上，图例带会盖住图或多出一截空白。
+// 折行优先断在「；」处（那是前后两段轴的天然断点），单段超长才按 46 字硬折。
+function wrapAxisNote(axisNote) {
+    const MAX = 46;
+    const MAX_LINES = 6;
+    const lines = [];
+    String(axisNote).split('；').forEach((seg, idx) => {
+        // 分号被 split 吃掉了，除第一段外都要补回来
+        let rest = idx === 0 ? seg : '；' + seg;
+        while (rest.length > MAX) {
+            lines.push(rest.slice(0, MAX));
+            rest = rest.slice(MAX);
+        }
+        if (!rest.length) return;
+        // 塞得进上一行就塞，免得为几个字多占一整行
+        const last = lines.length - 1;
+        if (last >= 0 && lines[last].length + rest.length <= MAX) lines[last] += rest;
+        else lines.push(rest);
+    });
+    if (!lines.length) return [''];
+    if (lines.length > MAX_LINES) {
+        // 真被截断时留个记号，别让导出的图悄悄少一段
+        const kept = lines.slice(0, MAX_LINES);
+        kept[MAX_LINES - 1] = kept[MAX_LINES - 1].slice(0, MAX - 1) + '…';
+        return kept;
+    }
+    return lines;
+}
+
+// 图例带的高度：每条图例一行，轴说明按 wrapAxisNote 的实际行数
 function exportLegendBandHeight(items, axisNote) {
     if (!items.length && !axisNote) return 0;
     const lineH = exportLegendLineHeight();
     let lines = items.length;
-    if (axisNote) lines += Math.ceil(axisNote.length / 46);
+    if (axisNote) lines += wrapAxisNote(axisNote).length;
     return lines * lineH + 16;
 }
 
@@ -2108,11 +2144,12 @@ function attachExportLegend(prep, items, axisNote, shape) {
     });
 
     if (axisNote) {
-        // 轴说明是整句，按固定字数折行，免得一行横穿整张图
-        for (let i = 0; i < axisNote.length && i < 46 * 4; i += 46) {
-            addText(x0, y, 11, '#5c5346', axisNote.slice(i, i + 46));
+        // 轴说明是整句，折行免得一行横穿整张图；行数由 wrapAxisNote 决定，
+        // 与上面 exportLegendBandHeight 用的是同一个函数，不会对不上
+        wrapAxisNote(axisNote).forEach(line => {
+            addText(x0, y, 11, '#5c5346', line);
             y += lineH;
-        }
+        });
     }
 
     g.setAttribute('class', 'export-legend');

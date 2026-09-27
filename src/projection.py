@@ -38,10 +38,19 @@ def compute_model_id(model):
 
 def axis_labels(model):
     """
-    用每个主成分载荷最高的功能词生成一句白话说明，
+    用每个主成分载荷最高的功能词生成白话说明，
     让不熟悉统计的研究者也能大致读懂横纵轴在区分什么。
 
-    措辞注意：矩阵按行归一化过，所以是「占比更高」，不是「出现得更多」。
+    两条措辞上的硬规矩：
+
+    一、矩阵按行归一化过，所以是「占比更高」，不是「出现得更多」。
+
+    二、载荷的正负号代表两个**相反**的方向，必须分成两段说，一段只提同号的词。
+        一句话只能管一个方向。这里原来按 |载荷| 取前四个词，等于把正号词和负号词
+        混进同一句「越靠某端，这些词占比越高」——那一半混进来的词无论比例尺朝哪边
+        都必然说反（实测纵轴前四词为 and +0.77 / he +0.26 / you −0.22 / that −0.18，
+        按 |载荷| 混着说时 and 和 he 就是反的）。翻比例尺朝向只能换掉是「哪一半」错，
+        消不掉错误，所以这里从选词上分开。
     """
     vocabulary = list(model.get("vocabulary") or [])
     components = model.get("components") or []
@@ -51,14 +60,29 @@ def axis_labels(model):
         if not any(abs(value) > 0 for value in row):
             continue
         order = sorted(range(len(row)), key=lambda j: -abs(row[j]))[:4]
-        words = [vocabulary[j] for j in order if 0 <= j < len(vocabulary)]
-        if not words:
+        order = [j for j in order if 0 <= j < len(vocabulary)]
+        high = [vocabulary[j] for j in order if row[j] > 0]
+        low = [vocabulary[j] for j in order if row[j] < 0]
+        if not high and not low:
             continue
         axis = "横轴" if i == 0 else "纵轴"
-        direction = "右" if i == 0 else "上"
-        labels.append(
-            f"{axis}越靠{direction}，" + " / ".join(words) + " 这类小词在整段里占的比例越高"
-        )
+        # 正号载荷 = 坐标值更大的一端，方向词必须与前端比例尺一致：
+        #   横轴 static/js/d3-charts.js 的 xScale.range([padding, width - padding]) → 值大在右
+        #   纵轴 static/js/d3-charts.js 的 yScale.range([padding, height - padding])
+        #        → SVG 的 y 向下增大，值大在**下**
+        # 改前端那两处 range() 时这里必须同步改；跨语言的这种不一致测试抓不到，
+        # 所以两边都留了指向对方的注释。
+        high_dir, low_dir = ("右", "左") if i == 0 else ("下", "上")
+        clauses = []
+        if high:
+            clauses.append(
+                f"{axis}越靠{high_dir}，" + " / ".join(high) + " 这类小词在整段里占的比例越高"
+            )
+        if low:
+            clauses.append(
+                f"{axis}越靠{low_dir}，" + " / ".join(low) + " 这类小词在整段里占的比例越高"
+            )
+        labels.append("；".join(clauses))
     return labels
 
 
