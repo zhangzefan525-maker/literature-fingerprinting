@@ -470,13 +470,84 @@ button:hover {
     box-shadow: none;
 }
 
-/* 「更多导出」折叠区的容器。display:contents 让这层 span 对 flex 布局隐形：
-   展开时里面那 4 个按钮直接成为 .export-group 的 flex item，跟外面 2 个同排、
-   沿用父级的 gap: 8px，不会另起一行；收起时靠 [hidden]{display:none!important}
-   整块消失（!important 会盖过这里的 contents），按钮也一起退出 Tab 序列。
-   删掉这条，展开后 4 个按钮会挤成一段无间隙的连体文字。 */
+/* 「常用」与「低频」之间的竖线。1px / 18px、居中，不跟按钮一起长高——触屏下按钮是 44px，
+   它仍是 18px。它是分区标记不是分割面，拉满会读成一根柱子（真嫌短就改这里，别新开规则）。
+   flex-shrink: 0 不能省：它是 1px 的项，默认 flex-shrink: 1，一行塞不下时会被压成 0 宽，
+   线直接消失。纯装饰，HTML 里已经 aria-hidden；不写 role="separator"——它不承载语义，
+   分组语义由 role="group" + aria-label、以及切换钮的 aria-controls 表达。 */
+.export-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    flex-shrink: 0;
+}
+
+/* 低频按钮：切换钮自己，加上「更多导出」里的那 4 个。保留 1px 边框、只把边框颜色设成透明——
+   主按钮是 1px 实边框，这里若写 border: none，盒子各边会小 1px，两排按钮的边缘对不齐。
+   选择器必须带 .export-group 前缀（0,2,0 / 0,2,1）：#exportMoreBtn 同时命中上面的
+   .export-group button（0,1,1），单独写成 .export-more-toggle（0,1,0）会被它整个盖掉，
+   background / color / font-weight 一条都不生效——而这正是分隔线唯一要标的东西。
+   写全前缀也就不再依赖源码顺序。
+   字重写 500：中文 Windows 上 YaHei 没有 500 这一档，会落到 400，所以目标平台上实际看到的
+   对比是 600→400（更淡一点，不影响意图）。 */
+.export-group .export-more-toggle,
+.export-group .export-more button {
+    background: transparent;
+    border-color: transparent;
+    color: var(--ink-70);
+    font-weight: 500;
+}
+
+/* 悬停沿用仓库既有的次要按钮写法（见 .quickstart-close）：换底色、不抬升。
+   全局 button:hover 带 translateY(-1px) 和投影，两个都要显式关掉，
+   否则悬停时是一段没有边的文字在跳。 */
+.export-group .export-more-toggle:hover,
+.export-group .export-more button:hover {
+    background: var(--elev);
+    color: var(--ink-100);
+    transform: none;
+    box-shadow: none;
+}
+
+/* 切换钮的箭头：字形在 HTML 里，朝向只由 aria-expanded 决定，JS 不碰文字。
+   这样可见状态与无障碍状态同源，不可能出现「读屏说已展开、箭头还是 ▾」。
+   （旧写法用 textContent 整体重写，既把可访问名从「更多导出」改成「收起导出」，
+   也会把这个 span 一起删掉——箭头再也回不来。）
+   display: inline-block 不能省：inline 盒子不可 transform，rotate 会静默失效。 */
+.export-caret {
+    display: inline-block;
+    font-size: 0.72em;
+    transition: var(--transition-control);
+}
+.export-more-toggle[aria-expanded="true"] .export-caret {
+    transform: rotate(180deg);
+}
+
+/* 「更多导出」折叠区。这里是一个真容器（display: flex），不再是 display: contents：
+   那 4 个按钮自成一个 flex 项，窄屏下整块换行，不会散到两行去；同时它自己的 min-content
+   只有最宽的那个按钮（中文标签不可断行，约 92px），所以最窄的 320px 下也不会把页面撑宽。
+   收起时靠既有的 [hidden] { display: none !important }（见本文件 :1639 那条）整块消失，
+   按钮一起退出 Tab 序列。那条是作者来源的 important 声明，压过这里的普通声明与特异性无关，
+   正是它注释里写的用法——比 display: contents 更贴本意。 */
 .export-more {
-    display: contents;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+/* 最窄的那一档手机上把分隔线撤掉。
+   实测（本机字体，视口 978 起的逐档宽度）：≥372px 时它与「更多导出」同排、7.5px 居中偏移，
+   正是想要的样子；≤368px 时它被挤到上一行末尾，跟「复制此链接」同排，右边什么都没有——
+   分隔线唯一的工作就是「左边实心、右边次要」，落在行尾时它什么也没标，只是一道凭空的竖线。
+   也就是说：**线该出现的条件不是「屏幕多宽」，而是「它右边有没有东西」**，而 CSS 判不了这个。
+   所以只能取实测的换行起点再放一点余量（368–372 之间，取 379）。
+   代价是不对称的：多藏几像素只是少一道装饰（层级本身由次要样式扛着，不靠这条线），
+   少藏了则是在小屏上留一道看不懂的竖线——所以宁向往宽里取。
+   为什么不用别的办法：把线做成切换钮的 border-left 会跟着换行跑到行首；做成绝对定位的
+   伪元素既不参与换行也就永远画在那儿，两种都是在另一个位置重犯同一个错。 */
+@media (max-width: 379px) {
+    .export-divider { display: none; }
 }
 
 /* ---------- 主图表区 ---------- */

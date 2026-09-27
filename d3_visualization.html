@@ -109,13 +109,17 @@
             <!-- 六个按钮原先是平铺的，权重完全一样。常用的其实只有「导出图像」和「复制此链接」，
                  其余四个一学期用不了几次，收进「更多导出」。窄屏下这一条还会折成两三行，
                  分组后只折一次。（宽屏本来就只占一行，这一项省不到高度，是层级问题。）
-                 .export-more 用 display:contents：展开时对 flex 布局透明，四个按钮仍与前面
-                 两个同排、沿用父级 gap；收起时 [hidden]{display:none!important} 整块消失，
-                 同时自动退出 Tab 序列。 -->
+                 .export-divider 是分区标记，规则一句话说得完：它左边一律实心，右边一律次要样式——
+                 连切换钮自己也用次要样式，因为「更多导出」本身也是低频动作。一条规则管到底，
+                 展开之后层级不会消失（旧写法里那四个按钮和主按钮长得一模一样，点开那一刻层级就没了）。
+                 切换钮的文字不再随展开状态改写：读屏用户第二次回到这个按钮时听到的名字必须始终是
+                 「更多导出」，所以箭头单独放进 aria-hidden 的 span，朝向交给 CSS 按 aria-expanded
+                 旋转（见 .export-caret）——可见状态与无障碍状态同源，JS 一个字都不用在文字上动手。 -->
             <div class="control-group export-group" role="group" aria-label="导出与分享">
                 <button id="exportBtn" type="button" title="PNG 图片，适合放进汇报">导出图像</button>
                 <button id="copyLinkBtn" type="button" title="把当前指标、选书、视图一起复制成链接，发给同事即可复现">🔗 复制此链接</button>
-                <button id="exportMoreBtn" type="button" class="export-more-toggle" aria-expanded="false" aria-controls="export-more">更多导出 ▾</button>
+                <span class="export-divider" aria-hidden="true"></span>
+                <button id="exportMoreBtn" type="button" class="export-more-toggle" aria-expanded="false" aria-controls="export-more" title="矢量图、数据表、文字摘要与引用条目（BibTeX），低频使用，收在这里">更多导出 <span class="export-caret" aria-hidden="true">▾</span></button>
                 <span id="export-more" class="export-more" hidden>
                     <button id="exportSvgBtn" type="button" title="矢量图（SVG），放进论文放大不失真">导出矢量图</button>
                     <button id="exportDataBtn" type="button" title="每个片段的数值、章节与起始位置（CSV），可用 Excel 打开">导出数据表</button>
