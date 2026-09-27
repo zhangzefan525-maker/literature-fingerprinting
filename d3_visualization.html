@@ -43,7 +43,10 @@
                 <input type="file" id="file-upload" accept=".txt" class="visually-hidden">
                 <i class="fas fa-cloud-upload-alt" aria-hidden="true"></i> 上传文本分析
             </label>
-            <label class="save-toggle" id="save-toggle" for="save-upload" title="勾选后：这次的分析结果会保留下来，刷新页面后仍在；重名时会自动改名，不会覆盖内置示例书。">
+            <!-- 这句提示原来写的是「重名时会自动改名，不会覆盖」，与服务端 _resolve_final_name
+                 的行为正好相反——同名时它是沿用同名、原地替换，旧的分析就没了。
+                 用户会因为信这句话而不去做备份，所以必须照实写。 -->
+            <label class="save-toggle" id="save-toggle" for="save-upload" title="勾选后：这次的分析结果会保留下来，刷新页面后仍在，可随时删除。若「我的图书馆」里已有同名的书，会更新那一本（旧的分析被覆盖）；与内置示例书同名则自动加「（我的）」，示例书永不改动。">
                 <input type="checkbox" id="save-upload"> 存入「我的图书馆」
             </label>
             <span id="upload-status" class="upload-status" aria-live="polite">支持上传英文纯文本小说（.txt，建议 1 万个英文单词以上）。分析后会出现在上方的书名列表里，和内置名著放在一起对比。</span>
@@ -157,7 +160,10 @@
                     <span>颜色 = 不同书</span>
                     <span>大小 = 数值高低</span>
                     <span>位置 = 高频小词<span id="galaxy-guide-axis-words"></span>的用法</span>
-                    <span>滚轮缩放 · 拖动探索 · 点击看原文</span>
+                    <!-- 手指没有滚轮，也没有「悬停」。触屏设备上写「滚轮缩放」是教用户
+                         做一个做不到的动作，所以两种指针对应两句，由 CSS 按 hover 能力选。 -->
+                    <span class="pointer-hint-hover">滚轮缩放 · 拖动探索 · 点击看原文</span>
+                    <span class="pointer-hint-touch">双指缩放 · 拖动探索 · 点按看原文</span>
                 </div>
                 <div class="galaxy-legend" id="galaxy-legend"></div>
                 <div class="galaxy-note" id="galaxy-axis-note" hidden></div>
@@ -220,9 +226,15 @@
 
                     <div class="drill-panel">
                         <h4 style="margin:0; border-bottom:1px solid #e4d9c3; padding-bottom:10px;">▸ 片段详情</h4>
-                        <div id="adv-drill-content" class="drill-content">
+                        <!-- 这一块内容变了却从不出声：同屏的 #insight-content / #anomaly-content 都带
+                             aria-live，只有它没有，读屏用户点书、框选、换指标之后听不到任何变化。
+                             整块做成 live region 又会把卡片里的按钮、关键词一起念好几遍，所以内容区
+                             只当普通区域（tabindex="-1" 是为了「✕ 收起」之后能把焦点接回来），
+                             另设一条视觉隐藏的一句话播报。 -->
+                        <div id="adv-drill-content" class="drill-content" role="region" aria-label="片段详情" tabindex="-1">
                             <div class="empty-tip">点击左侧图表中的书籍<br>或拖拽走势图查看段落详情</div>
                         </div>
+                        <div id="adv-drill-announce" class="visually-hidden" role="status" aria-live="polite"></div>
                     </div>
                 </div>
             </div>
@@ -259,13 +271,18 @@
                 <div id="modal-keywords" class="keyword-container"></div>
             </div>
 
+            <!-- 这一节原来叫「原文深度阅读」、按钮叫「复制全文」，但一个片段有 1 万个
+                 英文单词（约 5.5 万字符），这里给的始终是开头的 1200 字——约 2%。把摘录
+                 当全文引用出去，是读者看不出、作者会吃亏的那种错。所以标题改叫「原文片段」，
+                 并在正文上方写明「本片段共约多少词、这里显示多少字」。 -->
             <div class="modal-section">
-                <h4>📜 原文深度阅读</h4>
+                <h4>📜 原文片段</h4>
+                <div class="modal-text-note" id="modal-text-note"></div>
                 <div class="text-scroll-area">
                     <p id="modal-long-text">正在加载文本...</p>
                 </div>
                 <div class="modal-copy-row">
-                    <button type="button" id="modal-copy-btn" class="copy-block-btn" hidden>⧉ 复制全文</button>
+                    <button type="button" id="modal-copy-btn" class="copy-block-btn" hidden>⧉ 复制这段摘录</button>
                 </div>
             </div>
         </div>
@@ -281,6 +298,13 @@
         function fmtMetric(value) {
             if (typeof formatMetric === 'function') return formatMetric(value);
             return Number.isFinite(value) ? Number(value).toFixed(2) : '暂无';
+        }
+
+        // 过渡时长：系统开了「减少动态效果」就压成 0（瞬时到位，而不是不动——
+        // 不动的话柱子会停在上一次的旧高度上）。d3-charts.js 里已经有一份
+        // motionDuration，这里转发，免得本文件到处写 typeof 判断。
+        function animMs(ms) {
+            return (typeof motionDuration === 'function') ? motionDuration(ms) : ms;
         }
 
         // 1. 全局配置与状态
@@ -646,7 +670,7 @@
             const barY = d => Math.min(y(d.currentMean), zeroY);
             const barH = d => Math.abs(y(d.currentMean) - zeroY);
 
-            g.select(".x-axis").transition().duration(500).call(d3.axisBottom(x))
+            g.select(".x-axis").transition().duration(animMs(500)).call(d3.axisBottom(x))
                 .selectAll("text")
                 .style("text-anchor", "end")
                 .attr("dx", "-.8em")
@@ -655,7 +679,7 @@
                 .style("font-size", "10px")
                 .text(d => d.length > 18 ? d.substring(0, 16) + "..." : d);
 
-            g.select(".y-axis").transition().duration(500).call(d3.axisLeft(y).ticks(5));
+            g.select(".y-axis").transition().duration(animMs(500)).call(d3.axisLeft(y).ticks(5));
 
             // 出现负值时才画零线：读者得看得出柱子是从哪儿往上/往下长的
             g.select(".content-area").selectAll("line.zero-line")
@@ -666,17 +690,22 @@
                 .attr("y1", y(0)).attr("y2", y(0));
 
             const bars = g.select(".content-area").selectAll("rect").data(sortedData, d=>d.id);
-            bars.join(
+            // 注意：bars 是 update 选择集（首屏渲染时它是空的），.join() 返回的才是
+            // enter+update 合并后的那一份。键盘绑定必须挂合并集，挂 bars 等于首屏
+            // 一根柱子都点不到——鼠标能点是因为 .on() 链在 join() 的返回值上。
+            const barsMerged = bars.join(
                 enter => enter.append("rect").attr("class", d => `book-el book-${d.id}`)
                     .attr("x", d=>x(d.displayName || d.name)).attr("y", zeroY).attr("width", x.bandwidth()).attr("height", 0).attr("fill", d=>d.color)
-                    .call(e => e.transition().duration(750).attr("y", barY).attr("height", barH)),
-                update => update.transition().duration(750)
+                    .call(e => e.transition().duration(animMs(750)).attr("y", barY).attr("height", barH)),
+                update => update.transition().duration(animMs(750))
                     .attr("x", d=>x(d.displayName || d.name)).attr("y", barY).attr("width", x.bandwidth()).attr("height", barH),
-                exit => exit.transition().duration(500).attr("height", 0).remove()
+                exit => exit.transition().duration(animMs(500)).attr("height", 0).remove()
             )
             .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>${advMeanLabel()}: ${fmtMetric(d.currentMean)}`); })
             .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
             .on("click", (e, d) => advDrillDown(d));
+
+            attachDrillKeyboard(barsMerged);
         }
 
         function renderAdvLine(data) {
@@ -687,7 +716,7 @@
             const y = d3.scaleLinear().range([h, 0]).domain(d3.extent(allY).length ? d3.extent(allY) : [0, 10]);
 
             g.select(".x-axis").call(d3.axisBottom(x).ticks(5).tickFormat(d3.format(".0%")));
-            g.select(".y-axis").transition().duration(500).call(d3.axisLeft(y).ticks(5));
+            g.select(".y-axis").transition().duration(animMs(500)).call(d3.axisLeft(y).ticks(5));
 
             // 章节刻度：标出「这一段的起伏大概在第几章」
             renderChapterTicks(g, w, h, data);
@@ -695,7 +724,8 @@
             const line = d3.line().curve(d3.curveBasis).x(d => x(d.xPercent)).y(d => y(d.value));
 
             const paths = g.select(".content-area").selectAll(".line-path").data(data, d=>d.id);
-            paths.join(
+            // 同 renderAdvMean：paths 是 update 选择集，键盘要挂 join() 的合并结果
+            const pathsMerged = paths.join(
                 enter => enter.append("path").attr("class", d => `book-el line-path book-${d.id}`)
                     .attr("fill", "none").attr("stroke-width", 1.5).attr("stroke", d=>d.color)
                     .attr("d", d => line(d.activeSegment))
@@ -705,6 +735,8 @@
                 update => update.attr("stroke", d => d.color).attr("d", d => line(d.activeSegment)),
                 exit => exit.remove()
             );
+
+            attachDrillKeyboard(pathsMerged);
 
             const dots = g.select(".content-area").selectAll(".peak-dot").data(data, d=>d.id);
             dots.join(
@@ -716,6 +748,7 @@
 
             const brush = d3.brushX().extent([[0, 0], [w, h]]).on("end", advBrushed);
             g.select(".brush").call(brush);
+            attachBrushKeyboard(g, brush, w);
 
             // 分享链接里带了框选范围就还原（只取一次）
             if (typeof consumePendingUrlBrush === 'function') {
@@ -813,19 +846,108 @@
             return advState.selectedIds.filter(id => live.has(id));
         }
 
+        // 键盘通路：图上的每一本书都要能 Tab 到、能用方向键逐本走、能按回车展开详情卡。
+        // 以前这些图只能点：柱子、折线都是不可聚焦的元素，键盘用户在看板页打不开任何一本
+        // 书的片段详情——而「哪一段偏离得厉害」这类判断，正是从这个卡片里读出来的。
+        // 走法沿用图上别处（主视图折线、热力图、星系）已经做好的那套：整张图只留一个
+        // Tab 停靠点，进去之后用方向键逐本走，避免几十根柱子各占一个 Tab。
+        function attachDrillKeyboard(nodes) {
+            if (!nodes || nodes.empty()) return;
+            const NEXT_KEYS = ['ArrowRight', 'ArrowDown'];
+            const PREV_KEYS = ['ArrowLeft', 'ArrowUp'];
+            nodes.attr("tabindex", (d, i) => (i === 0 ? 0 : -1))
+                .attr("role", "button")
+                .attr("aria-label", d => `${d.displayName || d.name}，${advMeanLabel()} ${fmtMetric(d.currentMean)}。按回车查看这本书的片段详情`)
+                .on("keydown", function (event, d) {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        advDrillDown(d);
+                        return;
+                    }
+                    const all = nodes.nodes();
+                    const current = all.indexOf(this);
+                    let target = null;
+                    if (NEXT_KEYS.includes(event.key)) target = current + 1;
+                    else if (PREV_KEYS.includes(event.key)) target = current - 1;
+                    else if (event.key === 'Home') target = 0;
+                    else if (event.key === 'End') target = all.length - 1;
+                    if (target === null) return;
+                    event.preventDefault();
+                    if (target < 0 || target >= all.length) return;
+                    all.forEach(el => el.setAttribute('tabindex', '-1'));
+                    all[target].setAttribute('tabindex', '0');
+                    all[target].focus();
+                });
+        }
+
+        // d3 的 brush 只认鼠标（而且按住 Shift 才勉强用修饰键画新框），键盘用户根本
+        // 划不出区段——而「框选一段看它这一段什么水平」是这个页面唯一的区段入口。
+        // 这里给刷选框开一条键盘通路：方向键平移整个框，Shift + 方向键收放右边界，
+        // Esc 清空。每次移动 1% 宽，比 0.5px 的「位置没变」容差大得多，
+        // 所以不会撞上那个防死循环的判断。
+        function attachBrushKeyboard(g, brush, w) {
+            const brushG = g.select(".brush");
+            const overlay = brushG.select(".overlay");
+            if (overlay.empty()) return;
+            const STEP = Math.max(1, Math.round(w / 100));
+
+            overlay.attr("tabindex", 0)
+                .attr("role", "application")
+                .attr("aria-label", "段落范围选择框：左右方向键移动，按住 Shift 加左右方向键调整右边界，Esc 清空。下方详情卡会显示这个范围内的均值")
+                .on("keydown", function (event) {
+                    const current = d3.brushSelection(brushG.node());
+                    if (event.key === 'Escape') {
+                        if (!current) return;
+                        event.preventDefault();
+                        brushG.call(brush.move, null);
+                        return;
+                    }
+                    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                    event.preventDefault();
+                    const dir = event.key === 'ArrowRight' ? 1 : -1;
+                    if (!current) {
+                        // 还没框过：第一次按键先划出中间一段，用户不用凭空知道该按哪边
+                        const mid = w / 2;
+                        brushG.call(brush.move, [Math.max(0, mid - STEP * 5), Math.min(w, mid + STEP * 5)]);
+                        return;
+                    }
+                    let [x0, x1] = current;
+                    if (event.shiftKey) {
+                        x1 = Math.min(w, Math.max(x0 + STEP, x1 + dir * STEP));
+                    } else {
+                        const width = Math.min(x1 - x0, w);
+                        x0 = Math.min(Math.max(0, x0 + dir * STEP), w - width);
+                        x1 = x0 + width;
+                    }
+                    brushG.call(brush.move, [x0, x1]);
+                });
+        }
+
+        // 播报一句话给读屏用户（内容区本身不是 live region，见 HTML 里的说明）。
+        // 只在文字真的变了才写：这个函数在每次框选、换指标后都会被调用，
+        // 重复写入同一句话会让读屏反复念同一条消息。
+        function announceDrill(text) {
+            const el = document.getElementById('adv-drill-announce');
+            if (!el || el.textContent === text) return;
+            el.textContent = text;
+        }
+
         function updateDrillPanel() {
             const panel = document.getElementById('adv-drill-content');
             const computedData = getAdvComputed();
             const ids = liveSelectedIds(computedData);
             if (ids.length === 0) {
                 panel.innerHTML = '<div class="empty-tip">点击左侧图表中的书籍<br>或拖拽走势图查看段落详情</div>';
+                announceDrill('片段详情已收起。');
                 return;
             }
-            panel.innerHTML = '';
+            // 先把整块 HTML 拼好再一次写进去。原来是每本书一次 panel.innerHTML +=，
+            // 有几本书就整块重建几次——屏幕上闪，live region 也会跟着报几遍。
+            let html = '';
 
             ids.forEach(id => {
                 const book = computedData.find(b => b.id === id);
-                if (!book) return; 
+                if (!book) return;
 
                 const topBlocks = [...book.activeSegment].sort((a,b) => b.value - a.value).slice(0, 3);
 
@@ -855,8 +977,18 @@
                 });
                 
                 bookHtml += `</div>`;
-                panel.innerHTML += bookHtml;
+                html += bookHtml;
             });
+
+            panel.innerHTML = html;
+
+            const names = ids
+                .map(id => {
+                    const b = computedData.find(x => x.id === id);
+                    return b ? `《${b.displayName || b.name}》` : null;
+                })
+                .filter(Boolean);
+            announceDrill(`已展开 ${names.length} 本书的片段详情：${names.join('、')}，每本列出数值最高的 3 个片段。`);
         }
 
         window.removeSelection = function(id) {
@@ -865,6 +997,11 @@
                 advState.selectedIds.splice(index, 1);
                 updateDrillPanel();
                 updateHighlightVisuals();
+                // 被点掉的那个「✕ 收起」按钮正是刚被重建掉的节点，焦点会掉回 body——
+                // 键盘用户按一次回车就迷路了。把焦点接到详情区上（它带 tabindex="-1"），
+                // 再往下 Tab 一次就能回到还没有被收起的卡片按钮上。
+                const panel = document.getElementById('adv-drill-content');
+                if (panel && document.activeElement === document.body) panel.focus();
             }
         };
 
@@ -1021,15 +1158,11 @@
         }
         function hideAdvTooltip() { advTooltip.style("opacity", 0); }
         
-        // 窗口大小变化时重绘（仅当仪表盘可见时）
-        window.addEventListener('resize', () => {
-            const dashboard = document.getElementById('view-dashboard');
-            if(dashboard && dashboard.classList.contains('active') && advState.data.length) { 
-                advState.chartsInitDone = false; 
-                initD3Structures(); 
-                updateAdvCharts(); 
-            }
-        });
+        // 这里原来还有一个 resize 监听，每个事件都拆掉重建两张图、没有任何节流。
+        // d3-charts.js 里那条（防抖 250ms，对看板走 initAdvancedData）是它的超集，
+        // 两处都留着等于一次拖窗做两遍同样的活，所以把没防抖的这条删掉。
+        // （顺带说明：原来那个 chartsInitDone = false 全项目没有任何地方读，
+        //   是个死标志，删掉不留缺口。）
     </script>
 </body>
 </html>

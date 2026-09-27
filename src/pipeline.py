@@ -52,9 +52,33 @@ def _ensure_nltk_data():
                 pass
 
 
+# 片段预览的两种长度。CARD = 卡片/异常面板里那一行小字（只有几十字可见），
+# MODAL = 点开「原文片段」时读到的摘录。两者都不等于原文——一个片段有 1 万词。
+# 四个指标必须给同样的长度：以前只有 functionWords 带 extended_preview（1200 字），
+# 另外三个只有 preview（150 字），于是同一个片段、只换一下「观察角度」，弹窗里的
+# 原文就从 1200 字变成 150 字——而标题和按钮都自称是全文。
+CARD_PREVIEW_CHARS = 150
+MODAL_PREVIEW_CHARS = 1200
+
+
 def _preview(text, limit):
     """截取文本块预览，超出部分用省略号标注。"""
     return text[:limit] + "..." if len(text) > limit else text
+
+
+def _block_entry(index, value, keywords_list, blocks, extra=None):
+    """一个片段在某个指标下的通用字段（四个指标结构一致，只有 value 不同）。"""
+    entry = {
+        "block": index,
+        "value": value,
+        "keywords": keywords_list[index],
+        "preview": _preview(blocks[index], CARD_PREVIEW_CHARS),
+        "extended_preview": _preview(blocks[index], MODAL_PREVIEW_CHARS),
+        "wordCount": len(blocks[index].split()),
+    }
+    if extra:
+        entry.update(extra)
+    return entry
 
 
 def build_book_data(blocks, keywords_n=3, text=None, projection=None,
@@ -113,46 +137,21 @@ def build_book_data(blocks, keywords_n=3, text=None, projection=None,
 
     book_data = {
         "sentenceLength": [
-            {
-                "block": i,
-                "value": round(val, 4),
-                "keywords": keywords_list[i],
-                "preview": _preview(blocks[i], 150),
-                "wordCount": len(blocks[i].split()),
-            }
+            _block_entry(i, round(val, 4), keywords_list, blocks)
             for i, val in enumerate(sentence_lengths)
         ],
         "simpsonIndex": [
-            {
-                "block": i,
-                "value": round(val, 6),
-                "keywords": keywords_list[i],
-                "preview": _preview(blocks[i], 150),
-                "wordCount": len(blocks[i].split()),
-            }
+            _block_entry(i, round(val, 6), keywords_list, blocks)
             for i, val in enumerate(simpson_indices)
         ],
         "hapaxLegomena": [
-            {
-                "block": i,
-                "value": round(val, 4),
-                "keywords": keywords_list[i],
-                "preview": _preview(blocks[i], 150),
-                "wordCount": len(blocks[i].split()),
-            }
+            _block_entry(i, round(val, 4), keywords_list, blocks)
             for i, val in enumerate(hapax_values)
         ],
         # functionWords 额外携带 value_y (PCA 第二主成分)，供「风格星系」视图定位
         "functionWords": [
-            {
-                "block": i,
-                "value": item["x"],
-                "value_y": item["y"],
-                "keywords": keywords_list[i],
-                "preview": _preview(blocks[i], 150),
-                "extended_preview": _preview(blocks[i], 1200),
-                "wordCount": len(blocks[i].split()),
-            }
+            _block_entry(i, item["x"], keywords_list, blocks,
+                         extra={"value_y": item["y"]})
             for i, item in enumerate(coordinates)
         ],
         "metadata": {

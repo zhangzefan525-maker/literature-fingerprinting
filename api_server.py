@@ -27,8 +27,28 @@ CORS(app, resources={r"/api/*": {"origins": [
     r"http://127\.0\.0\.1(:\d+)?",
 ]}})
 
+# 反向代理跳数：站在 nginx 之类后面时，request.remote_addr 拿到的是代理自己的地址，
+# 于是「上传限流」从「按访客」退化成「全站共用一个桶」——第 11 次上传之后所有人一起
+# 被挡，报错却写着「请求太频繁了」（指向本人）。设为 1（或真实跳数）让 Flask 改读
+# X-Forwarded-For 的最后一跳，限流才按真实访客算。
+#
+# 默认 0 = 不信任任何转发头，行为与以前完全一致。这个开关**只在该端口无法被绕过代理
+# 直连时**才安全：能直连的话，任何人都能自己伪造 X-Forwarded-For，限流就从「共用一个
+# 桶」变成「完全可绕过」——比不改更糟。所以默认关，要用先确认部署拓扑。
+_TRUST_PROXY_COUNT = int(os.environ.get("TRUST_PROXY_COUNT", "0") or 0)
+if _TRUST_PROXY_COUNT > 0:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_TRUST_PROXY_COUNT)
+
 # 限制上传文件大小，防止超大文件拖垮服务器
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
+
+# 上传片段数上限。50 MB 只是「文件字节」这道闸门，换成英文正文能装下几百万词，
+# 而分析开销随片段数线性增长（每个片段都要做分词与指标计算）。一个片段 1 万词，
+# 600 个片段约 60 万词，已经覆盖《战争与和平》这种超长篇——再往上不是「分析得慢」，
+# 是这个请求根本跑不完。下限（太短）在 analyze_upload 里判，上限在这里，两边对称。
+MAX_BLOCKS = 600
 
 
 @app.errorhandler(RequestEntityTooLarge)
@@ -142,6 +162,11 @@ def _resolve_final_name(base):
     1) 书库已存在同名 → 沿用同名（视为「替换更新」，不产生重复副本）；
     2) 撞上内置示例书名 → 加后缀「（我的）」，再撞则递增 (2)、(3)…；
     3) 其余情况 → 原样。内置示例书永不被覆盖。
+
+    注意 1) 是**会毁掉旧数据的**：同名上传意味着上一次保存的那本被整份替换。
+    所以调用方必须把这件事说出来（响应里的 replacedExisting / renamedFrom），
+    界面上那句勾选提示也必须照实写——以前它写的是「重名会自动改名，不会覆盖」，
+    与这里的行为正好相反，用户会因为信那句话而不去备份。
     """
     base = sanitize_book_name(base)
     if base in _library_keys():
@@ -517,8 +542,9 @@ def analyze_upload():
     if not file.filename.lower().endswith('.txt'):
         return jsonify({"status": "error", "message": "仅支持 .txt 文本文件"}), 400
 
-    # 用文件名（不含扩展名）作为该书的基础名；最终键由 _resolve_final_name 决定
-    # （内置同名加「（我的）」，书库同名视为替换更新）
+    # 用文件名（不含扩展名）作为该书的基础名；最终键由 _resolve_final_name 决定。
+    # 注意两种同名是两种结局：撞书库里的旧书 = 原地替换（旧的被整份换掉，所以响应里
+    # 会带 replacedExisting 让界面说出来）；撞内置示例书 = 加「（我的）」另存，示例书不动。
     base_name = Path(file.filename).stem
 
     try:
@@ -564,6 +590,19 @@ def analyze_upload():
                        f"这份文本约 {word_count} 个）"
         }), 400
 
+    # 上限必须在这里拦，不能等 build_book_data 跑完——那正是要避免的等待。
+    # 报错要说清「多少、上限多少、怎么办」，不然用户只会以为服务器坏了。
+    if len(blocks) > MAX_BLOCKS:
+        # 片段之间重叠 9 千词，覆盖到的词数不是「片段数 × 1 万」，而是
+        # 最后一块的末尾位置：(n-1) × 步长 + 块长。
+        covered = (MAX_BLOCKS - 1) * (BLOCK_SIZE - OVERLAP) + BLOCK_SIZE
+        return jsonify({
+            "status": "error",
+            "message": f"文本太长，单次最多分析约 {MAX_BLOCKS} 个片段（覆盖约 {covered // 10000} "
+                       f"万英文单词），这份文本约 {len(blocks)} 个片段。"
+                       "请拆分文件后分次上传，或先截取要研究的那些章节。"
+        }), 400
+
     # 前端在勾选「存入我的图书馆」时随 multipart 附 save=1
     want_save = request.form.get("save", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -585,7 +624,11 @@ def analyze_upload():
         }), 422
 
     final_name = _resolve_final_name(base_name)
+    # 落盘之前先记住这个名字是不是已经有一本了：同名意味着这一存会把旧的整份换掉，
+    # 必须让用户知道（以前是彻底静默的，用户以为自己在「新增」）。
+    replaced_existing = final_name in _library_keys()
     delete_token = None
+    save_error = None
 
     if want_save:
         # 保存时签发删除令牌：只有拿着它的浏览器能删掉这本书，
@@ -595,20 +638,40 @@ def analyze_upload():
         try:
             _save_library_book(final_name, book_data)
         except Exception:
+            # 分析已经跑完了（这是整个请求里最贵的一步），落盘失败不该把它丢掉。
+            # 原来这里直接返回 500 且不带 data，前端据此提前 return，于是文案
+            # 「请改在上方展示区查看」指向一个根本不会出现的书名——用户唯一能做的
+            # 就是重传一遍，而磁盘问题没解决必然再失败一次。
+            # 现在照样把结果下发（saved=False），前端能照常画图，只是刷新后不留存。
             app.logger.exception("保存到我的图书馆失败")
-            return jsonify({
-                "status": "error",
-                "message": "分析已完成，但写入「我的图书馆」失败（服务器磁盘不可写？），本次结果未留存，请改在上方展示区查看。"
-            }), 500
-        book_data.pop("_deleteToken", None)
+            save_error = ("分析已经完成、图上可以正常看，但没能存进「我的图书馆」"
+                          "（服务器磁盘不可写或已满）。刷新页面后这本书会消失，"
+                          "需要留存请先联系管理员腾出磁盘空间，再上传一次。")
+        else:
+            book_data.pop("_deleteToken", None)
 
     resp = {
         "status": "success",
         "book": final_name,  # 前端必须以 result.book 作为数据键与展示名
-        "saved": bool(want_save),
+        "saved": bool(want_save and not save_error),
         "data": _strip_internal(book_data),
     }
-    if want_save:
+    # 改名要说出来：撞上内置示例书时书名会加「（我的）」后缀，用户上传时按的是原名，
+    # 不提一句他会以为书没进来。
+    if final_name != sanitize_book_name(base_name):
+        resp["renamedFrom"] = sanitize_book_name(base_name)
+    # 覆盖也要说出来，而且要说得比改名更重：这次保存把同名旧书整份换掉了，
+    # 上一版的分析已经不存在，用户可能正指望它。
+    if want_save and replaced_existing:
+        resp["replacedExisting"] = True
+    # 反向的那个坑：这次没勾选保存，但书名和书库里已有的一本重名。屏幕上显示的是
+    # 这一次的分析结果，磁盘上留着的还是那一本旧的——两个「同一本书」不同内容，
+    # 不说清楚，用户会以为书库里那本已经更新了。
+    if not want_save and final_name in _library_keys():
+        resp["shadowsExisting"] = True
+    if save_error:
+        resp["warning"] = save_error
+    if want_save and not save_error:
         resp["savedName"] = final_name
         resp["deleteToken"] = delete_token
         resp["storage"] = "local-library" if _is_local_host(request.host) else "hosted-library"
