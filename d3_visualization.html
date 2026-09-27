@@ -274,9 +274,12 @@
         // 1. 全局配置与状态
         const advMargin = {top: 35, right: 20, bottom: 100, left: 50};
         
+        // 这里没有「本页选中的书」这一项。选书全项目只有一份，就是 d3-charts.js 里的
+        // selectedBooks——「全书对比」页的 chips 与顶部书名按钮读写的是同一个集合。
+        // 以前这里另存过一份 activeBooks，后果是：看板上点掉的书照样出现在导出与分享
+        // 链接里，两处书数能对不上，而且切走再回来筛选会被静默重置。
         const advState = {
             data: [],
-            activeBooks: new Set(),
             brushRange: null,
             selectedIds: [],
             chartsInitDone: false,
@@ -308,7 +311,6 @@
             if (!realData) return;
             const metric = currentMetric;
             advState.data = [];
-            advState.activeBooks.clear();
             const books = Object.keys(realData);
             
             const colorScale = d3.scaleOrdinal()
@@ -316,12 +318,6 @@
                 .range(['#b5472f', '#4f7a8c', '#6b8f5a', '#a67c3d', '#5a6b8c', '#a2546b', '#8c6f4a', '#5f7d72']);
             
             books.forEach(bookName => {
-                // 默认只展示主视图已选中的书（通常 1 本），其余在筛选栏由用户自行点开，避免首屏过载
-                if (typeof selectedBooks !== 'undefined' && selectedBooks.size > 0) {
-                    if (selectedBooks.has(bookName)) advState.activeBooks.add(bookName);
-                } else if (bookName === books[0]) {
-                    advState.activeBooks.add(bookName);
-                }
                 const rawMetricData = realData[bookName][metric];
                 if (!rawMetricData) return;
 
@@ -408,7 +404,7 @@
 
         function getAdvComputed() {
             return advState.data
-                .filter(b => advState.activeBooks.has(b.name))
+                .filter(b => selectedBooks.has(b.name))
                 .map(book => {
                     let segment = book.fullData;
                     if (advState.brushRange) {
@@ -879,9 +875,16 @@
 
         window.advReset = function() {
             advState.brushRange = null; advState.selectedIds = [];
-            advState.activeBooks = new Set(advState.data.map(d=>d.name));
             d3.select(".brush").call(d3.brushX().move, null);
-            d3.selectAll(".filter-chip").classed("active", true);
+            // 「重置视图」= 清空框选 + 重新选中全部已加载的书。选书只有全局这一份，
+            // 所以顶部的书名按钮会跟着一起亮起来，指标提示也要重算。
+            if (typeof selectedBooks !== 'undefined' && advState.data.length > 0) {
+                selectedBooks = new Set(advState.data.map(d => d.name));
+                if (typeof syncBookButtonStates === 'function') syncBookButtonStates();
+                if (typeof updateMetricHint === 'function') updateMetricHint();
+            }
+            // chips 的选中态也来自 selectedBooks，重新走一遍 initAdvancedData 把它重画
+            if (typeof refreshAllActiveCharts === 'function') refreshAllActiveCharts();
             updateDrillPanel();
             updateHighlightVisuals();
             updateAdvCharts();
@@ -892,24 +895,19 @@
             const container = d3.select("#adv-filters");
             container.html("");
             advState.data.forEach(book => {
+                const on = (typeof selectedBooks !== 'undefined') && selectedBooks.has(book.name);
                 container.append("button")
                     .attr("type", "button")
-                    .attr("class", `filter-chip${advState.activeBooks.has(book.name) ? ' active' : ''}`)
-                    .attr("aria-pressed", advState.activeBooks.has(book.name) ? "true" : "false")
+                    .attr("class", `filter-chip${on ? ' active' : ''}`)
+                    .attr("aria-pressed", on ? "true" : "false")
                     .attr("title", book.displayName && book.displayName !== book.name ? book.name : null)
                     .style("border-left", `3px solid ${book.color}`)
                     .text(book.displayName || book.name)
                     .on("click", function() {
-                        const el = d3.select(this);
-                        el.classed("active", !el.classed("active"));
-                        const active = el.classed("active");
-                        el.attr("aria-pressed", active ? "true" : "false");
-                        if (active) advState.activeBooks.add(book.name);
-                        else advState.activeBooks.delete(book.name);
-                        updateAdvCharts();
-                        // 筛选也是一次选择变更：不写回网址的话，「复制此链接」发出的
-                        // 还是被点掉之前的那批书
-                        if (typeof syncUrlState === 'function') syncUrlState();
+                        // 和顶部的书名按钮是同一个动作、同一份状态，直接复用它的逻辑，
+                        // 这样顶部按钮、指标提示、网址、三个页签的图会一起更新。
+                        // selectBook 自带「至少留一本」的保护，所以不会把书全点光。
+                        if (typeof selectBook === 'function') selectBook(book.name);
                     });
             });
         }

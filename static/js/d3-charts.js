@@ -853,6 +853,8 @@ function selectBook(bookId) {
     }
 
     updateCompareButtonLabel();
+    // 指标提示里有「你选中的 N 本在 X – X 之间」，选书一变就得跟着重算
+    updateMetricHint();
 
     // 刷新当前可见的图表
     if (realData) {
@@ -1729,7 +1731,12 @@ function getMetricContextLine(metric) {
         parts.push(`参考区间：${label}（${baseline.count} 本）的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}，这只是个参照，不是好坏标准。`);
     }
     if (selected && !sameAsBaseline) {
-        parts.push(`你选中的 ${selected.count} 本在 ${formatMetric(selected.min)} – ${formatMetric(selected.max)} 之间。`);
+        // 只选了一本时，「在 X – X 之间」是句废话（最小值等于最大值），改说平均水平
+        if (selected.count === 1) {
+            parts.push(`你选中的这 1 本，平均水平是 ${formatMetric(selected.min)}。`);
+        } else {
+            parts.push(`你选中的 ${selected.count} 本在 ${formatMetric(selected.min)} – ${formatMetric(selected.max)} 之间。`);
+        }
     }
     if (parts.length === 0) return '';
 
@@ -1988,19 +1995,10 @@ function exportTimestamp() {
 }
 
 // 当前屏幕上真正参与分析的那几本书。
-// 「全书对比」页有自己的书籍筛选（chips，存在 advState.activeBooks 里）：在那一页上，
-// 屏幕显示的就是筛选后的那几本，所以导出和分享链接都得跟它走——否则用户明明点掉了
-// 一本书，导出的摘要里却还有它一整节。
+// 选书全项目只有一份 selectedBooks：顶部书名按钮与「全书对比」页的 chips 读写的是
+// 同一个集合，所以这里不需要再按标签页分情况。导出与分享链接一律以它为准，于是同一份
+// 导出里的「选择书籍」与「解读参考」必然同源，不会再出现一个说 1 本、一个说 2 本。
 function getActiveBookSet() {
-    try {
-        if (currentTab === 'view-dashboard'
-            && typeof advState !== 'undefined' && advState
-            && Array.isArray(advState.data) && advState.data.length > 0) {
-            return advState.activeBooks;
-        }
-    } catch (e) {
-        // advState 定义在页面内的另一段脚本里，取不到就按全局选书走
-    }
     return selectedBooks;
 }
 
