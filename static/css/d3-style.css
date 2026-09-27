@@ -31,6 +31,28 @@
     --warn: #a67c3d;  /* 赭石 */
     --err:  #b5472f;  /* 朱砂 */
 
+    /* 上面几个色是当「底色 / 描边」标定的，直接拿来当小字号的文字色会不够。
+       它们都会压在自己的淡底上——而 --vermilion-soft 是半透明的（alpha 0.12），
+       最终底色取决于它压在哪一层纸上，三种纸由深到浅分别是：
+         --paper #f2e7cd → 混成 #ebd4ba，--panel #f8efda → #f0dbc5，--card #fdf9ef → #f4e4d8
+       原来的 --vermilion #b5472f 在这三种底上只有 3.75 / 4.00 / 4.33:1，
+       而用到它的是 10–13px 的正文，AA 要求 4.5:1；--ok #6b8f5a 压在自己的淡底上同理。
+       这两个是深一档的同色相变体，都按「最深的 --paper 底」标定：
+         --vermilion-ink #9c3a25：paper 底 4.81:1、panel 底 5.14:1、card 底 5.56:1
+         --ok-ink        #557545：--panel 上 4.57:1、--card 上 4.97:1
+       实心底（.cyber-btn-float.active）和亮底上的大字号仍用原来的色，不动。 */
+    --vermilion-ink: #9c3a25;
+    --ok-ink:        #557545;
+
+    /* 交互控件（按钮 / 芯片 / 可聚焦格子）的过渡属性清单。
+       别写 transition: all —— 它会把键盘焦点外框的 outline-width / outline-color
+       也一起做过渡。按钮的 color 是近白的 #fdfaf3，而 outline-color 的初始值就是
+       currentColor，于是 Tab 过来的头 ~125ms 里外框量到的是「3px、近白」，在浅色纸底上
+       等于看不见焦点在哪，250ms 后才渐变到该有的朱砂色。这里只列控件真会变的属性，
+       把 outline 排除在外。 */
+    --transition-control: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease,
+                          box-shadow 0.25s ease, transform 0.25s ease, opacity 0.25s ease;
+
     /* 字体 */
     --font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
     --font-body:    "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
@@ -242,7 +264,7 @@ body::before {
     color: var(--ink-70);
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.25s ease;
+    transition: var(--transition-control);
     outline: none;
     font-size: 14px;
     display: flex;
@@ -343,8 +365,14 @@ select, input {
     font-size: 14px;
 }
 
-select:focus, input:focus {
+/* 只在鼠标点击时去掉浏览器外框；键盘 Tab 过来的要留着，交给下面那条全局 :focus-visible。
+   原来单写 `select:focus, input:focus` 的特异性（0,1,1）压过了 `:focus-visible`（0,1,0），
+   等于键盘聚焦下拉框也看不见外框，只剩 1px 边框变色。 */
+select:focus:not(:focus-visible),
+input:focus:not(:focus-visible) {
     outline: none;
+}
+select:focus, input:focus {
     border-color: var(--vermilion);
 }
 
@@ -360,7 +388,7 @@ button {
     border-radius: 8px;
     cursor: pointer;
     font-weight: 600;
-    transition: all 0.25s ease;
+    transition: var(--transition-control);
 }
 
 button:hover {
@@ -592,7 +620,7 @@ button:hover {
     border-radius: 8px;
     color: var(--ink-70);
     cursor: pointer;
-    transition: all 0.25s ease;
+    transition: var(--transition-control);
 }
 
 .book-btn:hover {
@@ -629,7 +657,7 @@ button:hover {
     border-radius: 8px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.25s ease;
+    transition: var(--transition-control);
     -webkit-user-select: none;user-select: none;
     white-space: nowrap;
 }
@@ -638,6 +666,37 @@ button:hover {
     background: #443c31;
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(47, 42, 35, 0.22);
+}
+
+/* 视觉上藏起来、但保留在 Tab 序列和无障碍树里（不能用 display:none，那会让元素彻底消失）。
+   目前只有「上传文本分析」里的 file input 用它：这个 input 必须能被键盘聚焦，
+   键盘用户才有办法打开文件选择框——它自己长得什么样完全不重要，外观由外层 label 负责。 */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* 键盘 Tab 到「上传文本分析」时，焦点其实落在里面那个视觉隐藏的 input 上，
+   所以要看的是外层 label 的 :focus-within。鼠标点击 label 也会把焦点送进 input，
+   若只用 :focus-within，主按钮每次点击都会亮一圈；能认出 :focus-visible 的浏览器
+   收紧成只看键盘。 */
+.upload-btn:focus-within {
+    outline: 2px solid var(--vermilion);
+    outline-offset: 2px;
+}
+@supports selector(:has(*)) {
+    .upload-btn:focus-within { outline: none; }
+    .upload-btn:has(#file-upload:focus-visible) {
+        outline: 2px solid var(--vermilion);
+        outline-offset: 2px;
+    }
 }
 
 .upload-status {
@@ -651,7 +710,7 @@ button:hover {
     border: 1px dashed var(--vermilion);
     padding: 10px;
     border-radius: 8px;
-    color: var(--vermilion);
+    color: var(--vermilion-ink);   /* 朱砂压在自己的淡底上只有 4.33:1，文字用深一档的 */
     text-align: center;
     margin-bottom: 18px;
     cursor: default;
@@ -760,7 +819,7 @@ button:hover {
 .heatmap-rect {
     stroke: #cbb894;
     stroke-width: 1px;
-    transition: all 0.2s;
+    transition: stroke 0.2s ease, stroke-width 0.2s ease, fill 0.2s ease;
     cursor: pointer;
 }
 
@@ -773,6 +832,20 @@ button:hover {
 .heatmap-rect:focus {
     outline: 2px solid var(--vermilion);
     outline-offset: 1px;
+}
+
+/* 折线图的点平时是 opacity:0（鼠标悬停才亮），键盘 Tab 过来时不能也看不见。
+   行内样式优先级高于普通规则，只有 !important 压得住。 */
+.data-point:focus {
+    opacity: 1 !important;
+    outline: 2px solid var(--vermilion);
+    outline-offset: 2px;
+}
+
+/* 星系的圆点更小（半径 2–5px），同样给一圈外描边 */
+#galaxy-container circle:focus {
+    outline: 2px solid var(--vermilion);
+    outline-offset: 2px;
 }
 
 /* ---------- 高级视图头 ---------- */
@@ -800,7 +873,7 @@ button:hover {
     cursor: pointer;
     -webkit-user-select: none;user-select: none;
     color: var(--ink-70);
-    transition: all 0.2s;
+    transition: var(--transition-control);
 }
 
 .adv-controls .filter-chip.active {
@@ -1028,16 +1101,21 @@ button:hover {
     padding: 2px 8px;
     border-radius: 12px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: var(--transition-control);
     -webkit-user-select: none;user-select: none;
     display: flex;
     align-items: center;
     gap: 5px;
+    /* 原来是个 <span onclick>，键盘够不到；改成 <button type="button"> 后
+       要把浏览器给按钮的默认外观全部抹掉，才能保持原来的样子。 */
+    border: none;
+    font-family: inherit;
+    line-height: inherit;
 }
 
 .sort-control:hover {
     background: var(--vermilion-soft);
-    color: var(--vermilion);
+    color: var(--vermilion-ink);   /* 同上：11px 小字压在朱砂淡底上，需 4.5:1 */
 }
 
 .sort-control i {
@@ -1138,7 +1216,7 @@ button:hover {
 
 .modal-badges .badge-highlight {
     background: var(--vermilion-soft);
-    color: var(--vermilion);
+    color: var(--vermilion-ink);
     border: 1px solid rgba(181, 71, 47, 0.35);
 }
 
@@ -1157,7 +1235,7 @@ button:hover {
 .keyword-container span {
     display: inline-block;
     background: var(--vermilion-soft);
-    color: var(--vermilion);
+    color: var(--vermilion-ink);
     padding: 5px 10px;
     border-radius: 15px;
     margin: 0 5px 5px 0;
@@ -1260,7 +1338,7 @@ button:hover {
 
 .hud-tag {
     background: var(--vermilion-soft) !important;
-    color: var(--vermilion) !important;
+    color: var(--vermilion-ink) !important;   /* 10px 小字，必须到 4.5:1 */
     border: 1px solid rgba(181, 71, 47, 0.3);
     padding: 2px 6px;
     border-radius: 3px;
@@ -1288,12 +1366,13 @@ button:hover {
     cursor: pointer;
     box-shadow: 0 2px 10px rgba(94, 78, 54, 0.18);
     -webkit-backdrop-filter: blur(5px);backdrop-filter: blur(5px);
-    transition: all 0.25s ease;
+    transition: var(--transition-control);
     font-family: var(--font-body);
 }
 
 .cyber-btn-float:hover {
     background: var(--vermilion-soft);
+    color: var(--vermilion-ink);   /* 基底 --fdfaf3 上是 5.16:1 够用，悬停换成淡朱砂底就不够了 */
     box-shadow: 0 4px 14px rgba(181, 71, 47, 0.22);
     transform: translateY(-1px);
 }
@@ -1430,7 +1509,7 @@ button:hover {
 
 /* ---------- 上传条：进行中 / 成功 / 失败 反馈 ---------- */
 .upload-status.loading { color: var(--indigo); }
-.upload-status.success { color: var(--ok); }
+.upload-status.success { color: var(--ok-ink); }   /* 13px 正文，--ok 直接在 --panel 上只有 3.22:1 */
 .upload-status.error   { color: var(--err); }
 .upload-status [hidden] { display: none; }
 
@@ -1499,7 +1578,7 @@ button:hover {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: all .2s ease;
+    transition: var(--transition-control);
     flex-shrink: 0;
 }
 .book-del:hover { color: var(--err); background: rgba(181, 71, 47, 0.12); }
@@ -1558,7 +1637,7 @@ button:hover {
     padding: 3px 10px;
     cursor: pointer;
     margin-top: 6px;
-    transition: all .2s ease;
+    transition: var(--transition-control);
     white-space: nowrap;
 }
 .copy-block-btn:hover { background: rgba(79, 122, 140, 0.2); }

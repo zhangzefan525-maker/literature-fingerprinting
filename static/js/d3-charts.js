@@ -186,11 +186,11 @@ function setUploadBusy(isBusy) {
     const fileInput = document.getElementById('file-upload');
     const uploadBtn = document.getElementById('upload-btn');
     if (bar) bar.setAttribute('aria-busy', String(isBusy));
+    // 忙时禁用 input 本身就够了：它既不可点也不在 Tab 序列里，
+    // 屏幕阅读器读到的也是「不可用」。原来那句 aria-disabled 挂在 label 上，
+    // 而 label 没有能承载它的角色，等于没用。
     if (fileInput) fileInput.disabled = isBusy;
-    if (uploadBtn) {
-        uploadBtn.setAttribute('aria-disabled', String(isBusy));
-        uploadBtn.classList.toggle('is-busy', isBusy);
-    }
+    if (uploadBtn) uploadBtn.classList.toggle('is-busy', isBusy);
 }
 
 function getErrorMessage(response, result) {
@@ -1061,7 +1061,6 @@ function drawMultiLineChart(svg, booksArray) {
             .attr("fill", colorScale(bookData.book))
             .attr("stroke", "#fdfaf3")
             .attr("stroke-width", 1.5)
-            .attr("tabindex", 0)
             .attr("role", "button")
             .attr("aria-label", d => `${getBookDisplayName(bookData.book)} 第 ${d.block + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetric(d.value)}`)
             .style("cursor", "pointer")
@@ -1096,8 +1095,28 @@ function drawMultiLineChart(svg, booksArray) {
                 if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
                     showDetail(d, bookData.book);
+                    return;
                 }
+                // ← → 沿片段顺序移动焦点，Home / End 跳首尾。
+                // 走法和热力图那套一致：进来只占一个 Tab 停靠点，之后用方向键逐点走。
+                const all = g.selectAll(`.point-${safeBookID}`).nodes();
+                const current = all.indexOf(this);
+                let next = null;
+                if (event.key === 'ArrowRight') next = current + 1;
+                else if (event.key === 'ArrowLeft') next = current - 1;
+                else if (event.key === 'Home') next = 0;
+                else if (event.key === 'End') next = all.length - 1;
+                if (next === null) return;
+                event.preventDefault();
+                if (next < 0 || next >= all.length) return;
+                all.forEach(node => node.setAttribute('tabindex', '-1'));
+                all[next].setAttribute('tabindex', '0');
+                all[next].focus();
             });
+
+        // 一本书上百个点，如果每个都能 Tab 到，键盘用户要按上百次才走得出去；
+        // 所以整条折线只留一个 Tab 停靠点（第一个点），其余靠上面的方向键。
+        g.selectAll(`.point-${safeBookID}`).attr("tabindex", (d, i) => (i === 0 ? 0 : -1));
     });
 
     const legend = svg.append("g").attr("transform", `translate(${width + 20}, ${margin.top})`);
@@ -2819,7 +2838,6 @@ function initStyleGalaxy() {
         .attr("stroke", d => d3.color(colorScale(d.book)).darker(0.5))
         .attr("stroke-width", 0.5)
         .attr("stroke-opacity", 0.8)
-        .attr("tabindex", 0)
         .attr("role", "button")
         .attr("aria-label", d => `${getBookDisplayName(d.book)} 第 ${d.blockIndex + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetric(d.realValue)}`)
         .style("cursor", "pointer")
@@ -2891,8 +2909,29 @@ function initStyleGalaxy() {
             event.preventDefault();
             lastGalaxyTrigger = event.currentTarget;
             openGalaxyModal(d);
+            return;
         }
+        // ← →（以及 ↑ ↓）沿片段顺序前后移动焦点，Home / End 跳首尾。
+        // 星系是散点，方向键没有「往右就是右边那个点」的自然对应（力导向布局还会自己漂移），
+        // 所以不按屏幕位置走，按数据本身的顺序走——也就是这本书从前到后的片段顺序。
+        const all = circles.nodes();
+        const current = all.indexOf(event.currentTarget);
+        let next = null;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = current + 1;
+        else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = current - 1;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = all.length - 1;
+        if (next === null) return;
+        event.preventDefault();
+        if (next < 0 || next >= all.length) return;
+        all.forEach(node => node.setAttribute('tabindex', '-1'));
+        all[next].setAttribute('tabindex', '0');
+        all[next].focus();
     });
+
+    // 四本书合计两百多个片段点，每个都能 Tab 到的话，键盘用户得按两百多次才走得出星系；
+    // 整片星系只留一个 Tab 停靠点（第一个点），其余靠上面的方向键。
+    circles.attr("tabindex", (d, i) => (i === 0 ? 0 : -1));
 
     function ticked() {
         circles
