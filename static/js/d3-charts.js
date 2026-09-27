@@ -503,6 +503,7 @@ function loadComparisonExample() {
 
     selectedBooks = new Set(picks);
     syncBookButtonStates();
+    updateMetricHint(); // 指标提示里那句「你选中的 N 本」要跟着选中数走，否则会停在初始的「1 本」
     refreshAllActiveCharts();
     syncUrlState();
     setUploadStatus(
@@ -987,9 +988,11 @@ function drawMultiLineChart(svg, booksArray) {
     const extent = d3.extent(allValues);
     // 上下界用「加法 padding」，不能用乘法。乘法对负区间方向是反的：
     // 区间全负时 extent[0]*0.95 反而把下界往上抬、extent[1]*1.05 把上界往下压，
-    // 可视窗口比数据本身还窄。而「风格走向」是 PCA 横坐标，内置书里本来就是负的
-    // （实测 -0.0597 ~ -0.0169），于是 12 个片段被画到 x 轴下方、最高的那个点
-    // 跑到图标题区。改成按本跨度往两边撑，正区间负区间都是「往外」。
+    // 可视窗口比数据本身还窄。「风格走向」是 PCA 有符号值，默认那本（哈克贝利·费恩，
+    // 102 个片段）实测全负 -0.0597 ~ -0.0169，于是 12 个片段被画到 x 轴下方、
+    // 最高的那个点跑到图标题区。注意符号是逐本不同的：另外三本都有正值，
+    // 四本合起来是 -0.0597 ~ +0.0675，所以边界逻辑不能假设「一定全负」。
+    // 改成按本跨度往两边撑，正区间负区间都是「往外」。
     const span = extent[1] - extent[0];
     const pad = (isFiniteNumber(span) && span > 0) ? span * 0.05 : 1;
     let yMin = extent[0] - pad;
@@ -1407,7 +1410,7 @@ function showTooltip(event, data, bookName) {
         </div>
         ${chapter ? `<div style="margin-bottom: 3px;"><strong>位置：</strong>${escapeHtml(chapterLabel(chapter))}</div>` : ''}
         <div style="margin-bottom: 3px;">
-            <strong>${escapeHtml(getMetricLabel(currentMetric))}:</strong> ${escapeHtml(data.value)}
+            <strong>${escapeHtml(getMetricLabel(currentMetric))}:</strong> ${escapeHtml(formatMetric(data.value))}
         </div>
         ${keywords ? `<div style="margin-top: 5px;"><strong>关键词:</strong> ${keywords}</div>` : ''}
     `);
@@ -2847,11 +2850,13 @@ function initStyleGalaxy() {
         const label = window.getMetricLabel ? getMetricLabel(currentMetric) : currentMetric;
         updateHUD(analysis, label);
 
+        // value 传原始数值，不在这里先格式化：showTooltip 统一走 formatMetric，
+        // 否则这里传字符串进去会命中 formatMetric 的 !isFiniteNumber 分支显示「暂无」。
         showTooltip(event, {
             block: d.blockIndex,
-            value: formatMetric(d.realValue),
+            value: d.realValue,
             keywords: d.keywords,
-            preview: d.preview 
+            preview: d.preview
         }, d.book);
     })
     .on("mouseout", function(event, d) {
