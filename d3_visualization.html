@@ -4,7 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>文印 - 文学指纹交互分析系统</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- d3 优先用仓库里的本地副本：整页图表和所有交互都建在 d3 上，这个域名取不到
+         就是整页不出图。本地副本在时不再走网络；万一它缺失（例如被静态资源中间件
+         拦掉），下面那行会在 window.d3 为空时补一份 CDN 的，两个都是解析期同步脚本，
+         所以谁先谁后都不影响后面的内联脚本。 -->
+    <script src="static/js/vendor/d3.v7.min.js"></script>
+    <script>window.d3 || document.write('<script src="https://d3js.org/d3.v7.min.js"><\/script>');</script>
+    <!-- 图标字体只有 8 个装饰性图标，取不到时 <i> 渲染成空元素、不影响功能，故走 CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="static/css/d3-style.css">
 </head>
@@ -943,7 +950,21 @@
         }
         
         function showAdvTooltip(e, html) {
-            advTooltip.style("opacity", 1).html(html).style("left", (e.pageX+10)+"px").style("top", (e.pageY-10)+"px");
+            // 和主提示框同一个毛病：只写 left: pageX+10，而绝对定位元素的宽度由
+            // 「容器剩余宽度」决定——320px 下悬停走势图最右那个点，可用宽度只剩 44px，
+            // 提示框被挤成 47×140 的窄竖条（一个字一行），还把页面撑出横向滚动条。
+            // 改成固定定位、先量真实尺寸再按视口夹紧，窄屏右缘也能完整显示。
+            advTooltip.html(html).style("position", "fixed").style("opacity", 1)
+                .style("left", "0px").style("top", "0px");
+            const box = advTooltip.node().getBoundingClientRect();
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            let left = e.clientX + 12;
+            let top = e.clientY - 10;
+            if (left + box.width > vw - 8) left = Math.max(8, vw - box.width - 8);
+            if (top + box.height > vh - 8) top = Math.max(8, vh - box.height - 8);
+            if (top < 8) top = 8;
+            advTooltip.style("left", left + "px").style("top", top + "px");
         }
         function hideAdvTooltip() { advTooltip.style("opacity", 0); }
         

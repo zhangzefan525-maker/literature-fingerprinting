@@ -531,6 +531,15 @@ button:hover {
     box-sizing: border-box;
 }
 
+/* 全书对比页的提示框是另一个元素（#adv-tooltip，样式全写在 JS 里），
+   同样要按内容定宽，否则窄屏靠近右缘时会被容器剩余宽度挤成一行一个字。 */
+#adv-tooltip {
+    width: max-content;
+    max-width: min(300px, calc(100vw - 24px));
+    box-sizing: border-box;
+    line-height: 1.5;
+}
+
 /* ---------- 页脚（题跋落款） ---------- */
 .footer {
     display: flex;
