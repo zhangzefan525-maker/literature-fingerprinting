@@ -14,7 +14,11 @@ function isLocalHost() {
     return LOCAL_HOSTNAMES.has(hostname);
 }
 
-const DEFAULT_UPLOAD_STATUS = '支持上传英文纯文本小说（.txt，建议 1 万个英文单词以上）。分析后会出现在上方的书名列表里，和内置名著放在一起对比。';
+// 这行和下面那句隐私说明一起，构成首屏那条常驻提示。原来两句加起来约 130 字，1000px 宽的
+// 窗口里要折三行、整条 120px 高，而其中「勾选「存入我的图书馆」后……」半句与勾选框自己的
+// title 逐字重复（那个 title 里说得很完整），删掉；剩下的隐私告知必须留在明面上——折进
+// 抽屉反而是想藏起来的样子——所以是压缩措辞，不是折叠。
+const DEFAULT_UPLOAD_STATUS = '支持英文 .txt，建议 1 万词以上。';
 
 // 全局变量
 let realData = null;
@@ -172,9 +176,9 @@ function isUploadSaveWanted() {
 
 function getUploadPrivacyNotice() {
     if (isLocalHost()) {
-        return '分析只在本机进行，不上传服务器。勾选「存入我的图书馆」后，结果会保存到本机，刷新后仍在；不勾选则本次不保存。';
+        return '分析只在本机进行，不上传服务器。';
     }
-    return '文件会发到这台网页的服务器做分析。勾选「存入我的图书馆」后，结果会写入服务器（重新部署可能被清空），且当前页面未加密传输，请不要上传敏感或未获授权的文本；不勾选则本次不保存。';
+    return '文件会发到本服务器分析、未加密传输，请不要上传敏感或未获授权的文本。';
 }
 
 function setUploadStatus(message, state = '') {
@@ -495,6 +499,19 @@ function initEventListeners() {
     if (exportCiteBtn) exportCiteBtn.addEventListener('click', exportCitation);
     const copyLinkBtn = document.getElementById('copyLinkBtn');
     if (copyLinkBtn) copyLinkBtn.addEventListener('click', () => copyShareLink(copyLinkBtn));
+    // 「更多导出」是个纯显隐开关：四个低频按钮平时收在 #export-more 里（[hidden] 让它们
+    // 连 Tab 都进不去），点一下展开。aria-expanded 是标准属性，读屏会念出「已展开/已折叠」。
+    const exportMoreBtn = document.getElementById('exportMoreBtn');
+    if (exportMoreBtn) {
+        exportMoreBtn.addEventListener('click', function() {
+            const more = document.getElementById('export-more');
+            if (!more) return;
+            const willOpen = more.hidden;
+            more.hidden = !willOpen;
+            this.setAttribute('aria-expanded', String(willOpen));
+            this.textContent = willOpen ? '收起导出 ▴' : '更多导出 ▾';
+        });
+    }
 
     // 新增：图表类型切换监听
     document.getElementById('chartTypeSelect').addEventListener('change', function(e) {

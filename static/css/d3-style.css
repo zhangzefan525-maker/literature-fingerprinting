@@ -150,9 +150,10 @@ body::before {
 /* ---------- 页头：印章 + 标题 ---------- */
 .header {
     text-align: center;
-    margin-bottom: 26px;
-    padding-bottom: 26px;
+    margin-bottom: 18px;
+    padding-bottom: 18px;
     border-bottom: 1px solid var(--border-soft);
+    /* 印章要绝对定位到左上角（它原来在流里，把标题往下顶了 72px） */
     position: relative;
     isolation: isolate;
 }
@@ -188,23 +189,29 @@ body::before {
         linear-gradient(90deg, transparent, var(--vermilion) 35%, var(--vermilion) 65%, transparent);
 }
 
+/* 绝对定位到标题区左上角、不占流：原来它作为一个整行块件压在 h1 上面，光它自己
+   就吃掉 72px 的垂直高度，而首屏的目标是让第一张图尽早露出来。
+   .header 本来就带 position:relative（下面那条注释就是因为这才写下的），能直接定。
+   窄屏窄到会和居中标题撞上时，由媒体查询隐藏——它本来就带 aria-hidden，是纯装饰。 */
 .seal {
+    position: absolute;
+    left: 0;
+    top: 2px;
     display: inline-flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    width: 56px;
-    height: 56px;
-    margin-bottom: 16px;
+    width: 44px;
+    height: 44px;
     background:
         radial-gradient(circle at 30% 22%, rgba(253, 250, 243, 0.16), transparent 55%),
         radial-gradient(circle at 72% 80%, rgba(120, 40, 24, 0.20), transparent 60%),
         var(--vermilion);
     color: #fdfaf3;
-    border-radius: 9px;
+    border-radius: 8px;
     font-family: var(--font-display);
     font-weight: 700;
-    font-size: 17px;
+    font-size: 14px;
     line-height: 1.12;
     letter-spacing: 2px;
     box-shadow:
@@ -218,10 +225,10 @@ body::before {
 .header h1 {
     color: var(--ink-100);
     font-family: var(--font-display);
-    font-size: 2.35rem;
+    font-size: 2rem;
     font-weight: 600;
     letter-spacing: 3px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
     text-shadow: 0 1px 0 rgba(255, 252, 242, 0.7);
 }
 
@@ -232,8 +239,8 @@ body::before {
 
 .header-subtitle {
     margin: 0 auto;
-    line-height: 1.85;
-    font-size: 0.96rem;
+    line-height: 1.55;
+    font-size: 0.94rem;
     color: var(--ink-50);
     white-space: nowrap;
 }
@@ -243,9 +250,9 @@ body::before {
     display: flex;
     justify-content: center;
     gap: 10px;
-    margin-bottom: 26px;
+    margin-bottom: 18px;
     border-bottom: 1px solid var(--border-soft);
-    padding-bottom: 16px;
+    padding-bottom: 12px;
     flex-wrap: wrap;
     /* 三个视图之间的切换按钮：往下滚看长图/详情面板时，最该留在手边的就是它。
        背景取容器底色，吸顶后不会透出下面的内容。 */
@@ -412,9 +419,8 @@ button:hover {
     color: var(--ink-70);
 }
 
-.quickstart-step b {
-    color: var(--vermilion);
-    margin-right: 4px;
+.quickstart-lead {
+    color: var(--ink-70);
 }
 
 .quickstart-demo {
@@ -462,6 +468,15 @@ button:hover {
     background: var(--panel);
     color: var(--vermilion);
     box-shadow: none;
+}
+
+/* 「更多导出」折叠区的容器。display:contents 让这层 span 对 flex 布局隐形：
+   展开时里面那 4 个按钮直接成为 .export-group 的 flex item，跟外面 2 个同排、
+   沿用父级的 gap: 8px，不会另起一行；收起时靠 [hidden]{display:none!important}
+   整块消失（!important 会盖过这里的 contents），按钮也一起退出 Tab 序列。
+   删掉这条，展开后 4 个按钮会挤成一段无间隙的连体文字。 */
+.export-more {
+    display: contents;
 }
 
 /* ---------- 主图表区 ---------- */
@@ -639,8 +654,8 @@ button:hover {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 20px;
-    padding: 12px 16px;
+    margin-bottom: 16px;
+    padding: 10px 16px;
     background: var(--panel);
     border: 1px dashed var(--border);
     border-radius: 8px;
@@ -723,8 +738,8 @@ button:hover {
     align-items: center;
     gap: 16px;
     flex-wrap: wrap;
-    margin-bottom: 18px;
-    padding: 12px 18px;
+    margin-bottom: 14px;
+    padding: 10px 18px;
     background: var(--panel);
     border: 1px solid var(--border);
     border-left: 3px solid var(--indigo);
@@ -1498,7 +1513,8 @@ button:hover {
         font-size: 0.85rem;
         line-height: 1.7;
     }
-    .seal { width: 44px; height: 44px; font-size: 14px; margin-bottom: 12px; }
+    /* 印章不再需要在这里改尺寸：它已经是桌面同款 44×44 / 14px（见 .seal），
+       只在更窄的 420px 以下整块隐藏，那条在下面单独写。 */
 
     .tab-navigation { gap: 6px; }
     .tab-btn { padding: 8px 13px; font-size: 13px; }
@@ -1540,6 +1556,16 @@ button:hover {
     .upload-btn { padding: 9px 15px; }
 
     .footer { font-size: 11px; letter-spacing: 1px; }
+}
+
+/* 印章（.seal）绝对定位在标题区左上角，而 .header 是 text-align:center。
+   实测（改后量的）：598px 宽下标题字形左边缘离印章右边缘还有 82px、印章底边离
+   副标题首行还有 9px；512px 宽下横向仍有 82px，但印章底边已经贴到副标题首行
+   （0px 余量）。560px 正好是本文件给手机用的那档断点（h1 缩到 1.6rem、副标题
+   改成可折行），比它更窄就没必要留着这个角标了。
+   它本来就带 aria-hidden，是纯装饰，所以宁可不画，也不挪位置——挪到哪都会再撞一次。 */
+@media (max-width: 560px) {
+    .seal { display: none; }
 }
 
 /* ---------- 状态反馈卡（数据/加载/异常/空态统一外观） ---------- */
