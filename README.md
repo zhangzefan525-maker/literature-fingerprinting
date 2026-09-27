@@ -154,3 +154,40 @@ streamlit run app.py
 1. Keim, D. A., & Oelke, D. (2007). *Literature Fingerprinting: A New Method for Visual Literary Analysis*.
 2. D3.js Gallery & Documentation.
 3. Project Gutenberg (Text Source).
+
+## 🗑️ 变更记录：Streamlit 经典版已从仓库移除（2026-09-27）
+
+上面「项目结构」与「本地开发」两节里仍写着 `app.py`、`src/analyzer.py`、
+`src/visualizer.py`——那是早期的 Streamlit 版。正式产品是 D3 版，这几个文件在
+Flask 路径上一次都不会被加载，属于死代码，已从仓库删除：
+
+| 文件 | 行数 | 原用途 |
+| --- | --- | --- |
+| `app.py` | 774 | Streamlit 入口 |
+| `src/analyzer.py` | 389 | 统计分析与异常检测 |
+| `src/visualizer.py` | 61 | Matplotlib 静态绘图 |
+| `assets/custom.css` | 239 | 早期遗留的样式表，**从未被任何代码引用**（app.py 的样式是内联写死的） |
+
+合计 1463 行。因此这两节里的相关描述、以及 `streamlit run app.py` 这条命令都已失效；
+上面的原文保留下来只作历史记录，不再修改。
+
+顺带说明：那一节的项目结构树本来就比仓库旧一些，不止少了这几个文件——树里没有
+`src/projection.py` 和 `src/analysis_utils.py`，`tests/` 少了 `test_data_loader.py`
+和 `test_pipeline.py`，根目录也没列 `Dockerfile`、`render.yaml`、`.dockerignore`。
+本次只做删除，树本身没有改动。
+
+（行数按 `wc -l` 计。这四个文件末尾都没有换行符，所以 `git diff` 会各多算一行，
+显示为 775 / 390 / 62 / 240、合计 1467——两个数说的是同一件事。）
+
+要从 git 历史取回旧版本：
+
+```bash
+# 先找到「删除这次提交」的哈希（--diff-filter=D 只列删除）
+git log --oneline --diff-filter=D -- app.py
+# 再从它之前的那次提交里取回
+git checkout <上面查到的哈希>^ -- app.py src/analyzer.py src/visualizer.py assets/custom.css
+```
+
+这版需要的 streamlit / pandas / matplotlib / seaborn 四个包（约 250 MB，线上路径
+一次都不会 import）已经在上一批依赖精简里从 `requirements.txt` 删掉了（提交
+50086de），本次删除文件没有再动清单里的包，只更新了那句说明性注释。

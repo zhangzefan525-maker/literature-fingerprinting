@@ -7,9 +7,9 @@
 # 这里只列线上路径真正会 import 的包——也就是从 api_server.py 与
 # generate_data.py 出发的导入闭包：flask / flask_cors / nltk / numpy /
 # scikit-learn，外加只做 WSGI 启动的 gunicorn。
-# 已归档的 Streamlit 版（app.py）需要的 streamlit / pandas / matplotlib /
-# seaborn 不再列在这里（它们一共约 250 MB，而线上路径一次都不会加载）；
-# 想跑那一版请另外单独安装这四个包。
+# 已归档的 Streamlit 版（app.py / src/analyzer.py / src/visualizer.py）已于
+# 2026-09-27 从仓库删除，它需要的 streamlit / pandas / matplotlib / seaborn
+# 从来没有列在这里（它们一共约 250 MB，而线上路径一次都不会加载）。
 # scipy 保留：scikit-learn 依赖它，从清单里删掉也会被连带装回来。
 
 flask==3.1.2
