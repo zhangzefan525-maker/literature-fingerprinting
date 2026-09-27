@@ -11,6 +11,7 @@
 """
 import math
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -284,6 +285,30 @@ class TestModelPersistence(unittest.TestCase):
         self.assertEqual(len(labels), 2)
         for label in labels:
             self.assertIn("占的比例越高", label)
+
+    def test_axis_labels_keep_opposite_signs_apart(self):
+        """
+        一句方向断言只能管一个方向。
+
+        载荷是**带符号**的，正负代表坐标轴相反的两端；把正号词和负号词混进同一句
+        「越靠某端，这些词占比越高」里，混进来的那一半无论比例尺朝哪边都必然说反。
+        所以每一段（以「；」分隔）里被点名的词必须同号 —— 这是不依赖具体数据的
+        不变式，换语料、换模型都成立。
+        """
+        _, model = self._fit()
+        vocabulary = model["vocabulary"]
+        self.assertEqual(len(model["axisLabels"]), 2)
+        for row, label in zip(model["components"][:2], model["axisLabels"]):
+            clauses = label.split("；")
+            self.assertTrue(clauses)
+            for clause in clauses:
+                matched = re.search(r"，([^，；]+?)\s*这类小词", clause)
+                self.assertIsNotNone(matched, f"这段话里没有可取词的表：{clause}")
+                signs = {
+                    row[vocabulary.index(word.strip())] > 0
+                    for word in matched.group(1).split("/")
+                }
+                self.assertEqual(len(signs), 1, f"同一段里混了正负号：{clause}")
 
 
 if __name__ == "__main__":
