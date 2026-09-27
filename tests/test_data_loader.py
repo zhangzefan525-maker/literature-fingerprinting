@@ -245,6 +245,44 @@ class TestCleanText(unittest.TestCase):
         self.assertNotIn("License noise", cleaned)
         self.assertIn("do not know", cleaned)
 
+    def test_single_line_markers_do_not_wipe_the_body(self):
+        """
+        START 与 END 落在同一行时（复制粘贴丢了换行，或整本书被拼成一行），
+        贪婪的 .* 会让 start_match.end() 跑到 end_match.start() 之后，
+        切片成空串——整本书的正文被清光，用户只看到「没有剩余正文」。
+        非贪婪 + 先后顺序判断之后，正文必须原样留下。
+        """
+        one_line = (
+            "noise *** START OF THE PROJECT GUTENBERG EBOOK TITLE *** "
+            "He don't know. *** END OF THE PROJECT GUTENBERG EBOOK TITLE *** tail"
+        )
+        cleaned = clean_text(one_line)
+        self.assertIn("do not know", cleaned)
+        self.assertNotIn("START OF THE PROJECT GUTENBERG", cleaned)
+        self.assertNotIn("tail", cleaned)
+
+    def test_this_project_gutenberg_markers_are_also_stripped(self):
+        """老版标记写的是 THIS PROJECT GUTENBERG EBOOK，不能只认 THE。"""
+        raw = (
+            "Header.\n"
+            "*** START OF THIS PROJECT GUTENBERG EBOOK TITLE ***\n"
+            "He don't know.\n"
+            "*** END OF THIS PROJECT GUTENBERG EBOOK TITLE ***\n"
+            "License."
+        )
+        cleaned = clean_text(raw)
+        self.assertIn("do not know", cleaned)
+        self.assertNotIn("Header", cleaned)
+        self.assertNotIn("License", cleaned)
+
+    def test_reversed_markers_leave_the_text_alone(self):
+        """两个标记顺序颠倒时不切（少剥一层页眉只是数值偏差，切光了什么都没有）。"""
+        raw = (
+            "*** END OF THE PROJECT GUTENBERG EBOOK TITLE *** keep me "
+            "*** START OF THE PROJECT GUTENBERG EBOOK TITLE ***"
+        )
+        self.assertIn("keep me", clean_text(raw))
+
     def test_load_clean_text_matches_clean_text(self):
         """load_clean_text 只是「读文件 + clean_text」，两者结果必须一字不差。"""
         path = ROOT / "data" / "raw" / "The call of the wild.txt"

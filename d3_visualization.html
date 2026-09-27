@@ -10,8 +10,13 @@
          所以谁先谁后都不影响后面的内联脚本。 -->
     <script src="static/js/vendor/d3.v7.min.js"></script>
     <script>window.d3 || document.write('<script src="https://d3js.org/d3.v7.min.js"><\/script>');</script>
-    <!-- 图标字体只有 8 个装饰性图标，取不到时 <i> 渲染成空元素、不影响功能，故走 CDN -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- 图标字体：只有 8 个装饰性图标，取不到时 <i> 渲染成空元素、不影响功能，所以原来是走
+         CDN 的。但那样一来离线（或校园内网）打开就一个图标都看不到，而 d3 从第三批起已经
+         改成仓库内的本地副本——留这一个外链等于整站还是「联不上网就掉东西」。
+         现在同版本（6.0.0）随仓库带一份，放在 static/vendor/fontawesome/：
+         css/all.min.css + webfonts/ 里 4 个 woff2（.ttf 是老浏览器的后备，没带，
+         现代浏览器都用 woff2）。许可证见文件头（图标 CC BY 4.0，字体 SIL OFL 1.1）。 -->
+    <link rel="stylesheet" href="static/vendor/fontawesome/css/all.min.css">
     <link rel="stylesheet" href="static/css/d3-style.css">
 </head>
 <body>
