@@ -1044,3 +1044,55 @@ CSS 出错不会让测试变红，所以这一批的每一项都得靠实测覆�
 - **「观察角度」这个名字本身**、配色**色值**、看板整页导出等功能缺口。
 - 三个脚本之外一行未动：`src/`、`api_server.py`、`data/processed/` 全部未碰，没有「要重算数据」的风险面。
 - **线上演示站仍跑在旧构建上，需要重新部署。**
+
+---
+
+## 🔧 补充说明：关于「线上演示站仍跑在旧构建上」那句话（2026-09-28）
+
+上一节最后一条，以及前面几个批次里同一句话的重复（核对时位于第 407、532、706、794、896 行），
+**事后核对下来是对的：线上确实没跟上**。真正查出来的是另一件事——**自动部署链路存在，但它不可靠**。
+按本仓库「只追加、不改已有行」的规矩，上面几行都不动，只在这里补记。
+
+**按设计，线上本来就应该自动更新：**
+
+- 服务器是阿里云 ECS `39.96.194.197`，`/opt/literature-fingerprinting` 就是本仓库 `master` 的一个
+  git checkout（`origin` 走 GitHub HTTPS）。
+- root crontab 每 2 分钟执行一次 `/usr/local/bin/literature-autodeploy.sh`：先
+  `git fetch origin master`，**若 HEAD 已经等于 `origin/master` 就直接退出、连服务都不重启**；
+  否则 `git merge --ff-only FETCH_HEAD` 再 `systemctl restart literature-fingerprinting`。
+- 脚本带 `flock` 防重叠，日志写在 `/var/log/literature-autodeploy.log`。
+
+**但实测不是这样。** 2026-09-28 直读服务器上的那份日志（13275 行，自 09-10 起）：
+
+- 其中 **4931 行是 `fatal:` / `error:`**——从这台 ECS 拉 github.com 失败是常态
+  （GnuTLS recv error、HTTP2 framing layer、443 连超时）。
+- 日志里出现过的 HEAD 只有 **10 个**，而 `[ok] restarted` 记了 **4172 次**：绝大多数重启并不是
+  因为有新提交。实测片段：00:19–02:54 一路反复 `[deploy] 85c2554… -> FETCH_HEAD`、
+  `[deploy] b832856… -> FETCH_HEAD` 并重启服务，而 HEAD 自始至终没变。
+- 结果就是**第九批 `ee7ac1a` 从未被部署过**（在整份日志里出现 0 次），线上一直停在第八批
+  `b832856`。所以那句话不是「想当然的旧说法」，而是当时的事实。
+
+**问题出在脚本守卫那三行**（`/usr/local/bin/literature-autodeploy.sh`）：
+
+```bash
+git fetch origin master -q 2>>"$LOG"
+LOCAL=$(git rev-parse HEAD)
+REMOTE=$(git rev-parse FETCH_HEAD)
+[ -n "$LOCAL" ] && [ "$LOCAL" = "$REMOTE" ] && exit 0
+```
+
+它既不看 `git fetch` 的退出码，也不比对 `origin/master`，而是比对 `FETCH_HEAD`——那是 `git fetch`
+的临时产物，拉取失败时会是空的或陈旧的（日志里 `[deploy] <sha> -> FETCH_HEAD` 的尾部、远端 sha
+位置直接印出字面量 `FETCH_HEAD`，就是这么来的）。与 HEAD 不等，守卫被绕过，于是一次白重启。
+
+**每次真正部署会重新处理那 4 本内置书**，约 1–3 分钟 CPU 忙、期间访问偏慢；所以上面这种
+「拉取失败也照样重启」不只是日志难看，它让服务长期处在反复重启、反复重算的状态里。
+
+**本次的处理。** 推送 `754e601` 之后，02:56 那一轮 cron 的 fetch 恰好成功，线上已自动更新：
+服务器 HEAD 与 `origin/master` 同为 `754e601`，服务 active，公网
+`http://39.96.194.197/visualization` 返回 200，且页面已带第九批的标记（`exportMoreBtn`、
+`quickstart-lead` 等）——也就是说第八批、第九批现在才真正上线。
+
+**还没做的：脚本本身没改。** 上面那三行守卫仍是原样，「拉取失败 → 白重启一次、且迟迟追不上
+新提交」还会继续发生。修法是检查 fetch 退出码，并改成比对 `origin/master`；那是生产机上的
+root 脚本，确认后再动，改动前会先备份原文件。
