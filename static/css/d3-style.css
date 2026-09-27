@@ -511,33 +511,6 @@ button:hover {
     font-weight: 500;
 }
 
-/* ---------- 图例 ---------- */
-.legend {
-    display: flex;
-    justify-content: center;
-    gap: 28px;
-    flex-wrap: wrap;
-    margin-top: 18px;
-    padding: 14px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-}
-
-.legend-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--ink-70);
-    font-size: 13px;
-}
-
-.legend-color {
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-}
-
 /* ---------- 提示气泡 ---------- */
 .tooltip {
     position: absolute;
@@ -551,6 +524,11 @@ button:hover {
     opacity: 0;
     transition: opacity 0.3s;
     box-shadow: 0 6px 18px rgba(47, 42, 35, 0.28);
+    /* 宽度按内容算，再夹一个上限。绝对定位元素默认的宽度是「容器剩余宽度」，
+       窄屏上靠近右缘的格子会把提示框挤成一根窄竖条（墙内一次只显示一个字）。 */
+    width: max-content;
+    max-width: min(300px, calc(100vw - 24px));
+    box-sizing: border-box;
 }
 
 /* ---------- 页脚（题跋落款） ---------- */
@@ -768,8 +746,10 @@ button:hover {
 }
 
 /* ---------- 热力图 ---------- */
+/* 描边：色阶中段的米色和卡片底仍然接近（1.25:1），靠这条线把网格画出来。
+   与 d3-charts.js 里的 HEATMAP_STROKE 必须一致（悬停结束时 JS 会把它写回来）。 */
 .heatmap-rect {
-    stroke: var(--border);
+    stroke: #cbb894;
     stroke-width: 1px;
     transition: all 0.2s;
     cursor: pointer;
@@ -1053,6 +1033,16 @@ button:hover {
 
 .sort-control i {
     font-size: 10px;
+}
+
+/* 「整体水平对比」标题后面那截口径说明：框选生效时会写「（框选区段 0.0%–30.0%）」，
+   不框选时是空的。占住中间那段空间，把排序开关推到最右。 */
+.adv-scope {
+    flex: 1;
+    margin-left: 6px;
+    font-size: 10px;
+    font-weight: normal;
+    color: var(--vermilion);
 }
 
 /* ---------- 模态框（原文深读） ---------- */
@@ -1381,7 +1371,11 @@ button:hover {
     }
     .galaxy-modal-close { top: 10px; right: 16px; }
 
-    .cyber-btn-float { top: 10px; right: 10px; padding: 5px 11px; font-size: 11px; }
+    /* 挪到右下角：页签条是 position:sticky; z-index:30，而这个按钮是 z-index:9999，
+       停在右上角时会压在吸顶页签上——320px 下实测两者重叠 1607px²（占「风格星系」
+       那个页签 43%），点页签正中间 elementFromPoint 命中的是这个按钮，文本雨被
+       误开而页签没切。 */
+    .cyber-btn-float { top: auto; bottom: 12px; right: 12px; padding: 5px 11px; font-size: 11px; }
 
     .upload-bar { gap: 8px; padding: 10px 12px; }
     .upload-btn { padding: 9px 15px; }
