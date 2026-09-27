@@ -54,7 +54,8 @@
             <label class="save-toggle" id="save-toggle" for="save-upload" title="勾选后：这次的分析结果会保留下来，刷新页面后仍在，可随时删除。若「我的图书馆」里已有同名的书，会更新那一本（旧的分析被覆盖）；与内置示例书同名则自动加「（我的）」，示例书永不改动。">
                 <input type="checkbox" id="save-upload"> 存入「我的图书馆」
             </label>
-            <span id="upload-status" class="upload-status" aria-live="polite">支持上传英文纯文本小说（.txt，建议 1 万个英文单词以上）。分析后会出现在上方的书名列表里，和内置名著放在一起对比。</span>
+            <!-- 这句是 JS 没跑起来时的兜底，正常运行下会被 setUploadStatus() 覆写成同一句短文案 -->
+            <span id="upload-status" class="upload-status" aria-live="polite">支持英文 .txt，建议 1 万词以上。分析只在本机进行，不上传服务器。</span>
         </div>
 
         <!-- 全局指标选择器（三个标签页共用同一指标，切换后对所有视图生效） -->
@@ -71,11 +72,14 @@
             <div class="metric-hint" id="metric-hint"></div>
         </div>
 
-        <!-- 三步快速开始：给第一次来的用户一个明确起点 -->
+        <!-- 快速开始：只留这一个入口。
+             原来这里是「① 点书名多选 ② 换观察角度 ③ 点图上的点」三步，但同屏里三句话各自
+             都有别处在说同一件事，而且都是动态的、比这三句更准：① 是 #toggleComparison
+             （按选中书数改写）、② 是「观察角度」这个 label 加下面的指标提示、③ 是右侧
+             #detailPanel 的占位文案（就在图旁边）。三步删掉之后，这里只负责解释「载入对比
+             示例」是干什么的——原来那三步反而没说过。 -->
         <div class="quickstart" id="quickstart">
-            <span class="quickstart-step"><b>①</b> 上方点书名，可以多选几本一起比</span>
-            <span class="quickstart-step"><b>②</b> 换「观察角度」，看不同指标下的差别</span>
-            <span class="quickstart-step"><b>③</b> 点图中任意一个点，看它对应的原文和所在章节</span>
+            <span class="quickstart-lead">第一次来？可以先用一组差别最明显的书，看看这个工具能做什么。</span>
             <button type="button" class="quickstart-demo" onclick="loadComparisonExample()">载入对比示例</button>
             <button type="button" class="quickstart-close" onclick="hideQuickStart()" aria-label="不再显示快速开始">✕</button>
         </div>
@@ -102,13 +106,22 @@
              以前这组按钮长在 #view-main 的控件条里，切到「风格星系」「全书对比」就被整体 hidden，
              getExportTarget() 那两个分支在界面上根本不可达——导出跟随标签页等于白改。 -->
         <div class="global-toolbar">
+            <!-- 六个按钮原先是平铺的，权重完全一样。常用的其实只有「导出图像」和「复制此链接」，
+                 其余四个一学期用不了几次，收进「更多导出」。窄屏下这一条还会折成两三行，
+                 分组后只折一次。（宽屏本来就只占一行，这一项省不到高度，是层级问题。）
+                 .export-more 用 display:contents：展开时对 flex 布局透明，四个按钮仍与前面
+                 两个同排、沿用父级 gap；收起时 [hidden]{display:none!important} 整块消失，
+                 同时自动退出 Tab 序列。 -->
             <div class="control-group export-group" role="group" aria-label="导出与分享">
                 <button id="exportBtn" type="button" title="PNG 图片，适合放进汇报">导出图像</button>
-                <button id="exportSvgBtn" type="button" title="矢量图（SVG），放进论文放大不失真">导出矢量图</button>
-                <button id="exportDataBtn" type="button" title="每个片段的数值、章节与起始位置（CSV），可用 Excel 打开">导出数据表</button>
-                <button id="exportSummaryBtn" type="button" title="本次分析的文字摘要（含方法与参数）">导出摘要</button>
-                <button id="exportCiteBtn" type="button" title="引用条目（BibTeX），可导入 Zotero / EndNote 等文献管理软件">导出引用</button>
                 <button id="copyLinkBtn" type="button" title="把当前指标、选书、视图一起复制成链接，发给同事即可复现">🔗 复制此链接</button>
+                <button id="exportMoreBtn" type="button" class="export-more-toggle" aria-expanded="false" aria-controls="export-more">更多导出 ▾</button>
+                <span id="export-more" class="export-more" hidden>
+                    <button id="exportSvgBtn" type="button" title="矢量图（SVG），放进论文放大不失真">导出矢量图</button>
+                    <button id="exportDataBtn" type="button" title="每个片段的数值、章节与起始位置（CSV），可用 Excel 打开">导出数据表</button>
+                    <button id="exportSummaryBtn" type="button" title="本次分析的文字摘要（含方法与参数）">导出摘要</button>
+                    <button id="exportCiteBtn" type="button" title="引用条目（BibTeX），可导入 Zotero / EndNote 等文献管理软件">导出引用</button>
+                </span>
             </div>
             <span class="global-toolbar-hint">图像导出的是当前标签页里的那张图</span>
         </div>
@@ -239,7 +252,11 @@
                              只当普通区域（tabindex="-1" 是为了「✕ 收起」之后能把焦点接回来），
                              另设一条视觉隐藏的一句话播报。 -->
                         <div id="adv-drill-content" class="drill-content" role="region" aria-label="片段详情" tabindex="-1">
-                            <div class="empty-tip">点击左侧图表中的书籍<br>或拖拽走势图查看段落详情</div>
+                            <!-- 静态兜底：正常一进看板 updateDrillPanel() 就会把它换掉（默认
+                                 自动铺开全部书）。原文案是「点击左侧图表中的书籍，或拖拽走势图
+                                 查看段落详情」——后半句是假的，框选只改 brushRange，不展开任何一本。
+                                 这份兜底只在脚本没跑起来时露脸，所以只说一句两边都成立的话。 -->
+                            <div class="empty-tip">每本书数值最高的几个片段会列在这里。</div>
                         </div>
                         <div id="adv-drill-announce" class="visually-hidden" role="status" aria-live="polite"></div>
                     </div>
@@ -325,6 +342,15 @@
             data: [],
             brushRange: null,
             selectedIds: [],
+            // 「右侧详情卡跟着图上的书走」，初始为开：左边画了几本书，右边就铺开几本，
+            // 不用再手动点一下。用户在图上点过任意一下（展开/收起）之后关掉，从此只认
+            // selectedIds 里显式记着的那份；「重置视图」再打开。
+            // 用布尔量现算而不是初始化时往 selectedIds 里塞一次，是因为后者会在换
+            // 「观察角度」（initAdvancedData 重跑）或增删书名之后与图脱节。
+            drillAuto: true,
+            // 鼠标此刻停在哪本书上。只用于这一次渲染的临时预览，不写进 selectedIds，
+            // 所以移开就自动回到原来展开的那几本。
+            previewId: null,
             chartsInitDone: false,
             sortConfig: {
                 mean: { mode: 'value', order: 'desc' }
@@ -847,7 +873,18 @@
         // 用过滤而不是从 selectedIds 里删：用户重新勾选这本书时，卡还能自动回来。
         function liveSelectedIds(computedData) {
             const live = new Set((computedData || getAdvComputed()).map(b => b.id));
+            // 自动模式：图上画了几本书，右边就铺开几本。左侧柱状图已经把每本书都画出来了，
+            // 右侧却要用户再点一下才显示内容，这是「同一件事要操作两次」。
+            if (advState.drillAuto) return [...live];
             return advState.selectedIds.filter(id => live.has(id));
+        }
+
+        // 用户手动点了一下之后，把「全铺开」这个自动态固化成一个显式集合，再按点击增删。
+        // 不固化的话，自动模式下「✕ 收起」改的是 selectedIds，而渲染根本不看它，点了没反应。
+        function freezeDrillAuto() {
+            if (!advState.drillAuto) return;
+            advState.drillAuto = false;
+            advState.selectedIds = liveSelectedIds();
         }
 
         // 键盘通路：图上的每一本书都要能 Tab 到、能用方向键逐本走、能按回车展开详情卡。
@@ -936,13 +973,27 @@
             el.textContent = text;
         }
 
-        function updateDrillPanel() {
+        // options.announce === false：这一次重绘不要往 live region 里播报。
+        // 悬停预览会走这条路——鼠标划过每一根柱子都播报一遍，读屏用户听到的是一串重复噪音。
+        function updateDrillPanel(options) {
             const panel = document.getElementById('adv-drill-content');
             const computedData = getAdvComputed();
-            const ids = liveSelectedIds(computedData);
+            let ids = liveSelectedIds(computedData);
+
+            // 悬停预览：鼠标停在左边哪本书上，右边就临时只显示那一本。只影响这一次渲染，
+            // 不写 selectedIds，所以移开就回到原来展开的那几本。已经收起的书也照样能预览
+            // （不查 selectedIds，只看它现在是不是画在图上）。
+            if (advState.previewId && computedData.some(b => b.id === advState.previewId)) {
+                ids = [advState.previewId];
+            }
+
             if (ids.length === 0) {
-                panel.innerHTML = '<div class="empty-tip">点击左侧图表中的书籍<br>或拖拽走势图查看段落详情</div>';
-                announceDrill('片段详情已收起。');
+                // 原来说的是「点击左侧图表中的书籍，或拖拽走势图查看段落详情」。后半句是假的：
+                // 框选只改 brushRange，会更新已展开卡片的内容，但不会展开任何一本。
+                panel.innerHTML = computedData.length === 0
+                    ? '<div class="empty-tip">上方还没有选中任何一本书。<br>先点书名，这里就会列出它数值最高的几个片段。</div>'
+                    : '<div class="empty-tip">已收起全部书籍。<br>点左侧任意一根柱子或折线，可以再展开。</div>';
+                if (!options || options.announce !== false) announceDrill('片段详情已收起。');
                 return;
             }
             // 先把整块 HTML 拼好再一次写进去。原来是每本书一次 panel.innerHTML +=，
@@ -992,10 +1043,13 @@
                     return b ? `《${b.displayName || b.name}》` : null;
                 })
                 .filter(Boolean);
-            announceDrill(`已展开 ${names.length} 本书的片段详情：${names.join('、')}，每本列出数值最高的 3 个片段。`);
+            if (!options || options.announce !== false) {
+                announceDrill(`已展开 ${names.length} 本书的片段详情：${names.join('、')}，每本列出数值最高的 3 个片段。`);
+            }
         }
 
         window.removeSelection = function(id) {
+            freezeDrillAuto();
             const index = advState.selectedIds.indexOf(id);
             if (index > -1) {
                 advState.selectedIds.splice(index, 1);
@@ -1010,6 +1064,7 @@
         };
 
         function advDrillDown(book) {
+            freezeDrillAuto();
             const index = advState.selectedIds.indexOf(book.id);
             if (index > -1) {
                 advState.selectedIds.splice(index, 1);
@@ -1024,7 +1079,9 @@
             // 必须用过滤后的 id：直接遍历 advState.selectedIds 时，一个已经被取消勾选
             // 的书会让这里「把全部调暗、再点亮一个不存在的元素」，整页停在 12% 不透明度。
             const ids = liveSelectedIds();
-            if (ids.length === 0) {
+            // 自动模式下每本书的卡都开着，「选中」等于没有重点。这时候全点亮只会让一进页面
+            // 就是满屏的选中态——重点是要靠对比才存在的，没有对比就不该有重点。
+            if (ids.length === 0 || advState.drillAuto) {
                 d3.selectAll(".book-el").classed("dimmed", false).classed("highlighted", false);
                 return;
             }
@@ -1034,13 +1091,19 @@
             });
         }
 
+        // 悬停：左边的书亮起来的同时，右边把它的详情换上去。以前只亮左边，右边毫无反应，
+        // 「鼠标划过」和「点一下」看起来是同一件事，却只有后者有效果。
         function advHighlight(book) {
             d3.selectAll(".book-el").classed("dimmed", true);
             d3.selectAll(`.book-${book.id}`).classed("dimmed", false).classed("highlighted", true);
+            advState.previewId = book.id;
+            updateDrillPanel({ announce: false });
         }
 
         function advUnhighlight() {
+            advState.previewId = null;
             updateHighlightVisuals();
+            updateDrillPanel({ announce: false });
             hideAdvTooltip();
         }
 
@@ -1106,6 +1169,8 @@
 
         window.advReset = function() {
             advState.brushRange = null; advState.selectedIds = [];
+            // 回到进页面时的样子：详情卡重新跟着图上的书全铺开
+            advState.drillAuto = true; advState.previewId = null;
             d3.select(".brush").call(d3.brushX().move, null);
             // 「重置视图」= 清空框选 + 重新选中全部已加载的书。选书只有全局这一份，
             // 所以顶部的书名按钮会跟着一起亮起来，指标提示也要重算。
