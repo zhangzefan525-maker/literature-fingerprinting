@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setUploadStatus(`${DEFAULT_UPLOAD_STATUS} ${getUploadPrivacyNotice()}`);
     syncSaveToggleDefault();
     updateMetricHint();
+    trackDashboardCharts();
     loadBooksList();
 
     // 系统开了「减少动态效果」就不自动启动文本雨（按钮仍然可以手动打开）
@@ -895,7 +896,13 @@ async function loadRealData() {
             return;
         }
 
-        realData = data.data && typeof data.data === 'object' ? data.data : {};
+        // 必须「合并」而不是整份替换：首次加载慢的时候（示例数据生成约 1–2 分钟，
+        // 或线上冷启动），用户可能先传完一本书——上传写在 realData[book] 上，
+        // 这里一替换就把它冲掉了，界面上表现为「刚传的书不见了」，还会误报
+        // 「链接里的这本书找不到」。合并即可，后到的示例书照样进得来。
+        // （loadRealData 全站只在页面初始化时调用一次，不存在需要清掉旧键的场景。）
+        const incoming = data.data && typeof data.data === 'object' ? data.data : {};
+        realData = Object.assign(realData || {}, incoming);
         const availableBooks = Object.keys(realData);
         if (availableBooks.length === 0) {
             showNoDataMessage();
@@ -903,6 +910,7 @@ async function loadRealData() {
         }
         showSuccess(`成功加载 ${availableBooks.length} 本书籍的数据`);
         updateMetricHint(); // 参考区间跟随当前已加载书集合
+        renderAxisWordHints(); // 轴词说明也跟随已加载的书（用户可能还没切到星系页）
 
         // 确保 selectedBooks 中的书在数据中存在
         const requestedBooks = Array.from(selectedBooks);
@@ -966,14 +974,26 @@ function drawMultiLineChart(svg, booksArray) {
     const margin = { top: 40, right: 120, bottom: 50, left: 60 }; 
     const width = containerWidth - margin.left - margin.right;
 
-    svg.attr("viewBox", `0 0 ${containerWidth} ${height}`);
+    // 热力图会按书的数量把 svg 撑高（见 drawMultiHeatmap 的 style("height")），
+    // 折线图必须把高度写回来：initChart 的 selectAll("*").remove() 只删子节点，
+    // 清不掉 inline 高度。少了这一句，书少时（含默认的单本）折线图会缩在
+    // 上一次热力图留下的高盒子里，导出 PNG 也跟着大半张空白。
+    svg.attr("viewBox", `0 0 ${containerWidth} ${height}`)
+       .style("height", height + "px");
     const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
     const maxBlocks = d3.max(chartData, d => d.values.length - 1);
     const allValues = chartData.flatMap(d => d.values.map(v => v.value));
     const extent = d3.extent(allValues);
-    let yMin = extent[0] * 0.95;
-    let yMax = extent[1] * 1.05;
+    // 上下界用「加法 padding」，不能用乘法。乘法对负区间方向是反的：
+    // 区间全负时 extent[0]*0.95 反而把下界往上抬、extent[1]*1.05 把上界往下压，
+    // 可视窗口比数据本身还窄。而「风格走向」是 PCA 横坐标，内置书里本来就是负的
+    // （实测 -0.0597 ~ -0.0169），于是 12 个片段被画到 x 轴下方、最高的那个点
+    // 跑到图标题区。改成按本跨度往两边撑，正区间负区间都是「往外」。
+    const span = extent[1] - extent[0];
+    const pad = (isFiniteNumber(span) && span > 0) ? span * 0.05 : 1;
+    let yMin = extent[0] - pad;
+    let yMax = extent[1] + pad;
     if (!isFiniteNumber(yMin) || !isFiniteNumber(yMax) || yMin === yMax) {
         const center = isFiniteNumber(extent[0]) ? extent[0] : 0;
         yMin = center - 1;
@@ -1121,6 +1141,22 @@ function getChapterGridDividers(bookName, data) {
         });
 }
 
+// 热力图色阶：蓝（低）— 米（中）— 红（高）。
+// 只拉明暗、不动色相。原来两端是 #2c4a6e / #a0221a，相对亮度 0.066 / 0.087，
+// 两端对比只有 1.18:1——深蓝块和深红块在红绿色盲眼里是同一档，分不出高低；
+// 中段的 #f2e7cd 又和卡片底差 1.17:1，取值接近中位数的格子看着像「没有数据」。
+// 现在两端拉到 3.19:1（ΔL 0.258），中段改用 --elev 的米色。
+const HEATMAP_LOW = '#7f9dc4';
+const HEATMAP_MID = '#ece0c3';
+const HEATMAP_HIGH = '#8f1d16';
+// 格子描边：中段米色与卡片底仍接近，靠描边把网格画出来
+const HEATMAP_STROKE = '#cbb894';
+// 图例两端「低 / 高」那两个字用的墨色。色阶本身要拉明暗，但文字得够黑才读得清
+// （AA 正文 4.5:1）：浅蓝 #7f9dc4 当文字只有 2.66:1，所以文字仍用深色，
+// 浅色只出现在它旁边那条渐变色条上。
+const HEATMAP_LOW_INK = '#2c4a6e';
+const HEATMAP_HIGH_INK = '#8f1d16';
+
 function drawMultiHeatmap(svg, booksArray) {
     const chartData = booksArray.map(bookId => ({
         book: bookId,
@@ -1139,8 +1175,11 @@ function drawMultiHeatmap(svg, booksArray) {
 
     const chartWidth = (containerWidth - 60 - (chartData.length - 1) * padding) / chartData.length;
 
-    let maxRows = 0;
-    let finalBlockSize = 0;
+    // 每本书的格子边长是各算各的（取决于它自己的 cols），所以画布高度必须按
+    // 「每一本自己的 rows × blockSize」取最大值。旧写法拿第一本的 blockSize 去乘
+    // 全局最大行数：只要后面某本书的格子比第一本大，它的网格就会伸进下边距，
+    // 图例条和「虚线是章节分界」那行说明正好压在最后一排格子上。
+    let maxGridHeight = 0;
 
     chartData.forEach(bookData => {
         const n = bookData.values.length;
@@ -1148,11 +1187,10 @@ function drawMultiHeatmap(svg, booksArray) {
         const rows = Math.ceil(n / cols);
         const blockSize = Math.max(1, Math.floor(chartWidth / cols));
 
-        if (rows > maxRows) maxRows = rows;
-        if (finalBlockSize === 0) finalBlockSize = blockSize;
+        maxGridHeight = Math.max(maxGridHeight, rows * blockSize);
     });
 
-    const totalHeight = Math.max(400, topMargin + (maxRows * finalBlockSize) + bottomMargin);
+    const totalHeight = Math.max(400, topMargin + maxGridHeight + bottomMargin);
 
     svg.attr("viewBox", `0 0 ${containerWidth} ${totalHeight}`)
        .style("height", totalHeight + "px");
@@ -1171,7 +1209,7 @@ function drawMultiHeatmap(svg, booksArray) {
     }
 
     const colorScale = d3.scaleSequential()
-        .interpolator(d3.piecewise(d3.interpolateRgb, ["#2c4a6e", "#f2e7cd", "#a0221a"]))
+        .interpolator(d3.piecewise(d3.interpolateRgb, [HEATMAP_LOW, HEATMAP_MID, HEATMAP_HIGH]))
         .domain([globalMin, globalMax]);
 
     let drewChapterDividers = false;
@@ -1204,7 +1242,7 @@ function drawMultiHeatmap(svg, booksArray) {
                 showTooltip(event, d, bookId);
             })
             .on("mouseout", function() {
-                d3.select(this).style("stroke", "#e4d9c3").style("stroke-width", "1px");
+                d3.select(this).style("stroke", HEATMAP_STROKE).style("stroke-width", "1px");
                 hideTooltip();
             })
             .on("click", function(event, d) { showDetail(d, bookId); });
@@ -1294,23 +1332,23 @@ function drawMultiHeatmap(svg, booksArray) {
     const legendGrad = svg.append("defs").append("linearGradient")
         .attr("id", "heatmapLegendGrad")
         .attr("x1", "0%").attr("x2", "100%");
-    legendGrad.append("stop").attr("offset", "0%").attr("stop-color", "#2c4a6e");
-    legendGrad.append("stop").attr("offset", "50%").attr("stop-color", "#f2e7cd");
-    legendGrad.append("stop").attr("offset", "100%").attr("stop-color", "#a0221a");
+    legendGrad.append("stop").attr("offset", "0%").attr("stop-color", HEATMAP_LOW);
+    legendGrad.append("stop").attr("offset", "50%").attr("stop-color", HEATMAP_MID);
+    legendGrad.append("stop").attr("offset", "100%").attr("stop-color", HEATMAP_HIGH);
 
     svg.append("rect")
         .attr("x", legendX).attr("y", legendY)
         .attr("width", legendW).attr("height", legendH)
         .attr("rx", 3)
         .attr("fill", "url(#heatmapLegendGrad)")
-        .attr("stroke", "#e0d1b0")
+        .attr("stroke", HEATMAP_STROKE)
         .attr("stroke-width", 1);
 
     svg.append("text")
         .attr("x", legendX - 10).attr("y", legendY + legendH / 2 + 4)
         .attr("text-anchor", "end")
         .style("font-size", "12px")
-        .style("fill", "#2c4a6e")
+        .style("fill", HEATMAP_LOW_INK)
         .style("font-weight", "bold")
         .text(`低 · ${lowLabel}`);
 
@@ -1318,7 +1356,7 @@ function drawMultiHeatmap(svg, booksArray) {
         .attr("x", legendX + legendW + 10).attr("y", legendY + legendH / 2 + 4)
         .attr("text-anchor", "start")
         .style("font-size", "12px")
-        .style("fill", "#a0221a")
+        .style("fill", HEATMAP_HIGH_INK)
         .style("font-weight", "bold")
         .text(`高 · ${highLabel}`);
 
@@ -1354,8 +1392,8 @@ function showTooltip(event, data, bookName) {
     const tooltip = d3.select("body").append("div")
         .attr("class", "tooltip")
         .style("opacity", 0)
-        .style("left", (event.pageX + 10) + "px")
-        .style("top", (event.pageY - 10) + "px");
+        .style("left", "0px")
+        .style("top", "0px");
 
     const keywords = Array.isArray(data.keywords) ? data.keywords.map(escapeHtml).join(', ') : '';
     // 定位到章节：热力图上那条虚线到底指哪一章，悬停就能看到
@@ -1374,7 +1412,23 @@ function showTooltip(event, data, bookName) {
         ${keywords ? `<div style="margin-top: 5px;"><strong>关键词:</strong> ${keywords}</div>` : ''}
     `);
 
-    tooltip.transition()
+    // 定位：先按鼠标右下角摆，量出真实尺寸后按视口夹紧。
+    // 旧写法只写 left: pageX+10，而绝对定位元素的宽度由「容器剩余宽度」决定——
+    // 窄屏上靠近右缘的格子会把提示框挤成一根 70px 宽、327px 高的竖条（一次只显示
+    // 一个字）。改用 fixed + clientX/clientY，既不受滚动影响，也能把框推回屏幕内。
+    const box = tooltip.node().getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = event.clientX + 12;
+    let top = event.clientY - 10;
+    if (left + box.width > vw - 8) left = Math.max(8, vw - box.width - 8);
+    if (top + box.height > vh - 8) top = Math.max(8, vh - box.height - 8);
+    if (top < 8) top = 8;
+
+    tooltip.style("position", "fixed")
+        .style("left", left + "px")
+        .style("top", top + "px")
+        .transition()
         .duration(200)
         .style("opacity", 1);
 }
@@ -1453,8 +1507,8 @@ function updateMetricHint() {
     const hints = {
         sentenceLength: '一句话平均几个词。句子长，读起来更书面、更正式；句子短，更口语、更利落。',
         simpsonIndex: '这本书是不是翻来覆去用同一批词。数值越高越重复（词有点单调）；越低，用词越多样。',
-        hapaxLegomena: '「只出现过一次的词」在全书里占多大比例：比例越高，说明作者用词越丰富、越不单调。这个数已经按篇幅折算过，长短不同的书也能比。',
-        functionWords: '不看内容，而看「的、和、是」这类高频小词的使用习惯。点越靠近只说明这些词的用法越像，不等于两本书本身相似。'
+        hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出。它通常不是 0–1 的比例，也不是百分比——数值越大，一般说明用词越丰富、越不单调。这个数已经按篇幅折算过，长短不同的书也能比。',
+        functionWords: `不看内容，而看高频小词${getAxisWordsHint()}的使用习惯。点越靠近只说明这些词的用法越像，不等于两本书本身相似。`
     };
     const ctxText = getMetricContextLine(currentMetric);
     el.innerHTML = `<span class="metric-hint-label">${escapeHtml(getMetricLabel(currentMetric))}：</span>${escapeHtml(hints[currentMetric] || '')}`;
@@ -1771,29 +1825,88 @@ function getBookDisplayName(name) {
     return map[name] || name;
 }
 
+// ==========================================
+// ✧ 风格星系的轴词：只说实话
+// ==========================================
+// 说明里举的「高频小词」例子必须来自真实模型，不能写死。本项目语料是英文小说，
+// 轴词是 the / his / of / he 这类英文小词，写死成中文虚词就是给用户假信息。
+// 后端 src/projection.py 的 axis_labels() 已按主成分载荷算好，形如
+// 「横轴越靠右，the / his / of / he 这类小词在整段里占的比例越高」，
+// 经 projection.axisLabels 传到前端（renderGalaxyNote 已在用同一份数据）。
+// 取不到时（旧版数据 / 不同模型混选 / 退化模型）不编词，退回泛称。
+function getAxisWordsFor(comparability) {
+    const labels = (comparability && comparability.axisLabels) || [];
+    const words = [];
+    labels.forEach(text => {
+        // 只认「，A / B / C 这类小词」里的那段词表，不把整句当词
+        const matched = /，([^，]+?)\s*这类小词/.exec(String(text));
+        if (!matched) return;
+        matched[1].split('/').forEach(word => {
+            const trimmed = word.trim();
+            if (trimmed && words.indexOf(trimmed) < 0) words.push(trimmed);
+        });
+    });
+    return words.slice(0, 4);
+}
+
+function getSelectedAxisWords() {
+    return getAxisWordsFor(getGalaxyComparability(Array.from(selectedBooks)));
+}
+
+// 嵌进句子里的两种写法；没有真实轴词时都返回空串，句子照样通顺
+function getAxisWordsHint() {
+    const words = getSelectedAxisWords();
+    return words.length ? `（${words.join(' / ')} 这类）` : '';
+}
+
+function getAxisWordsParen() {
+    const words = getSelectedAxisWords();
+    return words.length ? `（${words.join(' / ')}）` : '';
+}
+
+// 把轴词回填进静态 HTML 里的两个占位 span（词表为空时保持为空）
+function renderAxisWordHints() {
+    const hint = document.getElementById('galaxy-axis-words');
+    if (hint) hint.textContent = getAxisWordsHint();
+    const paren = document.getElementById('galaxy-guide-axis-words');
+    if (paren) paren.textContent = getAxisWordsParen();
+}
+
 // 指纹热力图图例：低值（黛蓝）↔ 高值（赤）在每个指标下的具体含义
 function getHeatmapLegend(metric) {
     const legend = {
         sentenceLength: ['短句', '长句'],
         simpsonIndex: ['用词多样', '用词重复'],
-        hapaxLegomena: ['用词较单调', '用词较丰富'],
-        functionWords: ['一端', '另一端']
+        hapaxLegomena: ['用词较单调', '用词较丰富']
     };
+    if (metric === 'functionWords') {
+        // 功能词 PCA 的横轴＝一批高频小词在整段里的占比：靠左占比低、靠右占比高。
+        // 前缀用真实模型里载荷最高的那个词（取不到就只说「小词」）。
+        // 原来的「一端 / 另一端」等于什么都没说。
+        const words = getSelectedAxisWords();
+        const lead = words.length ? `${words[0]} ` : '小词';
+        return [`${lead}占比低`, `${lead}占比高`];
+    }
     return legend[metric] || ['低值', '高值'];
 }
 
-function toggleMetric() {
-    const metrics = ['sentenceLength', 'simpsonIndex', 'hapaxLegomena', 'functionWords'];
-    const current = document.getElementById('metricSelect').value;
-    const currentIndex = metrics.indexOf(current);
-    const nextIndex = (currentIndex + 1) % metrics.length;
-    
-    document.getElementById('metricSelect').value = metrics[nextIndex];
-    currentMetric = metrics[nextIndex];
-    
-    if (realData) {
-        refreshAllActiveCharts();
-    }
+// 全书对比页有两张图，导出按钮只有一条。「导出的是当前这张图」要成立，
+// 就得记住用户最后碰过的是哪张：默认「整体水平对比」，碰过走势图就跟着变。
+const DASH_CHARTS = {
+    'adv-mean': '整体水平对比',
+    'adv-line': '风格走势'
+};
+let lastDashChart = 'adv-mean';
+
+function trackDashboardCharts() {
+    Object.keys(DASH_CHARTS).forEach((id) => {
+        const card = document.getElementById(id);
+        if (!card) return;
+        const mark = () => { lastDashChart = id; };
+        card.addEventListener('mouseenter', mark);
+        card.addEventListener('pointerdown', mark);
+        card.addEventListener('focusin', mark);
+    });
 }
 
 // 导出的必须是「眼前这一张图」。
@@ -1804,8 +1917,10 @@ function getExportTarget() {
         return { element: document.querySelector('#galaxy-container svg'), label: '风格星系' };
     }
     if (currentTab === 'view-dashboard') {
-        const element = document.querySelector('#adv-mean svg') || document.querySelector('#adv-line svg');
-        return { element, label: '全书对比' };
+        // 以前写死 #adv-mean：它恒存在，于是「风格走势」那张永远导不出来
+        const element = document.querySelector(`#${lastDashChart} svg`)
+            || document.querySelector('#adv-mean svg');
+        return { element, label: `全书对比·${DASH_CHARTS[lastDashChart] || DASH_CHARTS['adv-mean']}` };
     }
     return {
         element: document.getElementById('main-chart'),
@@ -1829,6 +1944,177 @@ function getNoChartMessage() {
         + '请先在有数据的书上点一下，或稍等图渲染完成再试。';
 }
 
+// ── 导出用的内联样式 ──────────────────────────────────────────────
+// 导出物是序列化后的字符串，外部样式表不跟着走，凡是靠 d3-style.css 上色的
+// 元素都得在这里重述一遍。以前这里只有 3 条规则，于是「风格走向」的 0 基线
+// （<line> 没有 stroke 时默认不可见）整条消失、最高点（<circle> 没有 fill 时
+// 默认纯黑）从朱红变黑点、框选矩形变成一个不透明黑块——屏幕上和导出的不是同一张图。
+// 这份字符串原来在 exportChart 和 exportVectorChart 里各存一份，已经漂移过，
+// 现在只留这一份。
+const EXPORT_SVG_STYLE = `
+    <style>
+        text { font-family: 'Microsoft YaHei', sans-serif; fill: #2f2a23; }
+        .heatmap-rect { stroke: ${HEATMAP_STROKE}; stroke-width: 1px; }
+        .axis path, .axis line { fill: none; stroke: #98907f; shape-rendering: crispEdges; }
+        .zero-line { stroke: #6b6254; stroke-width: 1; shape-rendering: crispEdges; }
+        .annotation-point { fill: #b5472f; stroke: #fdf9ef; }
+        .selection { fill: rgba(181, 71, 47, 0.12); stroke: #b5472f; }
+        .line-path { fill: none; }
+    </style>`;
+
+// 屏幕上的图例长在图外的 HTML 里（风格星系的 #galaxy-legend、全书对比的彩色
+// chip），SVG 内部一个字都没有。导出只序列化 svg，于是拿出去的 PNG/SVG 就是
+// 一堆认不出谁是谁的颜色。这里在序列化之前把图例补进 svg 的副本里。
+//
+// 颜色不重算，直接读屏幕上已经渲染好的色值：重算要复刻渲染时的取色顺序，
+// 很容易对不上；读 DOM 则天然一致。
+function collectExportLegend() {
+    const items = [];
+    if (currentTab === 'view-galaxy') {
+        document.querySelectorAll('#galaxy-legend .galaxy-legend-item').forEach(item => {
+            if (item.classList.contains('galaxy-legend-skipped')) return; // 没画进图里的不列
+            const swatch = item.querySelector('.galaxy-legend-swatch');
+            const name = (item.textContent || '').trim();
+            if (swatch && name) {
+                items.push({ color: getComputedStyle(swatch).backgroundColor, name });
+            }
+        });
+        return { items, shape: 'rect' };
+    }
+    if (currentTab === 'view-dashboard') {
+        const seen = new Set();
+        document.querySelectorAll('#adv-line .line-path').forEach(path => {
+            const datum = path.__data__;
+            if (!datum || seen.has(datum.id)) return;
+            seen.add(datum.id);
+            items.push({
+                color: path.getAttribute('stroke') || datum.color,
+                name: datum.displayName || datum.name
+            });
+        });
+        return { items, shape: 'line' };
+    }
+    return { items: [], shape: 'rect' };
+}
+
+// 风格星系的坐标轴含义也只写在图外的 #galaxy-axis-note 里，一并带走
+function collectExportAxisNote() {
+    if (currentTab !== 'view-galaxy') return '';
+    const note = document.getElementById('galaxy-axis-note');
+    if (!note || note.hidden) return '';
+    // 横轴、纵轴在 DOM 里是两个子节点，直接取整块的 textContent 会把它们粘成
+    // 一句「…比例越高纵轴越靠上…」，读起来像缺了标点
+    const parts = note.children.length
+        ? Array.from(note.children).map(c => (c.textContent || '').trim()).filter(Boolean)
+        : [(note.textContent || '').trim()];
+    return parts.join('；').replace(/\s+/g, ' ');
+}
+
+function exportLegendLineHeight() { return 18; }
+
+// 图例带的高度：每条图例一行，轴说明按每行 46 字折行
+function exportLegendBandHeight(items, axisNote) {
+    if (!items.length && !axisNote) return 0;
+    const lineH = exportLegendLineHeight();
+    let lines = items.length;
+    if (axisNote) lines += Math.ceil(axisNote.length / 46);
+    return lines * lineH + 16;
+}
+
+// 三种图的 svg 尺寸写法并不统一：基础趋势/全书对比是 viewBox + inline 高度，
+// 风格星系是 width/height 属性。这里统一成「viewBox + width/height 属性」，
+// 并清掉 inline 高度——否则序列化出来的 style="height:400px" 会压住新加的图例带。
+function prepareExportSvg(svg, extraHeight) {
+    const clone = svg.cloneNode(true);
+    const box = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    const rect = svg.getBoundingClientRect();
+    let vbX = 0, vbY = 0, vbW, vbH;
+    if (box.length === 4 && box.every(n => isFinite(n))) {
+        [vbX, vbY, vbW, vbH] = box;
+    } else {
+        vbW = Number(svg.getAttribute('width')) || rect.width || 800;
+        vbH = Number(svg.getAttribute('height')) || rect.height || 400;
+    }
+    const totalH = vbH + extraHeight;
+    clone.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${totalH}`);
+    clone.setAttribute('width', String(vbW));
+    clone.setAttribute('height', String(totalH));
+    clone.style.height = '';
+    return { clone, vbX, vbY, vbW, vbH, totalH };
+}
+
+function attachExportLegend(prep, items, axisNote, shape) {
+    if (!items.length && !axisNote) return;
+    const NS = 'http://www.w3.org/2000/svg';
+    const g = document.createElementNS(NS, 'g');
+    const x0 = prep.vbX + 24;
+    const lineH = exportLegendLineHeight();
+    let y = prep.vbY + prep.vbH + 26;
+
+    const addText = (x, ty, size, fill, content) => {
+        const text = document.createElementNS(NS, 'text');
+        text.setAttribute('x', String(x));
+        text.setAttribute('y', String(ty));
+        text.setAttribute('font-size', String(size));
+        text.setAttribute('fill', fill);
+        text.textContent = content;
+        g.appendChild(text);
+    };
+
+    items.forEach(item => {
+        if (shape === 'line') {
+            const seg = document.createElementNS(NS, 'line');
+            seg.setAttribute('x1', String(x0));
+            seg.setAttribute('x2', String(x0 + 16));
+            seg.setAttribute('y1', String(y - 4));
+            seg.setAttribute('y2', String(y - 4));
+            seg.setAttribute('stroke', item.color);
+            seg.setAttribute('stroke-width', '2');
+            g.appendChild(seg);
+        } else {
+            const swatch = document.createElementNS(NS, 'rect');
+            swatch.setAttribute('x', String(x0));
+            swatch.setAttribute('y', String(y - 11));
+            swatch.setAttribute('width', '12');
+            swatch.setAttribute('height', '12');
+            swatch.setAttribute('rx', '3');
+            swatch.setAttribute('fill', item.color);
+            g.appendChild(swatch);
+        }
+        addText(x0 + 22, y, 12, '#2f2a23', item.name);
+        y += lineH;
+    });
+
+    if (axisNote) {
+        // 轴说明是整句，按固定字数折行，免得一行横穿整张图
+        for (let i = 0; i < axisNote.length && i < 46 * 4; i += 46) {
+            addText(x0, y, 11, '#5c5346', axisNote.slice(i, i + 46));
+            y += lineH;
+        }
+    }
+
+    g.setAttribute('class', 'export-legend');
+    prep.clone.appendChild(g);
+}
+
+// 把图例和轴说明拼上去，返回可直接序列化的 svg 副本
+function buildExportSvg(svg) {
+    const legend = collectExportLegend();
+    const axisNote = collectExportAxisNote();
+    const extra = exportLegendBandHeight(legend.items, axisNote);
+    const prep = prepareExportSvg(svg, extra);
+    attachExportLegend(prep, legend.items, axisNote, legend.shape);
+    return prep;
+}
+
+function serializeExportSvg(prep) {
+    let source = new XMLSerializer().serializeToString(prep.clone);
+    if (!source.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
+        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    return source.replace('</svg>', EXPORT_SVG_STYLE + '</svg>');
+}
+
 function exportChart() {
     const target = getExportTarget();
     const svg = target.element;
@@ -1837,31 +2123,18 @@ function exportChart() {
         return;
     }
 
-    const serializer = new XMLSerializer();
-    let source = serializer.serializeToString(svg);
-
-    if(!source.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)){
-        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
-    }
-
-    const styleString = `
-        <style>
-            text { font-family: 'Microsoft YaHei', sans-serif; fill: #2f2a23; }
-            .heatmap-rect { stroke: #e4d9c3; stroke-width: 1px; }
-            .axis path, .axis line { fill: none; stroke: #98907f; shape-rendering: crispEdges; }
-        </style>`;
-    source = source.replace('</svg>', styleString + '</svg>');
-
-    const imageSrc = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(source);
+    const prep = buildExportSvg(svg);
+    const imageSrc = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(serializeExportSvg(prep));
 
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
     const img = new Image();
 
-    const svgRect = svg.getBoundingClientRect();
-    const scaleFactor = 2; 
-    canvas.width = svgRect.width * scaleFactor;
-    canvas.height = svgRect.height * scaleFactor;
+    // 画布尺寸取 viewBox 而不是屏幕上的 getBoundingClientRect()：
+    // viewBox 才是这张图自己的坐标系，加了图例带之后两者的高度不再相等。
+    const scaleFactor = 2;
+    canvas.width = prep.vbW * scaleFactor;
+    canvas.height = prep.totalH * scaleFactor;
 
     img.onload = function() {
         context.fillStyle = '#f2e7cd';
@@ -1906,8 +2179,8 @@ function exportSummary() {
     const metricHint = {
         sentenceLength: '一句话平均几个词。',
         simpsonIndex: '数值越高，用词越重复。',
-        hapaxLegomena: '「只出现过一次的词」占比越高，用词越丰富；这个数已按篇幅折算，长短不同的书可比。',
-        functionWords: '由「的、和、是」这类高频小词的使用习惯得出，仅作参照。'
+        hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出，不是 0–1 的比例；数值越大用词越丰富。已按篇幅折算，长短不同的书可比。',
+        functionWords: `由高频小词${getAxisWordsHint()}的使用习惯得出，仅作参照。`
     }[currentMetric] || '';
     const contextLine = getMetricContextLine(currentMetric);
     const lines = [
@@ -2152,7 +2425,7 @@ function exportTableData() {
             };
             const style = series.functionWords.get(i);
             rows.push([
-                book,
+                getBookDisplayName(book), // 表头是「书名」，与摘要/参考文献里的中文名保持一致
                 String(i + 1),
                 chapter ? `${chapterLabel(chapter)} ${chapterTitle(chapter)}` : '',
                 meta ? String(i * meta.step + 1) : '', // 起始词位置从第 1 个词数起
@@ -2249,18 +2522,7 @@ function exportVectorChart() {
         return;
     }
 
-    let source = new XMLSerializer().serializeToString(svg);
-    if (!source.match(/^<svg[^>]+xmlns="http:\/\/www\.w3\.org\/2000\/svg"/)) {
-        source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
-    }
-    const styleString = `
-        <style>
-            text { font-family: 'Microsoft YaHei', sans-serif; fill: #2f2a23; }
-            .heatmap-rect { stroke: #e4d9c3; stroke-width: 1px; }
-            .axis path, .axis line { fill: none; stroke: #98907f; shape-rendering: crispEdges; }
-        </style>`;
-    source = source.replace('</svg>', styleString + '</svg>');
-
+    const source = serializeExportSvg(buildExportSvg(svg));
     downloadBlob(source, `文印_${exportFileLabel()}_${target.label}_${exportTimestamp()}.svg`, 'image/svg+xml;charset=utf-8');
 }
 
@@ -2369,6 +2631,9 @@ let lastGalaxyTrigger = null;
 function initStyleGalaxy() {
     // 检查是否可见
     if (currentTab !== 'view-galaxy') return;
+
+    // 说明文案里的轴词例子跟着当前书目走（一本都没选时自动清空，退回泛称）
+    renderAxisWordHints();
 
     const books = Array.from(selectedBooks);
     if (books.length === 0) {
@@ -2499,10 +2764,11 @@ function initStyleGalaxy() {
     renderGalaxyNote(comparability, null, droppedBlocks);
 
     if (allNodes.length === 0) {
-        if (loadingEl) {
-            loadingEl.style.display = 'block';
-            loadingEl.textContent = "这几本书暂时缺少生成风格星系所需的高频小词数据。请换几本书再试。";
-        }
+        // 这里原来引用了一个从未声明的 loadingEl，会抛 ReferenceError：
+        // 画布已经清空，用户看到的是空白一片且没有任何说明；异常还会冒泡到
+        // handleFileUpload 的 catch，把一次成功的上传误报成「上传失败」。
+        // setGalaxyLoading 本来就是这个状态该用的函数。
+        setGalaxyLoading('这几本书暂时缺少生成风格星系所需的高频小词数据。请换几本书再试。');
         return;
     }
 
@@ -2828,16 +3094,22 @@ function updateHUD(analysisData, metricLabel) {
 
     title.innerHTML = `◎ 选中区域（${analysisData.count} 个片段）`;
 
+    // 「区域平均」＋「平均句长」会读成「区域平均平均句长」：去掉标签自己的前导「平均」
+    const hudMetricLabel = String(metricLabel || '').replace(/^平均/, '');
+    // 书名统一走 getBookDisplayName（别处都显示《野性的呼唤》，这里原来显示
+    // 截断的原始英文 key），截断交给已有的 truncateText，别硬切 15 个字
+    const hudBookName = truncateText(getBookDisplayName(analysisData.dominantBook), 18);
+
     let html = `
         <div class="hud-row">
             <span class="hud-label">主要来自:</span>
-            <span class="hud-value" style="color:#2f2a23">${analysisData.dominantBook.substring(0, 15)}...</span>
+            <span class="hud-value" style="color:#2f2a23">${escapeHtml(hudBookName)}</span>
         </div>
         <div class="hud-bar-bg" title="这本书占比 ${analysisData.dominanceRate.toFixed(0)}%">
             <div class="hud-bar-fill" style="width: ${analysisData.dominanceRate}%;"></div>
         </div>
         <div class="hud-row" style="margin-top:8px;">
-            <span class="hud-label">区域平均${metricLabel}:</span>
+            <span class="hud-label">区域平均${escapeHtml(hudMetricLabel)}:</span>
             <span class="hud-value" style="color:#b5472f">${formatMetric(analysisData.avgMetric)}</span>
         </div>
         <div class="hud-row" style="margin-top:8px;">

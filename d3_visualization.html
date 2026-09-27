@@ -126,8 +126,6 @@
                     <p>点击或悬停图表中的点，即可查看对应文本片段的详细信息</p>
                 </div>
             </div>
-            
-            <div class="legend" id="legend"></div>
         </div>
 
         <!-- ============================================ -->
@@ -138,7 +136,7 @@
                 <div class="adv-header">
                     <div>
                         <h2 style="margin:0; color:#2f2a23; font-size: 18px;">✧ 风格星系</h2>
-                        <small style="color:#6b6254">每个点的位置，根据书中「的、和、是」这类高频小词的使用习惯计算。点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或水平相似。</small>
+                        <small style="color:#6b6254">每个点的位置，根据书中高频小词<span id="galaxy-axis-words"></span>的使用习惯计算。点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或水平相似。</small>
                     </div>
                     <div>
                         <button id="restartGalaxyBtn" type="button" onclick="restartGalaxy()" style="padding:5px 15px;">↻ 重新布局</button>
@@ -148,7 +146,7 @@
                     <span>每个圆点 = 一段文本（约 1 万词）</span>
                     <span>颜色 = 不同书</span>
                     <span>大小 = 数值高低</span>
-                    <span>位置 = 高频小词（的/和/是）的用法</span>
+                    <span>位置 = 高频小词<span id="galaxy-guide-axis-words"></span>的用法</span>
                     <span>滚轮缩放 · 拖动探索 · 点击看原文</span>
                 </div>
                 <div class="galaxy-legend" id="galaxy-legend"></div>
@@ -195,7 +193,7 @@
                     <div class="charts-area">
                         <div class="dash-card">
                             <h4>
-                                ▤ 整体水平对比
+                                ▤ 整体水平对比<span id="adv-mean-scope" class="adv-scope"></span>
                                 <span class="sort-control" onclick="advCycleSort('mean')" title="点击切换：数值大小 / 书名首字母">
                                     <span id="sort-text-mean">数值</span>
                                     <i id="sort-icon-mean" class="fas fa-sort-amount-down"></i>
@@ -442,6 +440,7 @@
             if (Object.keys(charts).length === 0) return;
             const data = getAdvComputed();
             updateSortUI();
+            updateAdvScopeLabel();
             renderAdvMean(data);
             renderAdvLine(data);
             updateHighlightVisuals();
@@ -490,8 +489,11 @@
                         const location = (typeof formatBlockLocation === 'function')
                             ? formatBlockLocation(book, item.block)
                             : `第 ${Number(item.block) + 1} 个片段`;
+                        // 这个均值来自 /api/analysis，不随上方框选变。有框选时把这一点
+                        // 写出来，否则它会和「整体水平对比」上那个被框选改过的数打架。
+                        const scopeNote = advBrushPercent() ? '，不受上方框选影响' : '';
                         const compare = Number.isFinite(mean)
-                            ? `比全书平均（${fmtMetric(mean)}）${dirText}${fmtMetric(Math.abs(value - mean))}`
+                            ? `比全书平均（${fmtMetric(mean)}${scopeNote}）${dirText}${fmtMetric(Math.abs(mean - value))}`
                             : '';
                         const keywords = Array.isArray(item.keywords) && item.keywords.length
                             ? `<div class="anomaly-keywords">关键词：${escapeHtml(item.keywords.join('、'))}</div>`
@@ -520,7 +522,7 @@
         const INSIGHT_METRIC = {
             sentenceLength: { up: '中后段句子越写越长', down: '中后段句子越写越短', high: '整体句子最长', low: '整体句子最短' },
             simpsonIndex:  { up: '中后段用词越来越重复', down: '中后段用词越来越丰富', high: '用词重复度最高（词汇较单调）', low: '用词重复度最低（词汇最丰富）' },
-            hapaxLegomena:{ up: '中后段用词越来越丰富（独特词占比变高）', down: '中后段用词越来越单调（独特词占比变低）', high: '用词最丰富', low: '用词最单调' },
+            hapaxLegomena:{ up: '中后段用词越来越丰富（更多词只出现一次）', down: '中后段用词越来越单调（更少词只出现一次）', high: '用词最丰富', low: '用词最单调' },
             functionWords: { up: '中后段风格走向持续偏移', down: '中后段风格走向趋于回归', high: null, low: null }
         };
 
@@ -536,12 +538,19 @@
             const cfg = INSIGHT_METRIC[currentMetric] || INSIGHT_METRIC.sentenceLength;
             const lines = [];
 
+            // 框选生效时先把口径写在最前面：下面「整体水平」「整体最长」这些说法
+            // 报的其实是框选那一段的值，而同屏的异常面板报的是全书平均。
+            const brushScope = advBrushPercent();
+            if (brushScope) {
+                lines.push(`下面这些数字只统计走势图上框选的 ${brushScope} 区段，不是全书。`);
+            }
+
             if (data.length >= 2 && cfg.high) {
                 const highest = [...data].sort((a, b) => b.currentMean - a.currentMean)[0];
                 const lowest  = [...data].sort((a, b) => a.currentMean - b.currentMean)[0];
                 lines.push(`《${highest.displayName || highest.name}》${cfg.high}（${fmtMetric(highest.currentMean)}），《${lowest.displayName || lowest.name}》${cfg.low}（${fmtMetric(lowest.currentMean)}）。`);
             } else if (data.length === 1) {
-                lines.push(`《${data[0].displayName || data[0].name}》的「${mLabel}」整体水平为 ${fmtMetric(data[0].currentMean)}。`);
+                lines.push(`《${data[0].displayName || data[0].name}》的「${mLabel}」${brushScope ? '在框选区段内平均' : '整体水平'}为 ${fmtMetric(data[0].currentMean)}。`);
                 // 单书时给出基准参照：与其他已加载书籍的平均水平对比，让裸数字有意义
                 if (realData && Object.keys(realData).length > 1) {
                     const otherMeans = Object.entries(realData)
@@ -631,7 +640,7 @@
                     .attr("x", d=>x(d.displayName || d.name)).attr("y", barY).attr("width", x.bandwidth()).attr("height", barH),
                 exit => exit.transition().duration(500).attr("height", 0).remove()
             )
-            .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>平均: ${fmtMetric(d.currentMean)}`); })
+            .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>${advMeanLabel()}: ${fmtMetric(d.currentMean)}`); })
             .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
             .on("click", (e, d) => advDrillDown(d));
         }
@@ -656,7 +665,7 @@
                 enter => enter.append("path").attr("class", d => `book-el line-path book-${d.id}`)
                     .attr("fill", "none").attr("stroke-width", 1.5).attr("stroke", d=>d.color)
                     .attr("d", d => line(d.activeSegment))
-                    .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>平均: ${fmtMetric(d.currentMean)}`); })
+                    .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>${advMeanLabel()}: ${fmtMetric(d.currentMean)}`); })
                     .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
                     .on("click", (e, d) => advDrillDown(d)),
                 update => update.attr("stroke", d => d.color).attr("d", d => line(d.activeSegment)),
@@ -777,7 +786,7 @@
                             <strong style="color:${book.color};font-size:14px">${escapeHtml(book.displayName || book.name)}</strong>
                             <span style="font-size:10px; color:#6b6254; cursor:pointer;" onclick="removeSelection('${book.id}')">✕ 移除</span>
                         </div>
-                        <div style="font-size:10px; color:#6b6254; margin-bottom:5px; padding-left:5px;">平均: ${fmtMetric(book.currentMean)}</div>
+                        <div style="font-size:10px; color:#6b6254; margin-bottom:5px; padding-left:5px;">${advMeanLabel()}: ${fmtMetric(book.currentMean)}</div>
                 `;
 
                 topBlocks.forEach((b, i) => {
@@ -858,6 +867,27 @@
             if (iconEl) iconEl.className = config.mode === 'value'
                 ? (config.order === 'desc' ? "fas fa-sort-amount-down" : "fas fa-sort-amount-up")
                 : (config.order === 'asc' ? "fas fa-sort-alpha-down" : "fas fa-sort-alpha-up");
+        }
+
+        // 框选之后，这一页上所有「均值」都只代表框选那一段了（getAdvComputed 会按
+        // brushRange 过滤 segment）。但同屏的异常面板报的是全书平均（那个数来自
+        // /api/analysis，不随框选变），两个数都自称是这本书的平均，看的人会把区段
+        // 水平当成全书水平写进报告。下面两个函数把口径显式写出来。
+        function advBrushPercent() {
+            if (!advState.brushRange) return null;
+            const [min, max] = advState.brushRange;
+            return `${(min * 100).toFixed(1)}%–${(max * 100).toFixed(1)}%`;
+        }
+
+        function advMeanLabel() {
+            const range = advBrushPercent();
+            return range ? `区段平均（${range}）` : '平均';
+        }
+
+        function updateAdvScopeLabel() {
+            const range = advBrushPercent();
+            const el = document.getElementById('adv-mean-scope');
+            if (el) el.textContent = range ? `（框选区段 ${range}）` : '';
         }
 
         function advBrushed(event) {
