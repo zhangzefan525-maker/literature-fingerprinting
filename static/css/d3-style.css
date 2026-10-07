@@ -1005,11 +1005,44 @@ button:hover {
     margin-bottom: 18px;
 }
 
+/* 标题行两端对齐，「复制结论」贴右边。h4 里只有标题文字和这一个按钮，
+   用 flex 而不是 float 是为了窄屏换行时按钮不会跑到文字下面去。 */
 .insight-panel h4 {
     margin: 0 0 10px 0;
     font-size: 14px;
     color: var(--ink-100);
     font-family: var(--font-display);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.insight-actions { flex-shrink: 0; }
+
+/* 「复制结论」：这条面板上的辅助动作，做成次要样式的胶囊，不跟正文抢注意力。
+   它自己是 (0,1,0)，全局 button:hover 的位移和投影照旧生效，所以悬停里必须显式写
+   transform/box-shadow: none——12px 的小控件在悬停时跳起来很难看
+   （第六批给 .sort-control 抹过一次同样的东西）。 */
+.insight-copy {
+    font-size: 12px;
+    font-weight: 500;
+    font-family: var(--font-body);
+    padding: 3px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--ink-70);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: var(--transition-control);
+}
+
+.insight-copy:hover {
+    background: var(--elev);
+    color: var(--ink-100);
+    transform: none;
+    box-shadow: none;
 }
 
 .insight-line {

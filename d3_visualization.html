@@ -123,7 +123,7 @@
                 <span id="export-more" class="export-more" hidden>
                     <button id="exportSvgBtn" type="button" title="矢量图（SVG），放进论文放大不失真">导出矢量图</button>
                     <button id="exportDataBtn" type="button" title="每个片段的数值、章节与起始位置（CSV），可用 Excel 打开">导出数据表</button>
-                    <button id="exportSummaryBtn" type="button" title="本次分析的文字摘要（含方法与参数）">导出摘要</button>
+                    <button id="exportSummaryBtn" type="button" title="纯文字摘要（.txt），含一句话解读、值得一看的片段、每本书的明细与方法参数">导出摘要</button>
                     <button id="exportCiteBtn" type="button" title="引用条目（BibTeX），可导入 Zotero / EndNote 等文献管理软件">导出引用</button>
                 </span>
             </div>
@@ -214,7 +214,7 @@
                 <div class="adv-header">
                     <div>
                         <h2 style="margin:0; color:#2f2a23; font-size: 18px;">📚 全书对比</h2>
-                        <small style="color:#6b6254">选择书籍 · 拖选段落 · 查看片段详情</small>
+                        <small style="color:#6b6254">选择书籍 · 拖选片段 · 查看片段详情</small>
                     </div>
                     <div class="adv-controls">
                         <span>选择书籍: </span>
@@ -224,7 +224,9 @@
                 </div>
 
                 <div class="insight-panel">
-                    <h4>✦ 一句话解读</h4>
+                    <!-- 「复制结论」放在标题行、两块 live region 之外：正文都是 aria-live，
+                         按钮若长在里面，每换一次书或指标都会把「复制 按钮」重念一遍。 -->
+                    <h4>✦ 一句话解读<span class="insight-actions"><button id="copyConclusionBtn" type="button" class="insight-copy" title="把「一句话解读」和「值得一看的片段」一起复制成纯文字，可直接粘进笔记">复制结论</button></span></h4>
                     <div id="insight-content" aria-live="polite"><span class="insight-muted">选择书籍后，这里会自动生成大白话解读。</span></div>
                     <div id="anomaly-content" class="anomaly-content" aria-live="polite"></div>
                 </div>
@@ -243,7 +245,7 @@
                         </div>
 
                         <div class="dash-card">
-                            <h4>〰 风格走势 <span style="font-size:10px;color:#b5472f">拖拽选择段落</span></h4>
+                            <h4>〰 风格走势 <span style="font-size:10px;color:#b5472f">拖拽选择片段</span></h4>
                             <div id="adv-line" class="dash-chart-body"></div>
                         </div>
                     </div>
@@ -530,6 +532,7 @@
             if (!panel) return;
             if (!data || data.length === 0) {
                 panel.innerHTML = '';
+                lastAnomalyReport = null;
                 return;
             }
 
@@ -537,6 +540,9 @@
             const displayName = data[0].displayName || book;
             const requestId = ++anomalyRequestId;
             panel.innerHTML = '<div class="anomaly-muted">正在找这本书里偏离较大的片段…</div>';
+            // 问服务端之前先清掉上一本的结果：导出/复制读的是这份缓存，留着会让「复制结论」
+            // 在这几秒里把上一本书的异常片段当成这本书的。
+            lastAnomalyReport = null;
 
             fetch(`/api/analysis/${encodeURIComponent(book)}?metric=${encodeURIComponent(currentMetric)}`)
                 .then(resp => resp.json().catch(() => null))
@@ -544,16 +550,23 @@
                     if (requestId !== anomalyRequestId) return; // 已经有更新的请求了，丢弃
                     if (!result || result.status !== 'success') {
                         panel.innerHTML = '';
+                        lastAnomalyReport = null;
                         return;
                     }
                     const items = result.anomalies || [];
                     const mLabel = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
+                    const mean = result.summary && Number(result.summary.mean);
+                    // 屏幕上渲染了什么，导出里就是什么——两块共用这一个缓存。
+                    lastAnomalyReport = {
+                        book, displayName, metricLabel: mLabel, mean,
+                        brushScoped: !!advBrushPercent(),
+                        items
+                    };
                     if (items.length === 0) {
                         panel.innerHTML = `<div class="anomaly-muted">《${escapeHtml(displayName)}》的「${mLabel}」整体比较均匀，没有特别偏离的片段。</div>`;
                         return;
                     }
 
-                    const mean = result.summary && Number(result.summary.mean);
                     const head = `<div class="anomaly-title">▸ 值得一看的片段（《${escapeHtml(displayName)}》）</div>`;
                     const cards = items.map(item => {
                         const value = Number(item.value);
@@ -588,6 +601,7 @@
                 .catch(() => {
                     if (requestId !== anomalyRequestId) return;
                     panel.innerHTML = ''; // 拿不到就不占地方，不打扰用户
+                    lastAnomalyReport = null;
                 });
         }
 
@@ -618,6 +632,7 @@
             if (!panel) return;
             if (!data || data.length === 0) {
                 panel.innerHTML = '<span class="insight-muted">暂无数据，请在上方选择书籍。</span>';
+                lastInsightLines = [];
                 return;
             }
 
@@ -676,6 +691,9 @@
                 if (stable) lines.push(`《${stable.displayName || stable.name}》的「${mLabel}」起伏最小，风格最平稳。`);
             }
 
+            // 存一份给导出/「复制结论」用（d3-charts.js 里声明的 lastInsightLines）。
+            // 存的是同一个数组的内容，不是再算一遍——屏幕与导出必须是同一句话。
+            lastInsightLines = lines.slice();
             panel.innerHTML = lines.map(l => `<div class="insight-line">${l}</div>`).join('');
         }
 
@@ -938,7 +956,7 @@
 
             overlay.attr("tabindex", 0)
                 .attr("role", "application")
-                .attr("aria-label", "段落范围选择框：左右方向键移动，按住 Shift 加左右方向键调整右边界，Esc 清空。下方详情卡会显示这个范围内的均值")
+                .attr("aria-label", "片段范围选择框：左右方向键移动，按住 Shift 加左右方向键调整右边界，Esc 清空。下方详情卡会显示这个范围内的均值")
                 .on("keydown", function (event) {
                     const current = d3.brushSelection(brushG.node());
                     if (event.key === 'Escape') {
@@ -1015,7 +1033,7 @@
                         <div style="padding:5px; margin-bottom:5px; display:flex; justify-content:space-between; align-items:center;">
                             <strong style="color:${book.color};font-size:14px">${escapeHtml(book.displayName || book.name)}</strong>
                             <button type="button" class="drill-remove-btn" onclick="removeSelection('${book.id}')"
-                                    aria-label="收起《${escapeHtml(book.displayName || book.name)}》的段落详情；这本书仍留在图表和导出里">✕ 收起</button>
+                                    aria-label="收起《${escapeHtml(book.displayName || book.name)}》的片段详情；这本书仍留在图表和导出里">✕ 收起</button>
                         </div>
                         <div style="font-size:10px; color:#6b6254; margin-bottom:5px; padding-left:5px;">${advMeanLabel()}: ${fmtMetric(book.currentMean)}</div>
                 `;
