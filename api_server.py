@@ -7,6 +7,7 @@
 from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_cors import CORS
 from werkzeug.exceptions import RequestEntityTooLarge
+import hashlib
 import json
 import math
 import os
@@ -245,6 +246,20 @@ def _corpus_stamp(target_file):
     return (stamp[0], stamp[1], _library_stamp())
 
 
+def _corpus_etag():
+    """
+    当前语料的 ETag。
+
+    直接拿 _load_corpus 判断「要不要重读文件」用的那个指纹去算 —— 重新生成数据、
+    「我的图书馆」增删改，都会让它变；没变就说明这次要发的东西和上次一模一样。
+    还没读过文件（没有指纹）时返回 None，调用方按「不带条件缓存」处理。
+    """
+    stamp = _corpus_cache.get("key")
+    if stamp is None:
+        return None
+    return hashlib.sha1(repr(stamp).encode("utf-8")).hexdigest()
+
+
 def _load_corpus():
     """
     读取（并缓存）全量语料：内置示例书 + 「我的图书馆」。
@@ -436,11 +451,22 @@ def get_fingerprint_data():
                            "或通过上传接口 /api/analyze 上传自己的文本。"
             }), 404
 
-        return jsonify({
+        resp = jsonify({
             "status": "success",
             "message": message,
             "data": data
         })
+
+        # 首屏每次都要拉这一份（未压缩 1.5 MB，gzip 后约 0.5 MB），而它只在重新生成数据
+        # 或书库变动时才会变。带上 ETag 让重复访问走 304：浏览器仍然每次都问一句，
+        # 只是问到的答案是「没变」，于是这 0.5 MB 不用重传。
+        # no-cache 是「可以存，但每次都要先确认」，不是「不许存」——数据会变，必须revalidate。
+        etag = _corpus_etag()
+        if etag is None:
+            return resp
+        resp.set_etag(etag)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp.make_conditional(request)
 
     except Exception:
         app.logger.exception("读取指纹数据失败")
