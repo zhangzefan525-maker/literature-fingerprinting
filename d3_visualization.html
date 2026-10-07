@@ -81,7 +81,7 @@
         <div class="quickstart" id="quickstart">
             <span class="quickstart-lead">第一次来？可以先用一组差别最明显的书，看看这个工具能做什么。</span>
             <button type="button" class="quickstart-demo" onclick="loadComparisonExample()">载入对比示例</button>
-            <button type="button" class="quickstart-close" onclick="hideQuickStart()" aria-label="不再显示快速开始">✕</button>
+            <button type="button" class="quickstart-close" onclick="hideQuickStart()" aria-label="不再自动显示快速开始" title="收起。之后可以在「基础趋势分析」页右上角手动载入对比示例">✕</button>
         </div>
 
         <!-- 新增：顶部 Tab 切换导航 -->
@@ -134,6 +134,20 @@
         <!--  视图 1: 基础图表 (Main Chart View)          -->
         <!-- ============================================ -->
         <div id="view-main" class="view-section active" role="tabpanel" aria-labelledby="tab-view-main">
+            <!-- 另两个页签都有标题 + 一句「怎么读」，只有首屏没有：切过来只看到两排控件和一张图，
+                 不知道纵轴是什么、一格代表多少。补齐，同时给读屏一个 h2 定位这块面板。
+                 右侧那个「载入对比示例」是快速开始条被 ✕ 收起之后的手动入口，两者互斥
+                 （见 applyQuickStartVisibility / setDemoEntryVisible）——原来点一次 ✕ 就再也没
+                 有地方能载入它了，功能等于从界面上消失。 -->
+            <div class="adv-header">
+                <div>
+                    <h2 style="margin:0; color:#2f2a23; font-size: 18px;"><i class="fas fa-chart-line" aria-hidden="true"></i> 基础趋势分析</h2>
+                    <small style="color:#6b6254">横轴是全书进度，纵轴是「观察角度」里选的这个指标；一格（一个点）约对应 1 万词。点一下图里的位置，右侧会显示那一段的详情。</small>
+                </div>
+                <div>
+                    <button type="button" id="demo-entry" class="demo-entry" hidden onclick="loadComparisonExample()" title="自动挑出当前观察角度下差别最大的一对书，并切到「全书对比」页看结论">载入对比示例</button>
+                </div>
+            </div>
             <div class="controls">
                 <div class="control-group">
                     <select id="chartTypeSelect" aria-label="图表类型">

@@ -449,6 +449,21 @@ button:hover {
     box-shadow: none;
 }
 
+/* 「载入对比示例」的常驻入口：快速开始条被 ✕ 收起后，它出现在「基础趋势分析」页的标题行右侧。
+   外观与 .quickstart-demo 一致（同一个动作不该有两种长相），但**不**共用那条选择器：
+   下面 @media (pointer: coarse) 里按 .quickstart-demo 写的触屏加大规则要单独给它补一份，
+   否则触屏上这个按钮比旁边那排小一圈。默认 hidden，由 setDemoEntryVisible 控制。 */
+.demo-entry {
+    padding: 5px 12px;
+    font-size: 0.82rem;
+    background: var(--vermilion);
+    color: #fdfaf3;
+}
+
+.demo-entry:hover {
+    background: #9c3a26;
+}
+
 /* ---------- 导出与分享按钮组 ---------- */
 .export-group {
     display: flex;
@@ -1900,6 +1915,7 @@ button.copy-failed:hover {
 @media (pointer: coarse) {
     .tab-btn,
     .quickstart-demo,
+    .demo-entry,
     .quickstart-close,
     .export-group button,
     .book-btn,
