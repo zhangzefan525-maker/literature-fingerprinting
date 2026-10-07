@@ -1368,3 +1368,117 @@ if git merge --ff-only origin/master -q; then
   `tests/test_api.py`（新增用例）、以及新增的 `literature-autodeploy.sh`。
 - 这只是优化清单里的第 11 批；弱网 gzip（实测 JS 170 KB + CSS 56 KB + 接口 589 KB 全是裸传）、
   后端三条永久 500 的坏路、无障碍硬伤、导出与文案，都还没开始。
+
+---
+
+## 第十四批：开 gzip，以及让首屏那份 1.5 MB 能走 304（2026-10-07）
+
+前面每一批都在改「页面长什么样」，这一批改的是**传输**——而且是这批之前从没量过的维度。
+一量就发现首屏要传 **1.83 MB**，其中只有 HTML 被压过。
+
+### 1. gzip：模板里那六行注释
+
+`/etc/nginx/nginx.conf` 的 Gzip 段是发行版模板的原样：只有 `gzip on;` 生效，
+`gzip_types` 整行还是注释。而 nginx **无条件压 `text/html`**，所以配完模板的人会看到
+HTML 有 `Content-Encoding: gzip`、以为「gzip 已经开了」——它确实开着，只是只对 HTML 生效。
+
+实测（同一台机器、同一份内容，`Accept-Encoding: gzip`）：
+
+| 资源 | 改之前 | 改之后 | |
+|---|---|---|---|
+| `/visualization` | 28234 B | 24945 B | 本来就在压，级别 1→5 顺带小了 3 KB |
+| `static/css/d3-style.css` | 56491 B | 17668 B | −69% |
+| `static/js/d3-charts.js` | 170004 B | 57448 B | −66% |
+| `/api/fingerprint-data` | **1570530 B** | **512897 B** | −67% |
+| **首屏合计** | **1.83 MB** | **约 599 KB** | **−67%** |
+
+改的就是那六行，另外补了三条：
+
+```nginx
+gzip_vary on;          # 让中间缓存按 Accept-Encoding 分开存，免得把 gz 内容发给不支持的客户端
+gzip_proxied any;      # 本站响应全部来自 proxy_pass，不写这条反代出来的响应不会被压
+gzip_comp_level 5;     # 默认是 1；对 JSON 而言 5 的收益远大于代价，再往上就很小了
+gzip_min_length 1024;  # 太短的响应压了反而更大
+gzip_types
+    text/plain
+    text/css
+    text/xml
+    text/javascript           # ← 注意不是 application/javascript
+    application/javascript
+    application/json          # ← /api/fingerprint-data 靠这条
+    application/xml
+    application/xml+rss
+    image/svg+xml;
+```
+
+**`text/javascript` 这一条是这批最容易写漏的地方**：模板注释里给的是 `application/javascript`，
+照抄的话 `.js` 不会被压——因为 **Python 3.13 的 `mimetypes` 给 `.js` 发的是 `text/javascript`**，
+而 nginx 的 `gzip_types` 是按上游给的 `Content-Type` 精确匹配的。改之前的实测响应头就是
+`Content-Type: text/javascript; charset=utf-8`。两个都留着，换 Python 版本也不会失效。
+
+压缩**没有改动内容**：四个资源都逐字节比对过「解压后的 body」与「不声明 gzip 时拿到的 body」，
+md5 完全一致。（第一版比对脚本我写错了——把 `--compressed` 和显式 `-H 'Accept-Encoding: identity'`
+同时给 curl，后者覆盖了前者，于是两边根本不是同一件事。记在这里，免得下次又「验出」一个假故障。）
+
+### 2. 另一半：`/api/fingerprint-data` 每次首屏都要拉，却从不带缓存头
+
+gzip 之后它仍有 513 KB，而且**每一次打开页面都要重下一遍**——它一直是个不带任何
+缓存头的 200。加上 ETag 之后：
+
+```python
+etag = _corpus_etag()          # = sha1(repr(_corpus_cache["key"]))
+if etag is None:
+    return resp
+resp.set_etag(etag)
+resp.headers["Cache-Control"] = "no-cache"
+return resp.make_conditional(request)
+```
+
+指纹直接复用 `_load_corpus` 判断「要不要重读文件」用的那个 key（`all_books.json` 的
+mtime + 大小 + 整个书库的指纹）。**这样「数据变了」和「ETag 变了」是同一件事，
+不可能脱节**：重新生成数据会变、用户上传/删除一本书也会变。
+
+`no-cache` 容易被误读成「不许存」，它其实是「**可以存，但每次都要先确认**」——这正是我们要的：
+数据确实会变，所以必须 revalidate；而 revalidate 的代价是一个 304。
+
+实测（CDP，同一个浏览器、冷启之后按一次刷新）：
+
+| | 第 1 次访问 | 第 2 次访问 |
+|---|---|---|
+| `d3-style.css` | 17968 B | **300 B**（304） |
+| `d3-charts.js` | 57748 B | **300 B**（304） |
+| `fingerprint-data` | 513197 B | **300 B**（304，`decodedBodySize` 仍是 1570530，即从缓存取的） |
+| **合计** | **约 589 KB** | **900 B** |
+
+也没有把 304 弄坏在代理上：nginx 对压缩过的 200 会把 ETag 变弱记成 `W/"…"`，
+带着这个值回来仍然是 `304 NOT MODIFIED`；声明 `Accept-Encoding: identity` 的客户端同样能 304。
+`Vary: Accept-Encoding` 两条路径都在。
+
+### 3. 验证
+
+- 服务器 `nginx -t` 通过后才 `systemctl reload nginx`；改动脚本按「精确匹配那 6 行」替换而不是按行号，
+  匹配数不等于 1 就退出，改完 `nginx -t` 失败会自动从备份还原。备份 `/etc/nginx/nginx.conf.bak-20261007`。
+- 四个资源解压后与未压缩逐字节一致（md5 相同）。
+- 浏览器实测：星系页仍 `degraded: false`、两条坐标轴说明都在；基础页仍有图、4 本书按钮在；
+  控制台**零错误**（之前那两条 favicon 404 这次也没出现）。
+- 线上 200；四本书仍全是 `schemaVersion=2` / `projection=shared`。
+- 代码改动跑了闸门：`python -m unittest discover -s tests` **181 项**（第 11 批的 167 + 本批 5 项 × 14 个继承用例）。
+
+### 4. 旧节里已经过时的地方（按规矩不改动原行，只在这里记）
+
+- **第 1369 行**（第十一批末尾）「弱网 gzip（实测 JS 170 KB + CSS 56 KB + 接口 589 KB 全是裸传）…
+  都还没开始」——**已过时**，就是本批做的；顺带那个「接口 589 KB」是笔误，
+  当时实测是 **1.53 MB**（`curl` 的原始输出就是 1570530 B）。
+
+### 5. 本批没做的
+
+- **没动静态资源的缓存时长。** `d3-style.css` / `d3-charts.js` 现在是 Flask 发的
+  `Cache-Control: no-cache` + ETag，每次刷新走 304（300 B）。换成 `max-age=31536000` 能省掉
+  那 300 B，但代价是**部署之后浏览器可能还在用旧 JS**——这个项目正在一批一批改前端，
+  宁可每次多花 300 B 也不要「明明部署了、用户看到的还是旧的」。这个取舍和第十一批那个「线上喂旧数据」
+  是同一个教训的两面。
+- **没压 `/api/books`、`/api/book/<name>`**：都是 KB 级的小响应，`gzip_min_length 1024` 之下
+  压了也不一定更小。
+- **没给 nginx 配置进版本库**：它在 `/etc/nginx/`，而且同一个 server 块里还挂着另一个项目
+  `/thesis/`（127.0.0.1:8001）。这次的改法写在上面的 §1 里，可以照着复现。
+- 没碰任何页面渲染逻辑、分词与指标算法、文本雨。
