@@ -157,7 +157,10 @@
                 </div>
 
                 <div class="control-group" id="smoothnessGroup">
-                    <label>曲线平滑：</label>
+                    <!-- for= 不能省：没有它，<label> 和滑块之间没有任何关联，点「曲线平滑：」
+                         不会把焦点给滑块，读屏报的也不是这个可见的名字（只能退到 title）。
+                         同页别处（「存入我的图书馆」那个 checkbox）本来就是这么写的。 -->
+                    <label for="smoothness">曲线平滑：</label>
                     <input type="range" id="smoothness" min="1" max="10" value="3" title="数值越大，趋势曲线越平滑">
                 </div>
             </div>
@@ -400,6 +403,13 @@
             if (!realData) return;
             const metric = currentMetric;
             advState.data = [];
+            // 数据整份换了，上一次异常分析的去重键就作废了——不然同一本书、同一个观察角度
+            // 重新加载后，renderAnomalies 会以为「算过了」而直接跳过，面板停在旧内容上。
+            lastAnomalyKey = null;
+            // 同理，上一份数据的异常报告也整批作废——不然新书还没问回来之前，
+            // 「复制结论」会照着旧书的那几十行原文片段导出。
+            lastAnomalyReports = [];
+            lastAnomalyBooks = [];
             const books = Object.keys(realData);
 
             books.forEach(bookName => {
@@ -526,20 +536,33 @@
 
         function updateAdvCharts() {
             if (Object.keys(charts).length === 0) return;
+            // getAdvComputed() 不便宜：每本书都要 filter + sort + quantile + deviation。
+            // 它原先在这次渲染里被算三遍——这里一遍，updateHighlightVisuals 和
+            // updateDrillPanel 各自再算一遍（它们在函数内部自己调 getAdvComputed）。
+            // 输入只有三样：advState.data、selectedBooks、advState.brushRange，而这三样在
+            // 一轮同步渲染里不会变，所以把这一份传下去，两边就不用重算。
             const data = getAdvComputed();
             updateSortUI();
             updateAdvScopeLabel();
             renderAdvMean(data);
             renderAdvLine(data);
-            updateHighlightVisuals();
-            updateDrillPanel();
+            updateHighlightVisuals(data);
+            updateDrillPanel(data);
             renderInsight(data);
             renderAnomalies(data);
         }
 
-        // 「值得一看的片段」：向服务端要这本书的异常片段（统计上偏离整体较大的片段）
-        // 注意用请求序号防止旧请求的返回盖掉新结果（切书、切指标时很容易发生）
+        // 「值得一看的片段」：向服务端要这些书的异常片段（统计上偏离整体较大的片段）。
+        // 每本选中的书各问一次、各渲染一块——以前只问 data[0]，同屏选了好几本时，
+        // 第二本起在屏幕上和导出里都没有证据，而同页左边的「一句话解读」早就逐本遍历了。
+        // 注意用请求序号防止旧请求的返回盖掉新结果（切书、切指标时很容易发生）：
+        // 这里一次渲染算**一代**，同一代里每本书各发一个请求，代数变了就整批作废。
         let anomalyRequestId = 0;
+        // 上一次请求对应的「哪本书 + 哪个观察角度 + 有没有框选」。
+        // 服务端那份结果只跟这三样有关（框选只影响卡片上那句「不受上方框选影响」在不在），
+        // 所以同一个组合重复进来就直接复用，不再重发。键盘框选每按一次方向键都会重跑到
+        // 这里，原先等于每按一次发一次请求、还把那块 live region 整段重写一遍。
+        let lastAnomalyKey = null;
 
         // 相邻片段之间重叠了多少词。脚注要如实交代「这些片段不是互相独立的样本」，
         // 而旧数据没有 overlap 字段——走 normalizeBookMeta，它会按「窗口长 − 步长」推出来。
@@ -550,12 +573,74 @@
         }
 
         // 拿不到异常片段时：把原因明说，而不是把面板清空。
-        // 失败也必须写进 lastAnomalyReport——否则「导出摘要」里这一段会静默消失，
+        // 失败也必须写进 lastAnomalyReports——否则「导出摘要」里这一段会静默消失，
         // 读的人只会以为这本书没有偏离片段（那是「取不到」，不是「没有」）。
-        function showAnomalyFailure(book, displayName, mLabel, why) {
+        function showAnomalyFailure(index, book, displayName, mLabel, why) {
+            if (!Array.isArray(lastAnomalyReports)) lastAnomalyReports = [];
+            lastAnomalyReports[index] = { book, displayName, metricLabel: mLabel, failed: true, reason: why };
+            renderAnomalyPanel();
+        }
+
+        // 面板一次只画一块（单本书），多本书时按 lastAnomalyBooks 的顺序首尾相接——
+        // 后一本的标题自己会把它和前一本分开，不用额外的分隔线。
+        // 每本书的请求回来一次就重绘一次：先回来的先显示，不用等最慢的那本。
+        function renderAnomalyPanel() {
             const panel = document.getElementById('anomaly-content');
-            if (panel) panel.innerHTML = `<div class="anomaly-muted">${escapeHtml(why)}</div>`;
-            lastAnomalyReport = { book, displayName, metricLabel: mLabel, failed: true, reason: why };
+            if (!panel) return;
+            const books = Array.isArray(lastAnomalyBooks) ? lastAnomalyBooks : [];
+            if (books.length === 0) { panel.innerHTML = ''; return; }
+            const reports = Array.isArray(lastAnomalyReports) ? lastAnomalyReports : [];
+            panel.innerHTML = books.map((entry, i) => anomalyBlock(reports[i], entry)).join('');
+        }
+
+        // 一本书的那一块。report 还是 null = 这本书的请求还没回来。
+        function anomalyBlock(report, entry) {
+            const displayName = entry.displayName || entry.name;
+            if (!report) {
+                return `<div class="anomaly-muted">正在找《${escapeHtml(displayName)}》里偏离较大的片段…</div>`;
+            }
+            if (report.failed) {
+                return `<div class="anomaly-muted">${escapeHtml(report.reason)}</div>`;
+            }
+            const mLabel = report.metricLabel;
+            const items = Array.isArray(report.items) ? report.items : [];
+            if (items.length === 0) {
+                return `<div class="anomaly-muted">《${escapeHtml(report.displayName)}》的「${mLabel}」整体比较均匀，没有特别偏离的片段。</div>`;
+            }
+            const mean = report.mean;
+            const head = `<div class="anomaly-title">▸ 值得一看的片段（《${escapeHtml(report.displayName)}》）</div>`;
+            const cards = items.map(item => {
+                const value = Number(item.value);
+                const z = Number(item.zScore);
+                const dirText = z > 0 ? '偏高' : '偏低';
+                const location = (typeof formatBlockLocation === 'function')
+                    ? formatBlockLocation(report.book, item.block)
+                    : `第 ${Number(item.block) + 1} 个片段`;
+                // 这个均值来自 /api/analysis，不随上方框选变。有框选时把这一点
+                // 写出来，否则它会和「整体水平对比」上那个被框选改过的数打架。
+                const scopeNote = report.brushScoped ? '，不受上方框选影响' : '';
+                const compare = Number.isFinite(mean)
+                    ? `比全书平均（${fmtMetric(mean)}${scopeNote}）${dirText}${fmtMetric(Math.abs(mean - value))}`
+                    : '';
+                const keywords = Array.isArray(item.keywords) && item.keywords.length
+                    ? `<div class="anomaly-keywords">关键词：${escapeHtml(item.keywords.join('、'))}</div>`
+                    : '';
+                const preview = item.preview
+                    ? `<div class="anomaly-preview">"${escapeHtml(item.preview)}"</div>`
+                    : '';
+                return `
+                            <div class="anomaly-item">
+                                <div class="anomaly-head"><span class="anomaly-tag">${dirText}</span>${escapeHtml(location)}</div>
+                                <div class="anomaly-value">${mLabel} ${Number.isFinite(value) ? fmtMetric(value) : ''}${compare ? ` · ${compare}` : ''}</div>
+                                ${preview}
+                                ${keywords}
+                            </div>`;
+            }).join('');
+            // 脚注的三句话与导出共用同一个函数（anomalyNotes 在 d3-charts.js 里），
+            // 屏幕与导出物不可能各说一套。脚注按书各写一份——「本书共几个片段」这种话
+            // 一张嘴只能对着一个统计对象说。
+            const foot = `<div class="anomaly-muted">${escapeHtml(anomalyNotes(report).join(''))}点开左侧曲线可以查看它前后的变化。</div>`;
+            return head + cards + foot;
         }
 
         function renderAnomalies(data) {
@@ -563,91 +648,68 @@
             if (!panel) return;
             if (!data || data.length === 0) {
                 panel.innerHTML = '';
-                lastAnomalyReport = null;
+                lastAnomalyReports = [];
+                lastAnomalyBooks = [];
                 return;
             }
 
-            const book = data[0].name;
-            const displayName = data[0].displayName || book;
+            // 同一个「这几本书 + 观察角度 + 有无框选」组合已经算过就直接返回，别重发请求。
+            // 键里必须带上**全部**选中书的名字：只带 data[0] 的话，换了第二本书而第一本没动，
+            // 这里会当成同一份结果直接返回，第二本书的偏离片段永远停在旧数据上。
+            const books = data.map(d => ({ name: d.name, displayName: d.displayName || d.name }));
+            const anomalyKey = books.map(b => b.name).join('\u0001')
+                + `\u0000${currentMetric}\u0000${advBrushPercent() ? 1 : 0}`;
+            if (anomalyKey === lastAnomalyKey) return;
+            lastAnomalyKey = anomalyKey;
             // mLabel 提到 fetch 之前：失败分支也要用它，原来它只在成功分支里定义。
             const mLabel = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
             const requestId = ++anomalyRequestId;
-            panel.innerHTML = '<div class="anomaly-muted">正在找这本书里偏离较大的片段…</div>';
-            // 问服务端之前先清掉上一本的结果：导出/复制读的是这份缓存，留着会让「复制结论」
-            // 在这几秒里把上一本书的异常片段当成这本书的。
-            lastAnomalyReport = null;
+            // 整份替换（而不是逐条 push）：问服务端之前先清掉上一本书的结果，否则
+            // 「复制结论」在这几秒里会把上一本书的异常片段当成这本书的。
+            const reports = books.map(() => null);
+            lastAnomalyBooks = books;
+            lastAnomalyReports = reports;
+            renderAnomalyPanel();
 
-            fetch(`/api/analysis/${encodeURIComponent(book)}?metric=${encodeURIComponent(currentMetric)}`)
-                .then(resp => resp.json().catch(() => null))
-                .then(result => {
-                    if (requestId !== anomalyRequestId) return; // 已经有更新的请求了，丢弃
-                    if (!result || result.status !== 'success') {
-                        // 服务端在这条路上写了一句很具体的话（「有效的片段太少，做不了异常分析。」
-                        // 「这本书在这个观察角度下没有数据」…）。原来整句被丢掉、面板直接清空，
-                        // 用户分不清「没有偏离」和「压根没算成」。照实显示，并让导出也知道这一段缺了。
-                        showAnomalyFailure(book, displayName, mLabel,
-                            (result && result.message) || '暂时取不到这本书的偏离片段，请稍后重试。');
-                        return;
-                    }
-                    const items = result.anomalies || [];
-                    const mean = result.summary && Number(result.summary.mean);
-                    // 屏幕上渲染了什么，导出里就是什么——两块共用这一个缓存。
-                    // flagged / blockCount / overlap 三个数只服务于脚注那几句
-                    // （「这只是前 8 个」「这些片段互相重叠、不是独立样本」）。
-                    lastAnomalyReport = {
-                        book, displayName, metricLabel: mLabel, mean,
-                        brushScoped: !!advBrushPercent(),
-                        items,
-                        flagged: result.anomalyCounts && Number(result.anomalyCounts.total),
-                        blockCount: Number(result.totalBlocks) || getBookBlockCount(book),
-                        overlap: anomalyOverlapWords(book)
-                    };
-                    if (items.length === 0) {
-                        panel.innerHTML = `<div class="anomaly-muted">《${escapeHtml(displayName)}》的「${mLabel}」整体比较均匀，没有特别偏离的片段。</div>`;
-                        return;
-                    }
-
-                    const head = `<div class="anomaly-title">▸ 值得一看的片段（《${escapeHtml(displayName)}》）</div>`;
-                    const cards = items.map(item => {
-                        const value = Number(item.value);
-                        const z = Number(item.zScore);
-                        const dirText = z > 0 ? '偏高' : '偏低';
-                        const location = (typeof formatBlockLocation === 'function')
-                            ? formatBlockLocation(book, item.block)
-                            : `第 ${Number(item.block) + 1} 个片段`;
-                        // 这个均值来自 /api/analysis，不随上方框选变。有框选时把这一点
-                        // 写出来，否则它会和「整体水平对比」上那个被框选改过的数打架。
-                        const scopeNote = advBrushPercent() ? '，不受上方框选影响' : '';
-                        const compare = Number.isFinite(mean)
-                            ? `比全书平均（${fmtMetric(mean)}${scopeNote}）${dirText}${fmtMetric(Math.abs(mean - value))}`
-                            : '';
-                        const keywords = Array.isArray(item.keywords) && item.keywords.length
-                            ? `<div class="anomaly-keywords">关键词：${escapeHtml(item.keywords.join('、'))}</div>`
-                            : '';
-                        const preview = item.preview
-                            ? `<div class="anomaly-preview">"${escapeHtml(item.preview)}"</div>`
-                            : '';
-                        return `
-                            <div class="anomaly-item">
-                                <div class="anomaly-head"><span class="anomaly-tag">${dirText}</span>${escapeHtml(location)}</div>
-                                <div class="anomaly-value">${mLabel} ${Number.isFinite(value) ? fmtMetric(value) : ''}${compare ? ` · ${compare}` : ''}</div>
-                                ${preview}
-                                ${keywords}
-                            </div>`;
-                    }).join('');
-                    // 脚注的三句话与导出共用同一个函数（anomalyNotes 在 d3-charts.js 里），
-                    // 屏幕与导出物不可能各说一套。
-                    const foot = `<div class="anomaly-muted">${escapeHtml(anomalyNotes(lastAnomalyReport).join(''))}点开左侧曲线可以查看它前后的变化。</div>`;
-                    panel.innerHTML = head + cards + foot;
-                })
-                .catch(() => {
-                    if (requestId !== anomalyRequestId) return;
-                    // 原来这里是「拿不到就不占地方，不打扰用户」——面板先闪一句「正在找…」
-                    // 再凭空消失，用户分不清是没算成还是本来就均匀；同时缓存被清空，
-                    // 导出的摘要里整段【值得一看的片段】被无声略过。现在两边都明说。
-                    showAnomalyFailure(book, displayName, mLabel,
-                        '没能连上分析服务，暂时取不到这本书的偏离片段。');
-                });
+            books.forEach((entry, index) => {
+                const book = entry.name;
+                const displayName = entry.displayName;
+                fetch(`/api/analysis/${encodeURIComponent(book)}?metric=${encodeURIComponent(currentMetric)}`)
+                    .then(resp => resp.json().catch(() => null))
+                    .then(result => {
+                        if (requestId !== anomalyRequestId) return; // 已经有更新的一代了，丢弃
+                        if (!result || result.status !== 'success') {
+                            // 服务端在这条路上写了一句很具体的话（「有效的片段太少，做不了异常分析。」
+                            // 「这本书在这个观察角度下没有数据」…）。原来整句被丢掉、面板直接清空，
+                            // 用户分不清「没有偏离」和「压根没算成」。照实显示，并让导出也知道这一段缺了。
+                            showAnomalyFailure(index, book, displayName, mLabel,
+                                (result && result.message) || '暂时取不到这本书的偏离片段，请稍后重试。');
+                            return;
+                        }
+                        const items = result.anomalies || [];
+                        const mean = result.summary && Number(result.summary.mean);
+                        // 屏幕上渲染了什么，导出里就是什么——两块共用这一个缓存。
+                        // flagged / blockCount / overlap 三个数只服务于脚注那几句
+                        // （「这只是前 8 个」「这些片段互相重叠、不是独立样本」）。
+                        reports[index] = {
+                            book, displayName, metricLabel: mLabel, mean,
+                            brushScoped: !!advBrushPercent(),
+                            items,
+                            flagged: result.anomalyCounts && Number(result.anomalyCounts.total),
+                            blockCount: Number(result.totalBlocks) || getBookBlockCount(book),
+                            overlap: anomalyOverlapWords(book)
+                        };
+                        renderAnomalyPanel();
+                    })
+                    .catch(() => {
+                        if (requestId !== anomalyRequestId) return;
+                        // 原来这里是「拿不到就不占地方，不打扰用户」——面板先闪一句「正在找…」
+                        // 再凭空消失，用户分不清是没算成还是本来就均匀；同时缓存被清空，
+                        // 导出的摘要里整段【值得一看的片段】被无声略过。现在两边都明说。
+                        showAnomalyFailure(index, book, displayName, mLabel,
+                            '没能连上分析服务，暂时取不到这本书的偏离片段。');
+                    });
+            });
         }
 
         // 一句话解读：把图表自动翻译成大白话
@@ -853,11 +915,16 @@
             const pathsMerged = paths.join(
                 enter => enter.append("path").attr("class", d => `book-el line-path book-${d.id}`)
                     .attr("fill", "none").attr("stroke-width", 1.5).attr("stroke", d=>d.color)
+                    // 线型是第二编码通道：色盲读者靠它区分书（见 d3-charts.js 的 dashForBook）。
+                    // 颜色和线型同源同槽位，所以不会出现两者指不同书的情况。
+                    .attr("stroke-dasharray", d => (typeof dashForBook === 'function' ? dashForBook(d.name) : null))
                     .attr("d", d => line(d.activeSegment))
                     .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>${advMeanLabel()}: ${fmtMetric(d.currentMean)}`); })
                     .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
                     .on("click", (e, d) => advDrillDown(d)),
-                update => update.attr("stroke", d => d.color).attr("d", d => line(d.activeSegment)),
+                update => update.attr("stroke", d => d.color)
+                    .attr("stroke-dasharray", d => (typeof dashForBook === 'function' ? dashForBook(d.name) : null))
+                    .attr("d", d => line(d.activeSegment)),
                 exit => exit.remove()
             );
 
@@ -1027,6 +1094,18 @@
             if (overlay.empty()) return;
             const STEP = Math.max(1, Math.round(w / 100));
 
+            // 键盘发出的每一次 brush.move 都先打个标记，advBrushed 靠它决定这次要不要把
+            // 两块结论区静音（见 beginQuietConclusions 的说明）。d3 的 brush 事件是在
+            // brush.move 里**同步**派发的，所以 try/finally 就够了，不用等异步回来。
+            function moveBrushByKeyboard(selection) {
+                advKeyboardBrush = true;
+                try {
+                    brushG.call(brush.move, selection);
+                } finally {
+                    advKeyboardBrush = false;
+                }
+            }
+
             overlay.attr("tabindex", 0)
                 .attr("role", "application")
                 .attr("aria-label", "片段范围选择框：左右方向键移动，按住 Shift 加左右方向键调整右边界，Esc 清空。下方详情卡会显示这个范围内的均值")
@@ -1035,7 +1114,7 @@
                     if (event.key === 'Escape') {
                         if (!current) return;
                         event.preventDefault();
-                        brushG.call(brush.move, null);
+                        moveBrushByKeyboard(null);
                         return;
                     }
                     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -1044,7 +1123,7 @@
                     if (!current) {
                         // 还没框过：第一次按键先划出中间一段，用户不用凭空知道该按哪边
                         const mid = w / 2;
-                        brushG.call(brush.move, [Math.max(0, mid - STEP * 5), Math.min(w, mid + STEP * 5)]);
+                        moveBrushByKeyboard([Math.max(0, mid - STEP * 5), Math.min(w, mid + STEP * 5)]);
                         return;
                     }
                     let [x0, x1] = current;
@@ -1055,7 +1134,7 @@
                         x0 = Math.min(Math.max(0, x0 + dir * STEP), w - width);
                         x1 = x0 + width;
                     }
-                    brushG.call(brush.move, [x0, x1]);
+                    moveBrushByKeyboard([x0, x1]);
                 });
         }
 
@@ -1068,11 +1147,54 @@
             el.textContent = text;
         }
 
+        // 键盘框选（方向键）每按一次都会走 advBrushed → updateAdvCharts → renderInsight，
+        // 而 #insight-content / #anomaly-content 都是 aria-live 的。按住方向键时，读屏会把
+        // 整段「一句话解读」一次次排进播报队列——按十下要念十遍，而且松手之后还在念。
+        // 所以按键期间先把这两块的直播状态关掉（aria-live="off" 时改写内容不播报），
+        // 停手 900ms 之后再开回来，并补播一句短的，免得键盘用户按完什么都没听到。
+        // 只有键盘这条路会静音：鼠标框选要松手才触发一次，那一次本来就该播。
+        const QUIET_CONCLUSION_MS = 900;
+        let conclusionsQuiet = false;
+        let quietConclusionsTimer = null;
+        let advKeyboardBrush = false;
+
+        function conclusionPanels() {
+            return ['insight-content', 'anomaly-content']
+                .map(id => document.getElementById(id))
+                .filter(Boolean);
+        }
+
+        function beginQuietConclusions() {
+            if (!conclusionsQuiet) {
+                conclusionsQuiet = true;
+                conclusionPanels().forEach(el => el.setAttribute('aria-live', 'off'));
+            }
+            if (quietConclusionsTimer) clearTimeout(quietConclusionsTimer);
+            quietConclusionsTimer = setTimeout(endQuietConclusions, QUIET_CONCLUSION_MS);
+        }
+
+        function endQuietConclusions() {
+            if (quietConclusionsTimer) {
+                clearTimeout(quietConclusionsTimer);
+                quietConclusionsTimer = null;
+            }
+            if (!conclusionsQuiet) return;
+            conclusionsQuiet = false;
+            conclusionPanels().forEach(el => el.setAttribute('aria-live', 'polite'));
+            const range = advBrushPercent();
+            announceDrill(range
+                ? `已框选 ${range} 区段，页面上这些结论都只统计这一段。`
+                : '已清空框选，结论恢复为全书口径。');
+        }
+
         // options.announce === false：这一次重绘不要往 live region 里播报。
         // 悬停预览会走这条路——鼠标划过每一根柱子都播报一遍，读屏用户听到的是一串重复噪音。
-        function updateDrillPanel(options) {
+        // 第一个参数是**可选**的已算好的数据（见 updateAdvCharts 的说明）。不传就自己算一份，
+        // 所以旧调用点不会坏。用 Array.isArray 判而不是判真假：调用点里出现过传对象当第一个
+        // 参数的历史写法（options 在前），万一漏改一处，这里退化成「重算一遍」而不是崩。
+        function updateDrillPanel(computedDataIn, options) {
             const panel = document.getElementById('adv-drill-content');
-            const computedData = getAdvComputed();
+            const computedData = Array.isArray(computedDataIn) ? computedDataIn : getAdvComputed();
             let ids = liveSelectedIds(computedData);
 
             // 悬停预览：鼠标停在左边哪本书上，右边就临时只显示那一本。只影响这一次渲染，
@@ -1115,12 +1237,16 @@
                     const keywords = b.keywords ? b.keywords.join(", ") : "";
                     const loc = formatBlockLocation(book.name, b.blockIndex) + formatWordCount(b.wordCount);
                     const copyTxt = b.extendedPreview || b.preview || '';
+                    // 摘录和关键词都是英文（关键词是 the / his / of 这类功能词）。不标 lang，
+                    // 读屏会拿中文音库逐字母念。但「无预览」这句兜底文案是中文，不能跟着标——
+                    // 所以 lang 只在真有英文内容时才加。
+                    const previewLang = b.preview ? ' lang="en"' : '';
                     bookHtml += `
                         <div class="drill-item" style="border-left-color:${book.color}; margin-bottom: 5px;">
                             <strong>#${i+1} 最高点: ${fmtMetric(b.value)}</strong>
                             <div style="margin:2px 0;color:#6b6254;font-size:10px">📍 ${escapeHtml(loc)}</div>
-                            <p style="margin:0;color:#6b6254;line-height:1.2;max-height:50px;overflow:hidden">${b.preview ? escapeHtml(b.preview.substring(0,60)) + '...' : '无预览'}</p>
-                            ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:9px">※ ${escapeHtml(keywords)}</div>` : ''}
+                            <p${previewLang} style="margin:0;color:#6b6254;line-height:1.2;max-height:50px;overflow:hidden">${b.preview ? escapeHtml(b.preview.substring(0,60)) + '...' : '无预览'}</p>
+                            ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:9px">※ <span lang="en">${escapeHtml(keywords)}</span></div>` : ''}
                             ${copyTxt ? `<div style="margin-top:4px;text-align:right;">${copyButtonHtml(copyTxt, 'drill-copy-btn')}</div>` : ''}
                         </div>
                     `;
@@ -1148,8 +1274,9 @@
             const index = advState.selectedIds.indexOf(id);
             if (index > -1) {
                 advState.selectedIds.splice(index, 1);
-                updateDrillPanel();
-                updateHighlightVisuals();
+                const data = getAdvComputed();
+                updateDrillPanel(data);
+                updateHighlightVisuals(data);
                 // 被点掉的那个「✕ 收起」按钮正是刚被重建掉的节点，焦点会掉回 body——
                 // 键盘用户按一次回车就迷路了。把焦点接到详情区上（它带 tabindex="-1"），
                 // 再往下 Tab 一次就能回到还没有被收起的卡片按钮上。
@@ -1166,14 +1293,15 @@
             } else {
                 advState.selectedIds.push(book.id);
             }
-            updateDrillPanel();
-            updateHighlightVisuals();
+            const data = getAdvComputed();
+            updateDrillPanel(data);
+            updateHighlightVisuals(data);
         }
 
-        function updateHighlightVisuals() {
+        function updateHighlightVisuals(computedData) {
             // 必须用过滤后的 id：直接遍历 advState.selectedIds 时，一个已经被取消勾选
             // 的书会让这里「把全部调暗、再点亮一个不存在的元素」，整页停在 12% 不透明度。
-            const ids = liveSelectedIds();
+            const ids = liveSelectedIds(computedData);
             // 自动模式下每本书的卡都开着，「选中」等于没有重点。这时候全点亮只会让一进页面
             // 就是满屏的选中态——重点是要靠对比才存在的，没有对比就不该有重点。
             if (ids.length === 0 || advState.drillAuto) {
@@ -1192,13 +1320,14 @@
             d3.selectAll(".book-el").classed("dimmed", true);
             d3.selectAll(`.book-${book.id}`).classed("dimmed", false).classed("highlighted", true);
             advState.previewId = book.id;
-            updateDrillPanel({ announce: false });
+            updateDrillPanel(null, { announce: false });
         }
 
         function advUnhighlight() {
             advState.previewId = null;
-            updateHighlightVisuals();
-            updateDrillPanel({ announce: false });
+            const data = getAdvComputed();
+            updateHighlightVisuals(data);
+            updateDrillPanel(data, { announce: false });
             hideAdvTooltip();
         }
 
@@ -1250,6 +1379,11 @@
         }
 
         function advBrushed(event) {
+            // 必须在 updateAdvCharts() 之前读这个标记——它就是靠它决定这一次要不要静音。
+            // 不是键盘发的框选（鼠标松手、advReset 里的 programmatic move）一律解除静音：
+            // endQuietConclusions 在本来就不静音时是空操作，所以重复调用无害。
+            if (advKeyboardBrush) beginQuietConclusions();
+            else endQuietConclusions();
             if (!event.selection) {
                 if (advState.brushRange) { advState.brushRange = null; updateAdvCharts(); }
             } else {
@@ -1276,8 +1410,11 @@
             }
             // chips 的选中态也来自 selectedBooks，重新走一遍 initAdvancedData 把它重画
             if (typeof refreshAllActiveCharts === 'function') refreshAllActiveCharts();
-            updateDrillPanel();
-            updateHighlightVisuals();
+            // 下面 updateAdvCharts() 本来也会做这两件事，但它开头有「一张图都还没建好就
+            // 直接 return」的守卫；那一步正好是首次进来时的状态，所以这两行不能删。
+            const data = getAdvComputed();
+            updateDrillPanel(data);
+            updateHighlightVisuals(data);
             updateAdvCharts();
             if (typeof syncUrlState === 'function') syncUrlState();
         }

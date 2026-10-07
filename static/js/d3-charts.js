@@ -33,7 +33,14 @@ let builtinBookNames = [];    // 服务器上常驻的示例书（用作解读�
 // （本文件先于那段脚本加载，所以在这里声明不会撞上暂时性死区）。导出摘要与
 // 「复制结论」都读它——屏幕上是哪几句，导出的就是哪几句，不另算一套。
 let lastInsightLines = [];    // 一句话解读（含框选口径说明那句）
-let lastAnomalyReport = null; // 值得一看的片段：{book, displayName, metricLabel, mean, brushScoped, items}
+// 值得一看的片段：**每本书一条** {book, displayName, metricLabel, mean, brushScoped, items}。
+// 顺序与「全书对比」页当前选中的书一致；某本书的请求还没回来时那一格是 null。
+// 以前这里是单个对象，只装得下第一本书——同屏选了好几本时，屏幕和导出里都只有
+// 第一本的偏离片段，而同页左边的「一句话解读」早就逐本遍历了。
+let lastAnomalyReports = [];
+// 与 lastAnomalyReports 一一对应的书名表（{name, displayName}），顺序即面板上的顺序。
+// 面板重绘、以及「这本书的报告还没回来」时要显示哪本书的名字，都得靠它。
+let lastAnomalyBooks = [];
 
 const METRIC_KEYS = ['sentenceLength', 'simpsonIndex', 'hapaxLegomena', 'functionWords'];
 const VIEW_IDS = ['view-main', 'view-galaxy', 'view-dashboard'];
@@ -499,13 +506,22 @@ function initEventListeners() {
         syncUrlState();
     });
 
-    // 平滑度调整
+    // 平滑度调整。滑块拖动时 input 是连续触发的，而 initChart() 第一步就把
+    // svg 里所有元素 remove 掉再整张重画（轴、网格、每本书的曲线、上百个数据点、
+    // 图例），代价随「书数 × 片段数」增长——不节流的话拖一次要重画几十遍，
+    // 表现就是拖不动、松手才跟上。
+    // 用 rAF 合并成每帧最多画一次：取的是 module 级的 smoothness，永远是当前值，
+    // 所以中途丢帧只是少画一次，不会画成旧值。URL 同步照旧每次 input 都做，
+    // 免得标签页在后台时 rAF 不触发、分享链接停在半路的值上。
+    let smoothnessFrame = null;
     document.getElementById('smoothness').addEventListener('input', function(e) {
         smoothness = parseInt(e.target.value);
-        if (realData) {
-            initChart();
-        }
         syncUrlState();
+        if (!realData || smoothnessFrame) return;
+        smoothnessFrame = requestAnimationFrame(() => {
+            smoothnessFrame = null;
+            initChart();
+        });
     });
 
     // 导出图像 / 导出摘要 / 复制链接
@@ -1166,9 +1182,17 @@ function drawMultiLineChart(svg, booksArray) {
     if (chartData.length === 0) { showNoDataMessage(); return; }
 
     const containerWidth = svg.node().parentNode.getBoundingClientRect().width;
-    const height = 400;
-    const margin = { top: 40, right: 120, bottom: 50, left: 60 }; 
+    const margin = { top: 40, right: 120, bottom: 50, left: 60 };
     const width = containerWidth - margin.left - margin.right;
+    // 绘图区高度固定 310（也就是原来写死的 400 减去上下留白），书多书少曲线形状一致。
+    // 但画布本身要按右侧图例的行数撑高：图例一本一行、行距 25px 从 margin.top 往下堆，
+    // 原先高度写死 400，超过 (400-40)/25 ≈ 14 本，后面的书就掉到 viewBox 外面——
+    // 图上有那条线，图例里却找不到它叫什么。热力图早就按内容撑高了
+    // （见 drawMultiHeatmap 的 totalHeight），折线图这里是漏的。
+    // 只长画布、不长绘图区：否则书一多，同一条曲线会被拉得比书少时陡。
+    const plotHeight = 400 - margin.top - margin.bottom;
+    const legendRowHeight = 25;
+    const height = Math.max(400, margin.top + chartData.length * legendRowHeight + margin.bottom);
 
     // 热力图会按书的数量把 svg 撑高（见 drawMultiHeatmap 的 style("height")），
     // 折线图必须把高度写回来：initChart 的 selectAll("*").remove() 只删子节点，
@@ -1199,13 +1223,12 @@ function drawMultiLineChart(svg, booksArray) {
     }
 
     const xScale = d3.scaleLinear().domain([0, maxBlocks]).range([0, width]);
-    const yScale = d3.scaleLinear().domain([yMin, yMax]).range([height - margin.top - margin.bottom, 0]);
+    const yScale = d3.scaleLinear().domain([yMin, yMax]).range([plotHeight, 0]);
 
     // 取色统一走 colorForBook（按全库顺序，不按点选顺序），
     // 否则同一本书在这张图和「全书对比」页会是两个颜色
 
-    const chartHeight = height - margin.top - margin.bottom;
-    g.append("g").attr("transform", `translate(0,${chartHeight})`).call(d3.axisBottom(xScale));
+    g.append("g").attr("transform", `translate(0,${plotHeight})`).call(d3.axisBottom(xScale));
     g.append("g").call(d3.axisLeft(yScale));
     
     g.append("g").attr("class", "grid").call(d3.axisLeft(yScale).tickSize(-width).tickFormat("")).attr("stroke-opacity", 0.1);
@@ -1222,7 +1245,7 @@ function drawMultiLineChart(svg, booksArray) {
             g.append("text")
                 .attr("class", "axis-label")
                 .attr("x", width / 2)
-                .attr("y", chartHeight + 38 + i * 14)
+                .attr("y", plotHeight + 38 + i * 14)
                 .attr("text-anchor", "middle")
                 .text(line);
         });
@@ -1230,7 +1253,7 @@ function drawMultiLineChart(svg, booksArray) {
     g.append("text")
         .attr("class", "axis-label")
         .attr("transform", "rotate(-90)")
-        .attr("x", -chartHeight / 2)
+        .attr("x", -plotHeight / 2)
         .attr("y", -46)
         .attr("text-anchor", "middle")
         .text(getMetricLabel(currentMetric));
@@ -1248,6 +1271,7 @@ function drawMultiLineChart(svg, booksArray) {
             .attr("fill", "none")
             .attr("stroke", colorForBook(bookData.book))
             .attr("stroke-width", 2.5)
+            .attr("stroke-dasharray", dashForBook(bookData.book))
             .attr("d", line)
             .style("opacity", 0.8)
             .on("mouseover", function() { d3.select(this).attr("stroke-width", 5); })
@@ -1326,9 +1350,17 @@ function drawMultiLineChart(svg, booksArray) {
 
     const legend = svg.append("g").attr("transform", `translate(${width + 20}, ${margin.top})`);
     chartData.forEach((d, i) => {
-        const row = legend.append("g").attr("transform", `translate(0, ${i * 25})`);
-        row.append("rect").attr("width", 15).attr("height", 15).attr("fill", colorForBook(d.book));
-        row.append("text").attr("x", 20).attr("y", 12).text(getBookDisplayName(d.book)).style("font-size", "12px").style("fill", "#5c5346");
+        const row = legend.append("g").attr("transform", `translate(0, ${i * legendRowHeight})`);
+        // 图例里画的是**线**而不是色块：这是折线图的图例，把每本书的线型一并画出来，
+        // 只靠颜色分不出来的读者才能把图上的线和这里的书名对上。色块形状留给
+        // 热力图与星系那两处（它们的图元本来就不是线）。
+        row.append("line")
+            .attr("x1", 0).attr("x2", 16)
+            .attr("y1", 7.5).attr("y2", 7.5)
+            .attr("stroke", colorForBook(d.book))
+            .attr("stroke-width", 2.5)
+            .attr("stroke-dasharray", dashForBook(d.book));
+        row.append("text").attr("x", 22).attr("y", 12).text(getBookDisplayName(d.book)).style("font-size", "12px").style("fill", "#5c5346");
     });
     
     svg.append("text")
@@ -1640,12 +1672,25 @@ function smoothData(data, windowSize) {
     });
 }
 
+// 提示框全程只建一个，反复复用。以前每次悬停都新建一个 div、量一次
+// getBoundingClientRect——读几何量会强制同步布局（reflow）——hideTooltip 再把它删掉，
+// 下一次又重新建。鼠标扫过折线或热力图时每秒几十次，这是最容易被漏掉的一处「用起来卡」。
+// 元素留在 DOM 里不删：.tooltip 在 CSS 里已经是 pointer-events:none，
+// 一个透明但仍存在的提示框不会挡住下面的图。
+let tooltipEl = null;
+
 function showTooltip(event, data, bookName) {
-    const tooltip = d3.select("body").append("div")
-        .attr("class", "tooltip")
-        .style("opacity", 0)
-        .style("left", "0px")
-        .style("top", "0px");
+    if (!tooltipEl) {
+        tooltipEl = d3.select("body").append("div")
+            .attr("class", "tooltip")
+            .style("opacity", 0)
+            .style("left", "0px")
+            .style("top", "0px");
+    }
+    const tooltip = tooltipEl;
+    // 上一次的淡出可能还没走完（hideTooltip 现在不删节点）。先掐断它、把透明度拨回 0
+    // 再重新淡入，否则新内容会从「正在淡出的那个中间值」接着往上走，闪一下。
+    tooltip.interrupt().style("opacity", 0);
 
     const keywords = Array.isArray(data.keywords) ? data.keywords.map(escapeHtml).join(', ') : '';
     // 定位到章节：热力图上那条虚线到底指哪一章，悬停就能看到
@@ -1661,7 +1706,7 @@ function showTooltip(event, data, bookName) {
         <div style="margin-bottom: 3px;">
             <strong>${escapeHtml(getMetricLabel(currentMetric))}:</strong> ${escapeHtml(formatMetric(data.value))}
         </div>
-        ${keywords ? `<div style="margin-top: 5px;"><strong>关键词:</strong> ${keywords}</div>` : ''}
+        ${keywords ? `<div style="margin-top: 5px;"><strong>关键词:</strong> <span lang="en">${keywords}</span></div>` : ''}
     `);
 
     // 定位：先按鼠标右下角摆，量出真实尺寸后按视口夹紧。
@@ -1686,11 +1731,13 @@ function showTooltip(event, data, bookName) {
 }
 
 function hideTooltip() {
-    d3.selectAll(".tooltip")
+    if (!tooltipEl) return;
+    // 只淡出、不删节点——删了下次还得重建。CSS 里 .tooltip 是 pointer-events:none，
+    // 所以留一个透明的提示框在页面上不会挡到任何交互。
+    tooltipEl.interrupt()
         .transition()
         .duration(motionDuration(200))
-        .style("opacity", 0)
-        .remove();
+        .style("opacity", 0);
 }
 
 function showDetail(data, bookName) {
@@ -1699,7 +1746,7 @@ function showDetail(data, bookName) {
 
     const displayName = getBookDisplayName(bookName);
     const keywordsHtml = Array.isArray(data.keywords) && data.keywords.length > 0
-        ? data.keywords.map(keyword => `<span class="keyword-tag">${escapeHtml(keyword)}</span>`).join('')
+        ? data.keywords.map(keyword => `<span class="keyword-tag" lang="en">${escapeHtml(keyword)}</span>`).join('')
         : '';
     const locationText = formatBlockLocation(bookName, data.block) + formatWordCount(data.wordCount);
     const chapter = getBlockChapter(bookName, data.block);
@@ -1716,7 +1763,7 @@ function showDetail(data, bookName) {
     const previewHtml = data.preview ? `
             <div>
                 <h4>📄 原文片段</h4>
-                <p style="margin-top: 10px; color: #6b6254; font-style: italic;">
+                <p lang="en" style="margin-top: 10px; color: #6b6254; font-style: italic;">
                     "${escapeHtml(data.preview)}"
                 </p>
                 ${sourceText ? `<p class="excerpt-note">以上为片段开头的引文；复制得到的是更长的摘录，仍非全文（一个片段约 1 万词）。</p>` : ''}
@@ -1929,10 +1976,24 @@ function formatWordCount(wordCount) {
 
 // 复制原文片段。原文（可能含引号/换行/CJK）不进 HTML 属性：
 // 先存入内存注册表，按钮只带数字索引，由全局委托统一处理点击。
+//
+// 这个注册表原先只 push、从不清空，也没有上限：同一段摘录每重绘一次就再追加一条
+// （看板的悬停预览、排序、框选、换指标都会重绘；点开片段详情也会），页面开着越久
+// 数组越大，而摘录本身有 1200 字符。
+// 现在按文本去重：同一段文字复用同一个下标，重复注册不再增长。
+// 注意**不能**改成「满了就清空」——按钮上带的是下标，清空会让已经渲染出去的按钮
+// 指到别人身上。去重表只增不减，所以任何时刻的旧按钮都仍然指向它当初那段原文。
+// 不同摘录的数量天然有上限（一本书的片段数），所以不设人为的条数上限。
 const _copySources = [];
+const _copySourceIndex = new Map();
 
 function registerCopySource(text) {
-    return _copySources.push(String(text ?? '')) - 1;
+    const key = String(text ?? '');
+    const known = _copySourceIndex.get(key);
+    if (known !== undefined) return known;
+    const idx = _copySources.push(key) - 1;
+    _copySourceIndex.set(key, idx);
+    return idx;
 }
 
 // 「这段摘录有多少字」只有一个算法，两处（卡片按钮、原文弹窗）都从这里取。
@@ -2124,11 +2185,35 @@ function bookColorHash(value) {
 // 所以看板配色零变化。查不到只可能发生在数据加载之前，而那时三张图都还没开始画
 // （initChart / initAdvancedData / initStyleGalaxy 都会在 !realData 时提前返回），
 // 所以按名字哈希取色这条分支是纯防御，不追求与索引分支同色。
-function colorForBook(name) {
+function bookSlot(name) {
     const keys = (realData && typeof realData === 'object') ? Object.keys(realData) : [];
     const index = keys.indexOf(String(name));
-    const slot = index >= 0 ? index : bookColorHash(name);
-    return BOOK_COLOR_RANGE[slot % BOOK_COLOR_RANGE.length];
+    return index >= 0 ? index : bookColorHash(name);
+}
+
+function colorForBook(name) {
+    return BOOK_COLOR_RANGE[bookSlot(name) % BOOK_COLOR_RANGE.length];
+}
+
+// 只靠颜色区分书，对红绿色盲等于没区分——八种色相里他们还分得开的只有两三种，
+// 而这套色板里 #b5472f / #a67c3d / #a2546b 三者的明度与色相都挨得很近。
+// 所以给每条**线**再配一个线型（第二编码通道）：颜色分不出来时靠虚实分辨。
+// 槽位与颜色共用 bookSlot()，同一本书的颜色和线型永远绑在一起，不会出现
+// 「图例画着虚线、图上却是实线」这种自相矛盾。0 号槽是实线，所以只选中一本书时
+// （默认首屏就是这一种）外观和改动前完全一样。
+const BOOK_DASH_RANGE = [
+    '',                 // 实线
+    '10 5',
+    '2 4',
+    '14 4 3 4',
+    '6 3 2 3',
+    '1 4',
+    '16 4 2 4 2 4',
+    '5 3'
+];
+
+function dashForBook(name) {
+    return BOOK_DASH_RANGE[bookSlot(name) % BOOK_DASH_RANGE.length];
 }
 
 // ==========================================
@@ -2320,6 +2405,9 @@ function collectExportLegend() {
             seen.add(datum.id);
             items.push({
                 color: path.getAttribute('stroke') || datum.color,
+                // 线型一并带走：导出的图例若只剩颜色，就等于把屏幕上唯一那条
+                // 「不靠颜色也能分辨」的线索丢在页面里了。
+                dash: path.getAttribute('stroke-dasharray') || '',
                 name: datum.displayName || datum.name
             });
         });
@@ -2458,6 +2546,7 @@ function attachExportLegend(prep, items, axisNote, shape) {
             seg.setAttribute('y2', String(y - 4));
             seg.setAttribute('stroke', item.color);
             seg.setAttribute('stroke-width', '2');
+            if (item.dash) seg.setAttribute('stroke-dasharray', item.dash);
             g.appendChild(seg);
         } else {
             const swatch = document.createElementNS(NS, 'rect');
@@ -2676,13 +2765,19 @@ function anomalyNotes(report) {
     return notes;
 }
 
-// 「值得一看的片段」的纯文字版本，同样取自屏幕上那一份（lastAnomalyReport）。
+// 「值得一看的片段」的纯文字版本，同样取自屏幕上那一份（lastAnomalyReports）。
 // 还没加载出来（没进「全书对比」页）时返回空串，调用方据此跳过这一节——
 // 宁可不说，也不要在导出物里编一段屏幕上没有的话。
 // 但「取不到」和「没去看过」是两回事：前者屏幕上已在面板里说明了原因，
 // 导出物里也必须写出来，否则读的人只会以为这本书没有偏离片段。
+// 屏幕上是逐本一块，这里就是逐本一段，中间空一行隔开；只选一本书时输出与以前逐字节相同。
 function buildAnomalyText() {
-    const report = lastAnomalyReport;
+    const reports = Array.isArray(lastAnomalyReports) ? lastAnomalyReports.filter(Boolean) : [];
+    if (reports.length === 0) return '';
+    return reports.map(anomalyTextForReport).filter(Boolean).join('\n\n');
+}
+
+function anomalyTextForReport(report) {
     if (!report) return '';
     const head = `《${report.displayName}》（观察角度：${report.metricLabel}）`;
     if (report.failed) {
@@ -3126,12 +3221,21 @@ function showGalaxyError(message) {
 // 光一句「正在加载数据...」在那三分钟里和没有提示是一样的。
 const LOADING_WAIT_HINT = '如果这台服务刚启动，需要先生成示例数据，可能要等 1–3 分钟，页面没有卡死。';
 
+// 「加载中」「出错」这两张状态卡**不参与读屏播报**（aria-hidden），因为同一句话已经由
+// 顶部状态条那个 live region 念过一遍了——两块同时可见时，读屏会把整句话连读两遍。
+// 判据是「状态条上那条消息会不会比卡片先消失」：setGlobalStatus 只让 success/notice
+// 在 6 秒后自己收起，loading 和 error 会一直留到下一次状态更新。所以这两张卡片被摘掉
+// 也丢不了信息。反过来，「成功」「没有数据」两张卡片不摘：前者的第二句（点图看详情）
+// 是状态条里没有的，后者的状态条 6 秒就没了。
+// 用 aria-hidden 而不是临时摘掉 #detailPanel 的 role/aria-live：后者要再设回去，而
+// 「live region 从非 live 变成 live 时，已有内容算不算一次新播报」各家读屏不一致，
+// 一旦判错，正常的片段详情卡（点数据点弹出来的那张）就整个不播了——那是回退，不是修复。
 function showLoading(message) {
     setGlobalStatus('loading', `${message} ${LOADING_WAIT_HINT}`);
     const detailPanel = document.getElementById('detailPanel');
     if (!detailPanel) return;
     detailPanel.innerHTML = `
-        <div class="state-card loading">
+        <div class="state-card loading" aria-hidden="true">
             <h3>◌ ${escapeHtml(message)}</h3>
             <p>${escapeHtml(LOADING_WAIT_HINT)}</p>
             <div class="state-spinner" aria-hidden="true"></div>
@@ -3163,7 +3267,7 @@ function showError(message) {
     const detailPanel = document.getElementById('detailPanel');
     if (!detailPanel) return;
     detailPanel.innerHTML = `
-        <div class="detail-card state-card error">
+        <div class="detail-card state-card error" aria-hidden="true">
             <h3>错误</h3>
             <p>${escapeHtml(message)}</p>
         </div>
@@ -3444,9 +3548,12 @@ function initStyleGalaxy() {
         
         const allCircles = g.selectAll("circle");
         const allNodeData = allCircles.data();
-        const neighbors = findNeighbors(d, allNodeData, 120); 
+        const neighbors = findNeighbors(d, allNodeData, 120);
+        // 用 Set 而不是数组 includes：neighbors 最多和全图节点数同量级，
+        // 逐个 includes 在「邻居多」时退化成 O(n²)，扫一圈圆点就是上万次线性查找。
+        const neighborSet = new Set(neighbors);
 
-        allCircles.filter(node => neighbors.includes(node))
+        allCircles.filter(node => neighborSet.has(node))
             .transition().duration(motionDuration(100))
             .attr("stroke", "#b5472f")
             .attr("stroke-width", 1.5)
@@ -3595,6 +3702,10 @@ function openGalaxyModal(d) {
             d.keywords.forEach(kw => {
                 const span = document.createElement('span');
                 span.textContent = kw;
+                // 关键词是英文（the / his / of 这类功能词）。不标 lang，读屏会拿中文音库
+                // 逐字母去念；标了才会切到英文音库。只标这一个 span——下面那个「无关键词」
+                // 的中文 span 不能跟着被标成英文。
+                span.lang = 'en';
                 keywordContainer.appendChild(span);
             });
         } else {
@@ -3607,7 +3718,14 @@ function openGalaxyModal(d) {
 
     const textContainer = document.getElementById('modal-long-text');
     const excerpt = d.extendedPreview || d.preview || '';
-    if (textContainer) textContainer.textContent = excerpt || "暂无详细文本内容...";
+    if (textContainer) {
+        textContainer.textContent = excerpt || "暂无详细文本内容...";
+        // 有摘录时这段是英文原文，要标 lang 让读屏换英文音库；没有摘录时容器里放的是
+        // 中文兜底文案，那就得把 lang 摘掉——元素是复用的，上一本书留下的 lang="en"
+        // 会让这句中文也被按英文念。
+        if (excerpt) textContainer.lang = 'en';
+        else textContainer.removeAttribute('lang');
+    }
 
     // 说清「这是摘录，不是全文」。字数按真正显示出来的字符算（_preview 会补省略号，
     // 那三个点不是原文），不写死 1200——老数据（只有 functionWords 带 extended_preview）
@@ -3789,7 +3907,7 @@ function updateHUD(analysisData, metricLabel) {
             <span class="hud-label">共同关键词:</span>
         </div>
         <div class="hud-tags">
-            ${analysisData.topKeywords.map(k => `<span class="hud-tag">${k}</span>`).join('')}
+            ${analysisData.topKeywords.map(k => `<span class="hud-tag" lang="en">${k}</span>`).join('')}
         </div>
         <div style="margin-top:10px; padding-top:5px; border-top:1px dashed rgba(46, 42, 36, 0.12); font-size:10px; color:#6b6254;">
             * 挨得近只说明高频小词的用法相近，不代表内容或水平相似。
@@ -3805,6 +3923,14 @@ function updateHUD(analysisData, metricLabel) {
 
 let matrixInterval = null;
 let isMatrixOn = false;
+// 停止时要把画布擦干净，但得等那层淡出走完，所以是延时 1 秒才动手。
+// 这 1 秒里用户要是又点了「开始」，这个待执行的清除会落在**新的** interval 上，
+// 把刚起来的雨冻住——所以把计时器存下来，重新开始时先撤掉它。
+let matrixStopTimer = null;
+// 换窗口大小时要按新宽度补/删列。用命名函数保存，重启时先把上一次的摘掉，
+// 免得反复开关堆出一串监听器（旧写法用 window.onresize = 赋值，虽然不会叠加，
+// 但它只改画布尺寸、不重算列数，拉宽后右边会空一条）。
+let matrixResizeHandler = null;
 
 function initMatrixRain() {
     const canvas = document.getElementById('matrix-canvas');
@@ -3844,15 +3970,17 @@ function initMatrixRain() {
     const PALETTE = ['#c9bda3', '#b3a58a', '#98907f', '#a67c3d', '#b5472f'];
 
     // 每列一枚「雨滴」：颜色、文字、速度、透明度在下落全程保持不变，避免闪烁
+    const makeDrop = () => ({
+        y: Math.random() * -60,
+        speed: 0.25 + Math.random() * 0.6,
+        word: words[Math.floor(Math.random() * words.length)],
+        color: PALETTE[Math.floor(Math.random() * PALETTE.length)],
+        opacity: 0.12 + Math.random() * 0.45
+    });
+
     const drops = [];
     for (let i = 0; i < columns; i++) {
-        drops[i] = {
-            y: Math.random() * -60,
-            speed: 0.25 + Math.random() * 0.6,
-            word: words[Math.floor(Math.random() * words.length)],
-            color: PALETTE[Math.floor(Math.random() * PALETTE.length)],
-            opacity: 0.12 + Math.random() * 0.45
-        };
+        drops[i] = makeDrop();
     }
 
     function draw() {
@@ -3883,13 +4011,24 @@ function initMatrixRain() {
         }
     }
 
+    if (matrixStopTimer) {
+        clearTimeout(matrixStopTimer);
+        matrixStopTimer = null;
+    }
     if (matrixInterval) clearInterval(matrixInterval);
     matrixInterval = setInterval(draw, 50);
 
-    window.onresize = () => {
+    if (matrixResizeHandler) window.removeEventListener('resize', matrixResizeHandler);
+    matrixResizeHandler = () => {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
+        // 列数组是按旧宽度建的：拉宽后右边空一条，收窄则有一截画在画布外。
+        // 按新宽度补/删列，已经在下的雨滴原样留着（它们下一帧会落到新的 x 上）。
+        const nextColumns = Math.max(1, Math.floor(canvas.width / fontSize));
+        while (drops.length < nextColumns) drops.push(makeDrop());
+        if (drops.length > nextColumns) drops.length = nextColumns;
     };
+    window.addEventListener('resize', matrixResizeHandler);
 }
 
 function setMatrixRain(on) {
@@ -3911,10 +4050,18 @@ function setMatrixRain(on) {
         btn.innerHTML = "⋮ 激活文本雨";
         btn.setAttribute('aria-pressed', 'false');
 
-        setTimeout(() => {
-            if (matrixInterval) clearInterval(matrixInterval);
+        matrixStopTimer = setTimeout(() => {
+            matrixStopTimer = null;
+            if (matrixInterval) {
+                clearInterval(matrixInterval);
+                matrixInterval = null;
+            }
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (matrixResizeHandler) {
+                window.removeEventListener('resize', matrixResizeHandler);
+                matrixResizeHandler = null;
+            }
         }, 1000);
     }
 }
