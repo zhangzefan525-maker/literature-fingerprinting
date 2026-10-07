@@ -1212,3 +1212,159 @@ Tab 顺序：收起时从切换钮直接跳到 `#chartTypeSelect`（跳过那 4 
 - **原计划里的「不预先隐藏窄屏分隔线」被推翻了**：当时的判断是「线领头换行需要视口 <281px，真实设备到不了」，
   实测发现真正会看到的问题不是领头换行，而是它在 320–368px 拖在上一行末尾，所以改成了上面的 379px 断点。
 - 一行未动：`src/`、`api_server.py`、`data/processed/`、文本雨、分词与任何指标算法。
+
+---
+
+## 第十一批：线上喂了一个月的旧数据（2026-10-07）
+
+**先说结论：线上演示站 `http://39.96.194.197/visualization` 一直在用 9 月 3 日生成的旧管线数据，
+而本仓库里的代码十天前就已经是新的。** 这让两个招牌功能在线上等于没有：
+
+- **风格星系**拿不到共享投影模型，退化成「各书各自计算（点与点之间的距离不可直接比较）」
+  ——也就是本工具最核心的卖点「跨书可比」，在线上是关掉的。
+- **走势图**底部没有章节刻度，导出的 CSV「所在章节」一列**全空**。
+
+本地打开是对的，只有线上坏——所以前面十批的实测全都在本地做，谁也没看见。
+
+根因是**两个互不相干的原因叠在一起**：一个让旧数据永远留着，另一个让代码修复也上不去。
+
+### 1. 根因一：`data/processed/` 不进版本库，而服务只看「文件在不在」
+
+`data/processed/*.json` 在 `.gitignore` 里（第 15 行）。服务器上那份是部署当天生成的，此后
+`git pull` 不会碰它。而 `_ensure_demo_data()`（`api_server.py`）的判断是：
+
+```python
+if target.exists():
+    _demo_data_ready = True
+    return True          # ← 只要文件在，就再也不看它一眼
+```
+
+文件一直在，于是它永远存在、也就永远不会被重算。**这不是「偶尔忘了重新部署」，是结构上的死角**：
+将来管线再改一次，同样的坑会原样再踩一遍。
+
+两边数据的实际差别（`curl` 线上 `/api/fingerprint-data` 直接读出来的）：
+
+| | 线上（09-03 生成） | 本地 / 重算后 |
+|---|---|---|
+| `metadata` 字段 | `totalBlocks, totalWords, avgSentenceLength, avgSimpsonIndex` | `schemaVersion: 2, chapters, projection, blockSize/overlap/step, analyzedWords …` |
+| 切块 | `totalBlocks: 22`、`totalWords: 220000`（无重叠的旧切法） | `102` 块，`blockSize 10000 / overlap 9000 / step 1000` |
+| 章节 | 无 | 43 / 35 / 7 / 25 章 |
+| 投影 | 无 | `mode: "shared"`，模型 `pca-4709af31caa3` |
+
+### 2. 修法一：让服务自己认出「这份数据是旧的」
+
+`api_server.py` 里新增 `_DEMO_SCHEMA_VERSION = 2` 与 `_demo_corpus_is_current()`：**只要有一本书带
+`metadata.schemaVersion >= 2` 就算当前**（整个文件是一次写出的，不存在半新半旧）；读不动、
+结构不认识，一律当过期。`_ensure_demo_data()` 于是改成「不存在**或**不是当前管线生成的」才重算，
+并且重算后按新判定复核结果，而不是像原来那样只看 `target.exists()`。
+
+另外加了一条**负缓存**：同一份旧文件只尝试重算一次（`_demo_repair_stamp` 记它的指纹）。重算要跑
+1~3 分钟，万一失败（比如 `data/raw/` 是空的），不能让此后**每个请求**都卡满一次；文件被换过
+（比如管理员手动拷了一份进来）则允许再试。
+
+顺带把 `_corpus_stamp` 里那段 `try/except stat` 抽成 `_file_stamp` 复用，语义不变。
+
+测试 **151 → 167 项**，全部走临时目录、不碰仓库里的 `data/`：
+`_demo_corpus_is_current` 7 项（当前 / 更高版本 / 缺字段 / 更低版本 / 坏 JSON / 缺文件 / 各种畸形结构），
+`_ensure_demo_data` 9 项（该重算的三种、不该重算的三种、失败不重试、文件换过可重试、生成抛异常不冒泡）。
+
+### 3. 根因二：自动部署脚本每 2 分钟白重启一次服务
+
+上一节（`2026-09-28` 那段）说过脚本守卫有 bug、但「还没做」。这次做了。
+
+直读服务器上那份日志（我接手时 20262 行）：**`[ok] restarted` 记了 6362 次，
+而 `ff merge failed` 是 0 次**。从 9 月 28 日到 10 月 7 日这 9 天里，HEAD 一次都没变过，
+但服务每 2 分钟被重启一次——**一个需要 1~3 分钟 CPU 才能重算完 4 本书的服务，被无限重启了 9 天**。
+
+守卫那三行（老脚本）：
+
+```bash
+git fetch origin master -q 2>>"$LOG"          # 不看退出码
+LOCAL=$(git rev-parse HEAD)
+REMOTE=$(git rev-parse FETCH_HEAD)            # 比的是 FETCH_HEAD，不是 origin/master
+[ -n "$LOCAL" ] && [ "$LOCAL" = "$REMOTE" ] && exit 0
+```
+
+这台 ECS 拉 github.com 失败是常态（GnuTLS recv error、HTTP2 framing layer、443 连超时，
+实测有一次卡满 **131 秒**）。拉取失败时 `FETCH_HEAD` 是**上一次成功拉取**的陈旧值
+（彻底失败时 git 甚至会把 `FETCH_HEAD` 这个字面量打印出来），于是 `LOCAL != REMOTE` 恒成立，
+守卫被绕过，每一轮 cron 都走一遍 merge + restart。
+
+### 4. 修法二：一行判退出码，一行换比对对象
+
+脚本现在收进了仓库（**`literature-autodeploy.sh`**，仓库根目录），服务器上那份是它的安装副本——
+以前它只存在于生产机上，不在版本控制里，这也是这个 bug 能活这么久的原因之一。
+
+```bash
+if ! timeout 90 git fetch origin master -q 2>>"$LOG"; then
+  exit 0                    # 拉不动就安静退出，下一轮自然会重试；绝不为这个去重启服务
+fi
+LOCAL=$(git rev-parse HEAD 2>/dev/null)
+REMOTE=$(git rev-parse origin/master 2>/dev/null)
+if [ -z "$LOCAL" ] || [ -z "$REMOTE" ]; then
+  echo "…[error] cannot resolve HEAD or origin/master" >> "$LOG"; exit 0
+fi
+[ "$LOCAL" = "$REMOTE" ] && exit 0
+…
+if git merge --ff-only origin/master -q; then
+```
+
+`timeout 90` 是这次实测加的：不设上限，一次卡满 131 秒的 fetch 会把这一轮 cron 拖住、
+并连带跳过下一轮。
+
+**四种情形在本地用一整套桩（stub `git`/`systemctl`/`flock` + 真 git 建的小仓库）逐条跑过**，
+被测脚本与仓库里这份**除 4 行路径外逐字相同**（`diff` 验过）：
+
+| 情形 | 新脚本 | 旧脚本 |
+|---|---|---|
+| 拉取失败（线上最常见） | restarts=0、日志不增 | **restarts=1**（那 6362 次的来源） |
+| 拉取成功、无新提交 | restarts=0 | restarts=0 |
+| 拉取成功、有新提交 | restarts=1、HEAD 前进、工作区更新 | — |
+| 有新提交但 ff 不可行 | restarts=0，记 `[error] ff merge failed` | — |
+
+### 5. 服务器上实际做了什么
+
+1. 备份 `cp -p /usr/local/bin/literature-autodeploy.sh{,.bak-20261007}`（909 字节的原件）。
+2. 上传新脚本 → `bash -n` 过 → **确认无 CRLF** → `install -m 0755` 到位。
+3. 把旧数据另存 `/root/all_books.json.stale-20260903.bak`（681582 字节，留个证据）。
+4. `cd /opt/literature-fingerprinting && .venv/bin/python generate_data.py`——**实测 1 分 15 秒**。
+5. `systemctl restart literature-fingerprinting`。
+6. `git fetch` 重试第 2 次成功 → 跑一次新脚本，日志出现
+   `[deploy] d4cf1ac… -> 3373e73…` / `[ok] restarted, HEAD=3373e73`；**紧接着再跑一次，日志行数不变**（空转正确）。
+
+**一个踩到的坑，记下来**：用 `install` 覆盖脚本时，**正在运行的那一份会读到被改写后的文件**
+（bash 是按偏移量边读边执行的）。当时正有一个旧实例卡在 fetch 里、还占着 `flock`，事后它按新文件的
+字节继续执行了一次，日志里 20:47:31 那次白重启就是它。**换脚本应该 `cp` 到临时文件再 `mv` 过去**
+（原子替换），或者先 `fuser` 看一眼锁有没有人占。
+
+### 6. 验证（全部是实地看到的）
+
+- 公网 `curl http://39.96.194.197/visualization` → **200**，76664 B，0.05 s。
+- 公网 `/api/fingerprint-data` → 四本书**全部** `schemaVersion=2`、`projection=shared`，
+  章节 43 / 35 / 7 / 25，块数 102 / 61 / 22 / 63——与本地 `data/processed/all_books.json` 一致。
+- 服务器 `git rev-parse HEAD` = `3373e73`，与 `origin/master` 相同；`systemctl is-active` = active。
+- 用 CDP 打开公网页面、点开「风格星系」：`degraded: false`，页面上**不再**出现
+  「各书各自计算…距离不可直接比较」，两条坐标轴说明（「横轴越靠右…小词占比越高」）都在，
+  并且出现了只有共享坐标才有的那句「坐标范围与内置示例书共用、不随选书改变」。
+- 控制台错误只剩既有的 `favicon.ico` 404。
+
+### 7. 旧节里已经过时的地方（按规矩不改动原行，只在这里记）
+
+- **第 407、532、706、794、896、1046 行**「线上演示站仍跑在旧构建上，需要重新部署」——**已过时**，
+  线上现在是 `3373e73`。
+- **第 1096–1098 行**「还没做的：脚本本身没改」——**已过时**，见上面第 4 节。
+- **第 1052 行**那句「核对时位于第 407、532、706、794、896 行」在当时是对的，现在这份清单
+  要多加一个 1046。
+
+### 8. 本批没做的
+
+- **没给部署脚本加 `pip install`**：如果将来某次提交改了 `requirements.txt`，现在会「代码更新了、
+  依赖没装」然后重启。这是个真实的缺口，但往生产机唯一的更新路径里塞网络操作风险更大
+  （装失败之后是重启还是不重启？两种都难受），而且从 9 月 3 日至今 `requirements.txt` 没动过。
+  留作待办，不在这批里做。
+- **没有停掉那 2 分钟一次的 cron**：守卫修好之后它已经不会白重启了，只是每轮仍会去拉一次 GitHub。
+  换更长的间隔会牺牲「推完很快就上线」，不值。
+- **没碰**文本雨、分词与任何指标算法、`src/`。本批改的是 `api_server.py`（一个判定函数）、
+  `tests/test_api.py`（新增用例）、以及新增的 `literature-autodeploy.sh`。
+- 这只是优化清单里的第 11 批；弱网 gzip（实测 JS 170 KB + CSS 56 KB + 接口 589 KB 全是裸传）、
+  后端三条永久 500 的坏路、无障碍硬伤、导出与文案，都还没开始。
