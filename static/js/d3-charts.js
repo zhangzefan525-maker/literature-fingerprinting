@@ -2622,13 +2622,40 @@ function buildInsightText() {
     return lines.join('\n');
 }
 
+// 异常面板脚注的三句话，屏幕与导出共用（第十一批、第十五批都吃过「两处各说一套」的亏）。
+// 它们分别管三件最容易被读错的事：这只是描述性的「离整体远」、列表有上限、
+// 相邻片段大面积重叠所以不是互相独立的样本。
+function anomalyNotes(report) {
+    const notes = ['这里的「偏离」只是统计意义上离整体较远（离均值超过 2 个标准差，或超出四分位距范围），不代表写得好或不好。'];
+    // 接口把 items 截断到 8 条，counts.total 才是「一共找出多少个」。
+    // 不说这一句，读者会把列出的这 8 条当成全集，写成「全书共 8 个偏离片段」。
+    if (report && isFiniteNumber(report.flagged) && report.flagged > report.items.length) {
+        notes.push(`本书共找出 ${report.flagged} 个偏离片段，这里按偏离程度只列出最靠前的 ${report.items.length} 个。`);
+    }
+    // 片段是 blockSize/overlap 的滑窗切出来的，相邻两条共享九成原文。
+    // 在近重复的序列上算 ±2σ，那个「2 个标准差」就不再是它字面上给人的「罕见」了。
+    if (report && report.blockCount > 0) {
+        const overlapPart = isFiniteNumber(report.overlap) && report.overlap > 0
+            ? `，相邻片段之间重叠约 ${report.overlap} 词、并不是互相独立的样本`
+            : '，相邻片段之间有大段重叠、并不是互相独立的样本';
+        notes.push(`这次统计基于本书的 ${report.blockCount} 个片段${overlapPart}，所以它只适合用来挑原文，不构成显著性结论。`);
+    }
+    return notes;
+}
+
 // 「值得一看的片段」的纯文字版本，同样取自屏幕上那一份（lastAnomalyReport）。
-// 还没加载出来（没进「全书对比」页、或请求失败）时返回空串，调用方据此跳过这一节——
+// 还没加载出来（没进「全书对比」页）时返回空串，调用方据此跳过这一节——
 // 宁可不说，也不要在导出物里编一段屏幕上没有的话。
+// 但「取不到」和「没去看过」是两回事：前者屏幕上已在面板里说明了原因，
+// 导出物里也必须写出来，否则读的人只会以为这本书没有偏离片段。
 function buildAnomalyText() {
     const report = lastAnomalyReport;
-    if (!report || !Array.isArray(report.items)) return '';
+    if (!report) return '';
     const head = `《${report.displayName}》（观察角度：${report.metricLabel}）`;
+    if (report.failed) {
+        return `${head}\n  这一节这次没有生成：${report.reason}`;
+    }
+    if (!Array.isArray(report.items)) return '';
     // 「均值来自 /api/analysis、不随框选变」这件事必须在导出物里也说一遍，
     // 否则读者会把这里的平均和「整体水平对比」上那个被框选改过的数当成同一个。
     const scopeNote = report.brushScoped ? '，不受框选影响' : '';
@@ -2651,7 +2678,7 @@ function buildAnomalyText() {
         if (Array.isArray(item.keywords) && item.keywords.length) out.push(`    关键词：${item.keywords.join('、')}`);
         return out.join('\n');
     });
-    blocks.push('  说明：这里的「偏离」只是统计意义上离整体较远（离均值超过 2 个标准差，或超出四分位距范围），不代表写得好或不好。');
+    blocks.push(`  说明：${anomalyNotes(report).join('')}`);
     return [head, ...blocks].join('\n');
 }
 
@@ -2801,7 +2828,9 @@ function buildMethodsParagraph(books) {
 
     const parts = [];
     parts.push(`本次分析使用「文印」文学指纹工具，共分析 ${books.length} 本书、${totalBlocks} 个片段。`);
-    parts.push(`文本经 Project Gutenberg 页眉页脚清理与常见缩写还原后，按每片段 ${blockSizes.join('/')} 词、相邻片段重叠 ${blockSizes.map((size, i) => size - steps[i]).join('/')} 词的滑动窗口切分。`);
+    // 来源要说准：clean_text 对**所有**书都跑，但只有带 Gutenberg 页眉页脚的文件才真被剥掉那层。
+    // 原来那句话读起来像「每本书都清理过 Gutenberg 页眉」，对上传的其它来源文本是假话。
+    parts.push(`文本统一空白、还原常见缩写；若来自 Project Gutenberg，另清理其页眉页脚（其它来源的文本原样保留，没有这层清理）。按每片段 ${blockSizes.join('/')} 词、相邻片段重叠 ${blockSizes.map((size, i) => size - steps[i]).join('/')} 词的滑动窗口切分。`);
     parts.push('计算指标包括平均句长、用词重复度（Simpson\'s D）、独特词丰富度（Honoré R）与功能词二维投影。');
     parts.push(buildComparabilitySentence(books));
     if (chapterCounts.length > 0) {
@@ -3689,7 +3718,7 @@ function updateHUD(analysisData, metricLabel) {
             ${analysisData.topKeywords.map(k => `<span class="hud-tag">${k}</span>`).join('')}
         </div>
         <div style="margin-top:10px; padding-top:5px; border-top:1px dashed rgba(46, 42, 36, 0.12); font-size:10px; color:#6b6254;">
-            * 这些片段因写作风格相近而聚集在一起。
+            * 挨得近只说明高频小词的用法相近，不代表内容或水平相似。
         </div>
     `;
 

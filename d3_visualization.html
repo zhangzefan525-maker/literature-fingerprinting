@@ -527,6 +527,23 @@
         // 注意用请求序号防止旧请求的返回盖掉新结果（切书、切指标时很容易发生）
         let anomalyRequestId = 0;
 
+        // 相邻片段之间重叠了多少词。脚注要如实交代「这些片段不是互相独立的样本」，
+        // 而旧数据没有 overlap 字段——走 normalizeBookMeta，它会按「窗口长 − 步长」推出来。
+        function anomalyOverlapWords(book) {
+            if (typeof normalizeBookMeta !== 'function') return null;
+            const meta = normalizeBookMeta(book);
+            return (meta && isFiniteNumber(meta.overlap) && meta.overlap > 0) ? meta.overlap : null;
+        }
+
+        // 拿不到异常片段时：把原因明说，而不是把面板清空。
+        // 失败也必须写进 lastAnomalyReport——否则「导出摘要」里这一段会静默消失，
+        // 读的人只会以为这本书没有偏离片段（那是「取不到」，不是「没有」）。
+        function showAnomalyFailure(book, displayName, mLabel, why) {
+            const panel = document.getElementById('anomaly-content');
+            if (panel) panel.innerHTML = `<div class="anomaly-muted">${escapeHtml(why)}</div>`;
+            lastAnomalyReport = { book, displayName, metricLabel: mLabel, failed: true, reason: why };
+        }
+
         function renderAnomalies(data) {
             const panel = document.getElementById('anomaly-content');
             if (!panel) return;
@@ -538,6 +555,8 @@
 
             const book = data[0].name;
             const displayName = data[0].displayName || book;
+            // mLabel 提到 fetch 之前：失败分支也要用它，原来它只在成功分支里定义。
+            const mLabel = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
             const requestId = ++anomalyRequestId;
             panel.innerHTML = '<div class="anomaly-muted">正在找这本书里偏离较大的片段…</div>';
             // 问服务端之前先清掉上一本的结果：导出/复制读的是这份缓存，留着会让「复制结论」
@@ -549,18 +568,25 @@
                 .then(result => {
                     if (requestId !== anomalyRequestId) return; // 已经有更新的请求了，丢弃
                     if (!result || result.status !== 'success') {
-                        panel.innerHTML = '';
-                        lastAnomalyReport = null;
+                        // 服务端在这条路上写了一句很具体的话（「有效的片段太少，做不了异常分析。」
+                        // 「这本书在这个观察角度下没有数据」…）。原来整句被丢掉、面板直接清空，
+                        // 用户分不清「没有偏离」和「压根没算成」。照实显示，并让导出也知道这一段缺了。
+                        showAnomalyFailure(book, displayName, mLabel,
+                            (result && result.message) || '暂时取不到这本书的偏离片段，请稍后重试。');
                         return;
                     }
                     const items = result.anomalies || [];
-                    const mLabel = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
                     const mean = result.summary && Number(result.summary.mean);
                     // 屏幕上渲染了什么，导出里就是什么——两块共用这一个缓存。
+                    // flagged / blockCount / overlap 三个数只服务于脚注那几句
+                    // （「这只是前 8 个」「这些片段互相重叠、不是独立样本」）。
                     lastAnomalyReport = {
                         book, displayName, metricLabel: mLabel, mean,
                         brushScoped: !!advBrushPercent(),
-                        items
+                        items,
+                        flagged: result.anomalyCounts && Number(result.anomalyCounts.total),
+                        blockCount: Number(result.totalBlocks) || getBookBlockCount(book),
+                        overlap: anomalyOverlapWords(book)
                     };
                     if (items.length === 0) {
                         panel.innerHTML = `<div class="anomaly-muted">《${escapeHtml(displayName)}》的「${mLabel}」整体比较均匀，没有特别偏离的片段。</div>`;
@@ -595,22 +621,39 @@
                                 ${keywords}
                             </div>`;
                     }).join('');
-                    const foot = '<div class="anomaly-muted">这里的「偏离」只是统计意义上离整体较远（离均值超过 2 个标准差，或超出四分位距范围），不代表写得好或不好。点开左侧曲线可以查看它前后的变化。</div>';
+                    // 脚注的三句话与导出共用同一个函数（anomalyNotes 在 d3-charts.js 里），
+                    // 屏幕与导出物不可能各说一套。
+                    const foot = `<div class="anomaly-muted">${escapeHtml(anomalyNotes(lastAnomalyReport).join(''))}点开左侧曲线可以查看它前后的变化。</div>`;
                     panel.innerHTML = head + cards + foot;
                 })
                 .catch(() => {
                     if (requestId !== anomalyRequestId) return;
-                    panel.innerHTML = ''; // 拿不到就不占地方，不打扰用户
-                    lastAnomalyReport = null;
+                    // 原来这里是「拿不到就不占地方，不打扰用户」——面板先闪一句「正在找…」
+                    // 再凭空消失，用户分不清是没算成还是本来就均匀；同时缓存被清空，
+                    // 导出的摘要里整段【值得一看的片段】被无声略过。现在两边都明说。
+                    showAnomalyFailure(book, displayName, mLabel,
+                        '没能连上分析服务，暂时取不到这本书的偏离片段。');
                 });
         }
 
         // 一句话解读：把图表自动翻译成大白话
+        //
+        // high/low 里**不写范围词**（原来写死「整体句子最长」）。框选生效时，上面第一行
+        // 刚说过「这些数字只统计框选的 X 区段，不是全书」，紧接着再来一句「整体句子最长」——
+        // 两句话同屏互相打脸，而 currentMean 那时报的本来就是区段均值。范围统一由 scopeWord
+        // 在拼句子时加，于是框选时结构上不可能再说出「整体」。
+        //
+        // up/down 说的是 trend 的定义：**后半段均值 − 前半段均值**（见 getAdvComputed），
+        // 不是「越写越长 / 越来越…」那种单调趋势——后半段里一个尖峰就能把半段均值抬起来，
+        // 而全书未必在变。这里照实写成前后半段之比。
+        // functionWords 的值是功能词 PCA 的**第一主成分坐标**（有符号），原话
+        // 「持续偏移 / 趋于回归」在数学上推不出来（坐标更靠正侧 ≠ 离均值更远），
+        // 所以只描述它偏向坐标轴的哪一端。
         const INSIGHT_METRIC = {
-            sentenceLength: { up: '中后段句子越写越长', down: '中后段句子越写越短', high: '整体句子最长', low: '整体句子最短' },
-            simpsonIndex:  { up: '中后段用词越来越重复', down: '中后段用词越来越丰富', high: '用词重复度最高（词汇较单调）', low: '用词重复度最低（词汇最丰富）' },
-            hapaxLegomena:{ up: '中后段用词越来越丰富（更多词只出现一次）', down: '中后段用词越来越单调（更少词只出现一次）', high: '用词最丰富', low: '用词最单调' },
-            functionWords: { up: '中后段风格走向持续偏移', down: '中后段风格走向趋于回归', high: null, low: null }
+            sentenceLength: { up: '后半段的平均句长高于前半段', down: '后半段的平均句长低于前半段', high: '句子最长', low: '句子最短' },
+            simpsonIndex:  { up: '后半段的用词重复度高于前半段', down: '后半段的用词重复度低于前半段', high: '用词重复度最高（词汇较单调）', low: '用词重复度最低（词汇最丰富）' },
+            hapaxLegomena:{ up: '后半段只出现一次的词更多（用词更丰富）', down: '后半段只出现一次的词更少（用词更单调）', high: '用词最丰富', low: '用词最单调' },
+            functionWords: { up: '后半段的高频小词用法整体移向坐标轴的一端', down: '后半段的高频小词用法整体移向坐标轴的另一端', high: null, low: null }
         };
 
         // 取一本书在「当前框选区段」内的指标值。口径必须和 initAdvancedData 一致：
@@ -647,10 +690,16 @@
                 lines.push(`下面这些数字只统计走势图上框选的 ${brushScope} 区段，不是全书。`);
             }
 
+            // 范围词：框选时说区段、没框选时说整体。拼进 high/low 那两句话里，
+            // 保证同一段文字里不会出现「不是全书」和「整体」并存。
+            const scopeWord = brushScope ? `在框选的 ${brushScope} 区段里` : '整体';
+
             if (data.length >= 2 && cfg.high) {
                 const highest = [...data].sort((a, b) => b.currentMean - a.currentMean)[0];
                 const lowest  = [...data].sort((a, b) => a.currentMean - b.currentMean)[0];
-                lines.push(`《${highest.displayName || highest.name}》${cfg.high}（${fmtMetric(highest.currentMean)}），《${lowest.displayName || lowest.name}》${cfg.low}（${fmtMetric(lowest.currentMean)}）。`);
+                // 「最长 / 最短」是在用户勾的这几本里排出来的。不加限定，读者会写成
+                // 「A 是所有作家里句子最长的」——而它只是这次选中的两本里那个。
+                lines.push(`在所选 ${data.length} 本中，《${highest.displayName || highest.name}》${scopeWord}${cfg.high}（${fmtMetric(highest.currentMean)}），《${lowest.displayName || lowest.name}》${scopeWord}${cfg.low}（${fmtMetric(lowest.currentMean)}）。`);
             } else if (data.length === 1) {
                 lines.push(`《${data[0].displayName || data[0].name}》的「${mLabel}」${brushScope ? '在框选区段内平均' : '整体水平'}为 ${fmtMetric(data[0].currentMean)}。`);
                 // 单书时给出基准参照：与其他已加载书籍的平均水平对比，让裸数字有意义。
@@ -683,12 +732,22 @@
 
             const trendBook = [...data].sort((a, b) => Math.abs(b.trend) - Math.abs(a.trend))[0];
             if (trendBook && Math.abs(trendBook.trend) > 0.5 * (trendBook.currentStd || 0)) {
-                lines.push(`《${trendBook.displayName || trendBook.name}》${trendBook.trend > 0 ? cfg.up : cfg.down}。`);
+                // 把差值写出来，并点明这是「前后半段均值之差」：光说「高于前半段」，
+                // 读者会顺手写成「全书越写越长」。
+                lines.push(`《${trendBook.displayName || trendBook.name}》${trendBook.trend > 0 ? cfg.up : cfg.down}`
+                    + `（前后半段均值相差 ${fmtMetric(Math.abs(trendBook.trend))}，不代表全书单调变化）。`);
             }
 
             if (data.length >= 2) {
-                const stable = [...data].sort((a, b) => a.currentStd - b.currentStd)[0];
-                if (stable) lines.push(`《${stable.displayName || stable.name}》的「${mLabel}」起伏最小，风格最平稳。`);
+                // 两处收窄：
+                // 1) currentStd 只是**这一个指标**的起伏，撑不起「风格」二字，所以不再说「风格最平稳」；
+                // 2) d3.deviation 对单元素数组返回 undefined、这里用 `|| 0` 兜底，于是一本只有 1 个
+                //    片段的书标准差恒为 0、必然夺冠——不是它稳，是它没数据。加样本门槛把它挡在外面。
+                const enough = data.filter(b => (b.activeSegment || []).length >= 5);
+                const stable = enough.length ? [...enough].sort((a, b) => a.currentStd - b.currentStd)[0] : null;
+                if (stable && stable.currentStd > 0) {
+                    lines.push(`在所选的书里，《${stable.displayName || stable.name}》的「${mLabel}」起伏最小（只就这一个指标而言）。`);
+                }
             }
 
             // 存一份给导出/「复制结论」用（d3-charts.js 里声明的 lastInsightLines）。

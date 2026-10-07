@@ -146,7 +146,10 @@ def detect_anomalies(values, z_threshold=2.0, max_items=8):
     return {
         "items": scored[:max_items],
         "zThreshold": z_threshold,
-        "counts": {"z": len(z_indexes), "iqr": len(iqr_indexes)},
+        # counts 里多一个 total：items 被截断到 max_items，但「一共找出多少个」必须带出去，
+        # 否则前端没法说清「这里列了 8 个、这本书其实有 20 个」，读者会把这 8 条当成全集。
+        # 只多报一个数，不参与任何计算，指标口径一个字没动。
+        "counts": {"z": len(z_indexes), "iqr": len(iqr_indexes), "total": len(scored)},
     }
 
 
