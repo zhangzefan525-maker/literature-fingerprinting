@@ -630,6 +630,53 @@ class UploadProjectionTestCase(unittest.TestCase):
         self.assertEqual(captured["overlap"], api_server.OVERLAP)
 
 
+class FingerprintConditionalTestCase(LibraryApiTestCase):
+    """
+    /api/fingerprint-data 首屏必拉（未压缩 1.5 MB），重复访问应当走 304。
+    ETag 取自语料指纹，所以「数据变了」必须让 ETag 跟着变——否则用户会拿到旧缓存。
+    """
+
+    def _get(self, etag=None):
+        headers = {"If-None-Match": etag} if etag else {}
+        return self.client.get("/api/fingerprint-data", headers=headers)
+
+    def test_first_response_carries_etag_and_no_cache(self):
+        resp = self._get()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.headers.get("ETag"))
+        self.assertEqual(resp.headers.get("Cache-Control"), "no-cache")
+
+    def test_same_corpus_returns_304_with_empty_body(self):
+        etag = self._get().headers["ETag"]
+        again = self._get(etag)
+        self.assertEqual(again.status_code, 304)
+        self.assertEqual(again.get_data(), b"")
+
+    def test_regenerated_corpus_invalidates_etag(self):
+        etag = self._get().headers["ETag"]
+        # 换一份语料：文件大小和 mtime 都变了
+        (self.processed / "all_books.json").write_text(
+            json.dumps({BUILTIN_NAME: FAKE_BOOK, "Second": FAKE_BOOK}, ensure_ascii=False),
+            encoding="utf-8")
+        fresh = self._get(etag)
+        self.assertEqual(fresh.status_code, 200, "语料变了就不该再给 304")
+        self.assertNotEqual(fresh.headers["ETag"], etag)
+
+    def test_library_change_invalidates_etag(self):
+        """「我的图书馆」也是语料的一部分：新增一本书同样要让 ETag 变。"""
+        etag = self._get().headers["ETag"]
+        self._put_library("Alice")
+        fresh = self._get(etag)
+        self.assertEqual(fresh.status_code, 200)
+        self.assertIn("Alice", fresh.get_json()["data"])
+
+    def test_missing_corpus_has_no_etag(self):
+        (self.processed / "all_books.json").unlink()
+        resp = self._get()
+        self.assertEqual(resp.status_code, 404)
+        self.assertIsNone(resp.headers.get("ETag"))
+
+
 class DemoCorpusStalenessTestCase(unittest.TestCase):
     """
     _demo_corpus_is_current：判断 all_books.json 是不是当前管线生成的。
