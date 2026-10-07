@@ -29,6 +29,12 @@ let chartType = 'heatmap';
 let currentTab = 'view-main'; // 记录当前标签页
 let builtinBookNames = [];    // 服务器上常驻的示例书（用作解读参照基准，不含用户自己上传的）
 
+// 「全书对比」页那两块结论的最近一次渲染结果，由页面内另一段脚本在渲染时写入
+// （本文件先于那段脚本加载，所以在这里声明不会撞上暂时性死区）。导出摘要与
+// 「复制结论」都读它——屏幕上是哪几句，导出的就是哪几句，不另算一套。
+let lastInsightLines = [];    // 一句话解读（含框选口径说明那句）
+let lastAnomalyReport = null; // 值得一看的片段：{book, displayName, metricLabel, mean, brushScoped, items}
+
 const METRIC_KEYS = ['sentenceLength', 'simpsonIndex', 'hapaxLegomena', 'functionWords'];
 const VIEW_IDS = ['view-main', 'view-galaxy', 'view-dashboard'];
 const DEFAULT_SMOOTHNESS = 3;
@@ -151,7 +157,20 @@ function buildStateUrl() {
 // 「复制此链接」：把当前视图（指标/选书/标签页/图形/框选）发给同事
 function copyShareLink(button) {
     syncUrlState();
-    copyTextToClipboard(buildStateUrl(), button, '✓ 链接已复制');
+    // 链接里只带书名。内置书在别人的服务器上也有，自己上传的那几本没有——对方打开时
+    // 那几本会静默消失（url 里那个名字对不上任何一本书），而复制的人以为分享的是完整结果。
+    // 所以复制前先点名。builtinBookNames 还没建好时（书单还在加载）不做判断，免得全被当成上传的。
+    const uploaded = builtinBookNames.length === 0
+        ? []
+        : Array.from(getActiveBookSet()).filter(name => !builtinBookNames.includes(name));
+    const okText = uploaded.length ? `✓ 链接已复制（不含你上传的 ${uploaded.length} 本）` : '✓ 链接已复制';
+    copyTextToClipboard(buildStateUrl(), button, okText);
+    if (uploaded.length > 0) {
+        const names = uploaded.map(getBookDisplayName).join('、');
+        const where = isLocalHost() ? '这台电脑' : '这个服务器';
+        setGlobalStatus('notice', `链接里没有《${names}》：这是你自己上传的文本，只存在${where}上，别人打开链接时看不到。`
+            + '想把完整结果分享出去，请用「更多导出 → 导出摘要」。');
+    }
 }
 
 // 取走链接里带的框选范围（仪表盘初始化时用，取一次就清掉）
@@ -500,6 +519,8 @@ function initEventListeners() {
     if (exportCiteBtn) exportCiteBtn.addEventListener('click', exportCitation);
     const copyLinkBtn = document.getElementById('copyLinkBtn');
     if (copyLinkBtn) copyLinkBtn.addEventListener('click', () => copyShareLink(copyLinkBtn));
+    const copyConclusionBtn = document.getElementById('copyConclusionBtn');
+    if (copyConclusionBtn) copyConclusionBtn.addEventListener('click', () => copyConclusion(copyConclusionBtn));
     // 「更多导出」是个纯显隐开关：四个低频按钮平时收在 #export-more 里（[hidden] 让它们
     // 连 Tab 都进不去），点一下就地展开。aria-expanded 是标准属性，读屏会念出「已展开/已折叠」。
     // 这里只翻这两个状态，**不碰按钮文字**：切到「收起导出」会让同一个控件的可访问名变来变去,
@@ -2518,8 +2539,12 @@ function exportSummary() {
         functionWords: `由高频小词${getAxisWordsHint()}的使用习惯得出，仅作参照。`
     }[currentMetric] || '';
     const contextLine = getMetricContextLine(currentMetric);
+    // 纯文本（.txt）而不是 Markdown：这份摘要的读者是文科研究者，打开它的是记事本、
+    // Word 或 Word 里的「插入文件」；满屏 # 和 > 在那些地方是噪音，不是格式。
+    // 分隔用一条等长横线，小标题用【】，两者在任何纯文本编辑器里都读得通。
     const lines = [
-        '# 文印·文学指纹分析摘要',
+        '文印·文学指纹分析摘要',
+        '════════════════════════════════════════',
         '',
         `- 生成时间：${new Date().toLocaleString('zh-CN')}`,
         `- 当前视图：${currentTab === 'view-main' ? (chartType === 'line' ? '基础趋势分析 · 折线趋势图' : '基础趋势分析 · 指纹热力图') : currentTab === 'view-galaxy' ? '风格星系' : '全书对比'}`,
@@ -2532,12 +2557,27 @@ function exportSummary() {
         ''
     ];
 
+    // 结论区。屏幕上「一句话解读」「值得一看的片段」是用户最想带走的东西，
+    // 之前摘要里一个字都没有，只能手抄。放在每本书的明细**前面**——它是结论，不是附录。
+    const insightText = buildInsightText();
+    if (insightText) {
+        lines.push('【一句话解读】');
+        lines.push(insightText);
+        lines.push('');
+    }
+    const anomalyText = buildAnomalyText();
+    if (anomalyText) {
+        lines.push('【值得一看的片段】');
+        lines.push(anomalyText);
+        lines.push('');
+    }
+
     books.forEach(book => {
         // 框选生效时只统计框选内的片段，和屏幕上显示的是同一批
         const allValues = getMetricValues(book, currentMetric);
         const brush = getBrushBlockRange(book);
         const values = brush ? allValues.filter((d, i) => i >= brush.from && i <= brush.to) : allValues;
-        lines.push(`## ${getBookDisplayName(book)}`);
+        lines.push(`【${getBookDisplayName(book)}】`);
         lines.push(`- 参与统计的片段数：${values.length}（全书共 ${getBookBlockCount(book)} 个片段）`);
         if (brush) {
             lines.push(`- 本次统计的片段：第 ${brush.from + 1}–${brush.to + 1} 个片段`);
@@ -2565,22 +2605,66 @@ function exportSummary() {
     // 方法说明：写清这次是怎么算的，别人照着能复现
     const methods = buildMethodsParagraph(books);
     if (methods) {
-        lines.push('## 方法说明');
+        lines.push('【方法说明】');
         lines.push(methods);
         lines.push('');
     }
 
-    lines.push('> 说明：本摘要用于记录当前页面的选择。图中的数值与位置只是风格方面的数据，请结合作品原文与具体片段理解，不宜单独当作文学质量高低的评判。');
+    lines.push('说明：本摘要用于记录当前页面的选择。图中的数值与位置只是风格方面的数据，请结合作品原文与具体片段理解，不宜单独当作文学质量高低的评判。');
 
-    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
-    const link = document.createElement('a');
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    link.download = `文印_分析摘要_${timestamp}.md`;
-    link.href = URL.createObjectURL(blob);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(link.href);
+    downloadBlob(lines.join('\n'), `文印_分析摘要_${exportTimestamp()}.txt`, 'text/plain;charset=utf-8');
+}
+
+// 「一句话解读」的纯文字版本。内容是页面内那段脚本渲染时存进 lastInsightLines 的，
+// 所以这里拿到的永远是屏幕上那几句（含框选口径说明那句），不会另算一套、也就不会打架。
+function buildInsightText() {
+    const lines = Array.isArray(lastInsightLines) ? lastInsightLines.filter(Boolean) : [];
+    return lines.join('\n');
+}
+
+// 「值得一看的片段」的纯文字版本，同样取自屏幕上那一份（lastAnomalyReport）。
+// 还没加载出来（没进「全书对比」页、或请求失败）时返回空串，调用方据此跳过这一节——
+// 宁可不说，也不要在导出物里编一段屏幕上没有的话。
+function buildAnomalyText() {
+    const report = lastAnomalyReport;
+    if (!report || !Array.isArray(report.items)) return '';
+    const head = `《${report.displayName}》（观察角度：${report.metricLabel}）`;
+    // 「均值来自 /api/analysis、不随框选变」这件事必须在导出物里也说一遍，
+    // 否则读者会把这里的平均和「整体水平对比」上那个被框选改过的数当成同一个。
+    const scopeNote = report.brushScoped ? '，不受框选影响' : '';
+    const meanPart = Number.isFinite(report.mean) ? `，比全书平均（${formatMetric(report.mean)}${scopeNote}）` : '';
+    if (report.items.length === 0) {
+        return `${head}\n它在这个角度上整体比较均匀，没有特别偏离的片段。`;
+    }
+    const blocks = report.items.map(item => {
+        const value = Number(item.value);
+        const dirText = Number(item.zScore) > 0 ? '偏高' : '偏低';
+        const location = (typeof formatBlockLocation === 'function')
+            ? formatBlockLocation(report.book, item.block)
+            : `第 ${Number(item.block) + 1} 个片段`;
+        const out = [
+            `  ${dirText} · ${location}`,
+            `    ${report.metricLabel} ${Number.isFinite(value) ? formatMetric(value) : ''}`
+                + (meanPart ? `${meanPart}${dirText} ${formatMetric(Math.abs(report.mean - value))}` : '')
+        ];
+        if (item.preview) out.push(`    原文：“${String(item.preview).replace(/\r?\n/g, ' ').trim()}”`);
+        if (Array.isArray(item.keywords) && item.keywords.length) out.push(`    关键词：${item.keywords.join('、')}`);
+        return out.join('\n');
+    });
+    blocks.push('  说明：这里的「偏离」只是统计意义上离整体较远（离均值超过 2 个标准差，或超出四分位距范围），不代表写得好或不好。');
+    return [head, ...blocks].join('\n');
+}
+
+// 「复制结论」：把「一句话解读」和「值得一看的片段」一起复制成纯文字，直接粘进笔记。
+// 两块口径不同（解读跟着框选走、异常片段固定按全书），所以各占一段，不混成一句。
+function copyConclusion(button) {
+    const parts = [buildInsightText(), buildAnomalyText()].filter(Boolean);
+    if (parts.length === 0) {
+        setGlobalStatus('notice', '现在还没有可复制的结论。请切到「全书对比」页，选择书籍后这里就会生成解读。');
+        return;
+    }
+    const header = `文印·文学指纹分析 · 结论（观察角度：${getMetricLabel(currentMetric)}；统计范围：${describeExportScope()}）`;
+    copyTextToClipboard([header, '', parts.join('\n\n')].join('\n'), button, '✓ 结论已复制');
 }
 
 // ==========================================
@@ -2802,6 +2886,37 @@ function exportTableData() {
     downloadBlob('﻿' + csv, `文印_数据表_${exportTimestamp()}.csv`, 'text/csv;charset=utf-8');
 }
 
+// 内置示例书的原著信息。取自 data/raw/ 下各 txt 开头那段 Project Gutenberg 头部
+// （Title / Author / Release date / eBook #）；year 是该作品**首次出版**的年份，
+// 不是电子版的发布日期——后者写在 note 里，两者别混。
+// 只有这四本拿得到原著信息；用户上传的文本没有可靠的作者与版本，不能替他们编一个。
+const BUILTIN_BOOK_SOURCES = {
+    'the adventures of tom sawyer': {
+        key: 'twain1876tomsawyer', author: 'Twain, Mark', title: 'The Adventures of Tom Sawyer',
+        year: 1876, ebook: 74, released: '2004-07-01'
+    },
+    'the adventures of huckleberry finn': {
+        key: 'twain1884huckleberryfinn', author: 'Twain, Mark', title: 'Adventures of Huckleberry Finn',
+        year: 1884, ebook: 76, released: '2004-06-29'
+    },
+    'the call of the wild': {
+        key: 'london1903callofthewild', author: 'London, Jack', title: 'The Call of the Wild',
+        year: 1903, ebook: 215, released: '2008-07-02'
+    },
+    'white fang': {
+        key: 'london1906whitefang', author: 'London, Jack', title: 'White Fang',
+        year: 1906, ebook: 910, released: '1997-05-01'
+    }
+};
+
+// 书名 → 原著信息；查不到（用户上传的）返回 null。
+// 比对前先去掉首尾空格、转小写：书单的兜底文案里把「The call of the wild」写成了
+// 「The Call of the Wild」，大小写不该让一条原著条目凭空消失。
+function getBuiltinBookSource(name) {
+    if (typeof name !== 'string') return null;
+    return BUILTIN_BOOK_SOURCES[name.trim().toLowerCase()] || null;
+}
+
 // 导出引用条目（BibTeX）：给报告、论文的参考文献用
 function exportCitation() {
     const books = getExportBooks();
@@ -2829,23 +2944,59 @@ function exportCitation() {
     // 本机打开时 url 是 localhost，别人点开是打不开的，得在 note 里说清楚
     const localUrlNote = isLocalHost() ? '；在线视图为本机地址（localhost），仅供本机打开' : '';
 
+    // 原著条目。学生把这段贴进参考文献时，真正要引的是作品本身，不是这个工具；
+    // 旧版只发一条 author = 本工具的 @misc，等于把「文印」写成了《白牙》的作者，
+    // 而句子长度曲线并不能替原著背书。
+    const sources = books.map(name => ({ name, src: getBuiltinBookSource(name) }));
+    const knownSources = sources.filter(s => s.src);
+    const unknownNames = sources.filter(s => !s.src).map(s => s.name);
+
+    const chunks = [
+        '文印 · 引用条目',
+        '本文件有两类条目，别混用：',
+        '  1. @book —— 本次分析用到的内置示例书，引用文学作品本身时用这一条。',
+        '     year 是作品首次出版的年份；电子版的来源与发布日期写在 note 里。',
+        '  2. @misc —— 本次在线分析记录本身（哪一次、什么参数、跑了哪几本书），不是出版物。',
+        ''
+    ];
+
+    knownSources.forEach(({ src }) => {
+        chunks.push([
+            `@book{${src.key},`,
+            `  author    = {${src.author}},`,
+            `  title     = {${src.title}},`,
+            `  year      = {${src.year}},`,
+            `  publisher = {Project Gutenberg},`,
+            `  note      = {电子文本：Project Gutenberg eBook \\#${src.ebook}，发布于 ${src.released}},`,
+            `  url       = {https://www.gutenberg.org/ebooks/${src.ebook}}`,
+            '}',
+            ''
+        ].join('\n'));
+    });
+
+    if (unknownNames.length > 0) {
+        chunks.push(`注：${unknownNames.map(n => `《${getBookDisplayName(n)}》`).join('、')}是你上传的文本，`
+            + '本文件没有它的原著条目——上传的文件里读不到作者与版本，替你编一个比空着更糟。请按手上的版本自行补全。');
+        chunks.push('');
+    }
+
+    // @misc 这条描述的是「本次在线分析」，不是正式出版物。
     // 每个字段末尾都要有逗号（BibTeX 靠逗号分字段，漏一个会整条报错、
     // 丢掉除标题外的全部字段）；最后一行 url 后面不能有逗号。
-    // 这条记录描述的是「本次在线分析」，不是正式出版物，写进参考文献前请自己确认该引什么。
-    const entry = [
+    chunks.push([
         `@misc{${key},`,
-        `  title        = {文印·文学指纹分析：${books.map(name => `{${getBookDisplayName(name)}}`).join('、')}},`,
+        `  title        = {文印·文学指纹分析记录：${books.map(name => `{${getBookDisplayName(name)}}`).join('、')}},`,
         `  author       = {{文印（文学指纹分析工具）}},`,
         `  year         = {${now.getFullYear()}},`,
         `  month        = {${monthNames[now.getMonth()]}},`,
         `  howpublished = {在线交互式分析（Keim \\& Oelke 2007 指标口径）},`,
-        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNote}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
+        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNote}${knownSources.length ? `；原著条目见本文件开头的 @book` : ''}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
         `  url          = {${buildStateUrl()}}`,
         '}',
         ''
-    ].join('\n');
+    ].join('\n'));
 
-    downloadBlob(entry, `文印_引用_${exportTimestamp()}.bib`, 'application/x-bibtex;charset=utf-8');
+    downloadBlob(chunks.join('\n'), `文印_引用_${exportTimestamp()}.bib`, 'application/x-bibtex;charset=utf-8');
 }
 
 // 导出矢量图（SVG）：论文排版放大不糊
