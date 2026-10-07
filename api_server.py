@@ -71,8 +71,17 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 
-# 演示数据生成状态（懒加载：首次请求时若 all_books.json 缺失则自动生成一次）
+# 演示数据生成状态（懒加载：首次请求时若 all_books.json 缺失、或还是旧管线留下的，自动生成一次）
 _demo_data_ready = False
+
+# 上次尝试「重算陈旧演示数据」时那份文件的指纹；同一份旧文件只尝试一次。
+_demo_repair_stamp = None
+
+# 当前管线写出的 all_books.json 结构版本（见 generate_data.py / src/pipeline.py）。
+# 只判断「文件在不在」是不够的：data/processed/ 不进版本库，旧克隆里那份是旧管线生成的，
+# 它会一直存在、也就永远不会被重算——线上就因此喂了一个月的旧数据（没有 chapters、
+# 没有共享投影模型），前端拿不到章节和跨书坐标，只能退回「各书各自算」的降级分支。
+_DEMO_SCHEMA_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -220,12 +229,20 @@ def _library_stamp():
     return tuple(stamp)
 
 
-def _corpus_stamp(target_file):
+def _file_stamp(path):
+    """单个文件的指纹（修改时间 + 大小）；读不到返回 None。"""
     try:
-        stat = target_file.stat()
+        stat = path.stat()
     except OSError:
         return None
-    return (stat.st_mtime_ns, stat.st_size, _library_stamp())
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _corpus_stamp(target_file):
+    stamp = _file_stamp(target_file)
+    if stamp is None:
+        return None
+    return (stamp[0], stamp[1], _library_stamp())
 
 
 def _load_corpus():
@@ -312,16 +329,44 @@ def _rate_limited(client_ip):
     return tokens < 1
 
 
+def _demo_corpus_is_current(target):
+    """
+    已存在的 all_books.json 是不是**当前管线**生成的（而不是旧克隆里那份陈旧产物）。
+
+    只要有一本书带 metadata.schemaVersion >= 当前版本就算数：整个文件是一次写出的，
+    不存在半新半旧。读不动、结构不认识，一律当过期处理（触发一次重算）。
+    """
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    for book in data.values():
+        meta = book.get("metadata") if isinstance(book, dict) else None
+        if isinstance(meta, dict) and meta.get("schemaVersion", 0) >= _DEMO_SCHEMA_VERSION:
+            return True
+    return False
+
+
 def _ensure_demo_data():
-    """若预处理的示例数据不存在，则基于 data/raw/ 自动生成一次（保证全新克隆开箱即用）。"""
-    global _demo_data_ready
+    """若预处理的示例数据不存在、或还是旧管线留下的，则基于 data/raw/ 自动生成一次（保证全新克隆开箱即用）。"""
+    global _demo_data_ready, _demo_repair_stamp
     if _demo_data_ready:
         return True
 
     target = BASE_DIR / "data" / "processed" / "all_books.json"
     if target.exists():
-        _demo_data_ready = True
-        return True
+        if _demo_corpus_is_current(target):
+            _demo_data_ready = True
+            return True
+        # 文件在、但结构是旧的：重算一次。**同一份旧文件只尝试一次**——重算要跑 1~3 分钟，
+        # 万一失败（比如 data/raw/ 是空的），不能让此后每个请求都卡满一次生成。
+        stamp = _file_stamp(target)
+        if stamp is not None and stamp == _demo_repair_stamp:
+            return False
+        _demo_repair_stamp = stamp
 
     raw_dir = BASE_DIR / "data" / "raw"
     if not raw_dir.exists() or not list(raw_dir.glob("*.txt")):
@@ -330,7 +375,7 @@ def _ensure_demo_data():
     try:
         from generate_data import process_all_books
         process_all_books()
-        _demo_data_ready = target.exists()
+        _demo_data_ready = _demo_corpus_is_current(target)
         # 刚生成完，投影模型文件这时才出现，让缓存重新去读
         _projection_model.update(loaded=False, model=None)
         _corpus_cache.update(key=None, data=None, message=None)
