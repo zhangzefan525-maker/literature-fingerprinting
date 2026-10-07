@@ -489,6 +489,8 @@ function initEventListeners() {
     // 指标选择
     document.getElementById('metricSelect').addEventListener('change', function(e) {
         currentMetric = e.target.value;
+        // 右侧详情卡里的数值是按上一个指标算出来的，图重画之后它就成了「另一张图上的数字」
+        resetDetailPanelIfStale('换过观察角度');
         updateMetricHint();
         if (realData) {
             // 数据变化时，更新所有图表
@@ -618,12 +620,18 @@ function loadComparisonExample() {
     selectedBooks = new Set(picks);
     syncBookButtonStates();
     updateMetricHint(); // 指标提示里那句「你选中的 N 本」要跟着选中数走，否则会停在初始的「1 本」
-    refreshAllActiveCharts();
+    resetDetailPanelIfStale('换过书');
     syncUrlState();
+    // 这个按钮的承诺是「看看这个工具能做什么」，而结论（一句话解读、值得一看的片段）
+    // 都长在「全书对比」页上。原地点完之后用户还站在基础图表页，看到的还是同一张热力图，
+    // 等于什么都没发生——所以直接把页签切过去（switchTab 自己会重画目标页，不必先白画一遍当前页）。
+    window.switchTab('view-dashboard');
     setUploadStatus(
         `已选中《${picks.map(getBookDisplayName).join('》《')}》：它们的「${getMetricLabel(currentMetric)}」差别最大，适合先看差异。换「观察角度」可以再挑别的组合。`,
         'success'
     );
+    // 上面那句写在上传区里，而这时候页面已经滚到「全书对比」页、上传区在屏幕外。
+    showSelectionNotice('已切到「全书对比」页，这一页的几条结论是自动生成的。');
 }
 
 // 快速开始条：点 ✕ 收起，之后不再自动出现（记在本机浏览器里）
@@ -639,11 +647,21 @@ function applyQuickStartVisibility() {
         hidden = false;
     }
     el.hidden = hidden;
+    setDemoEntryVisible(hidden);
+}
+
+// 「载入对比示例」的常驻入口长在「基础趋势分析」页的标题行里，和快速开始条互斥：
+// 条子在的时候它多余，条子被 ✕ 收起之后它接班。
+// 没有这一条，✕ 就等于把这个功能整个从界面上删掉了——它记在本机，换页面、换天也不会回来。
+function setDemoEntryVisible(visible) {
+    const entry = document.getElementById('demo-entry');
+    if (entry) entry.hidden = !visible;
 }
 
 window.hideQuickStart = function() {
     const el = document.getElementById('quickstart');
     if (el) el.hidden = true;
+    setDemoEntryVisible(true);
     try {
         window.localStorage.setItem(QUICKSTART_HIDDEN_KEY, '1');
     } catch (e) { /* 存不了就这次会话内收起 */ }
@@ -925,6 +943,10 @@ window.addEventListener('resize', () => {
 
 // 加载书籍列表
 async function loadBooksList() {
+    // 这一句必须排在 fetch 前面。服务端 /api/books 里带着 _ensure_demo_data()，
+    // 全新部署的第一次请求要现场生成示例数据（api_server.py 自己的注释：重算要跑 1~3 分钟），
+    // 而这期间屏幕上原来一个字都没有——首屏看上去就是坏的。加载提示不能等第一个 await 回来。
+    showLoading('正在加载书籍列表…');
     try {
         const response = await fetch(API_ENDPOINTS.books);
         const contentType = response.headers.get('content-type') || '';
@@ -980,22 +1002,31 @@ function updateBookSelector(books) {
 // 一次性的页面提示。故意挂在 body 直下：.container 有 backdrop-filter，会成为
 // fixed 后代的包含块，挂进容器里 bottom:28px 会被当成「距容器底部 28px」——
 // 容器的两千多像素高意味着提示落在屏幕外（详情弹窗踩的正是这个坑）。
-// 3.4 秒后自己淡出；重复调用只换文字、重置计时，不会叠出第二条。
+// 默认 3.4 秒后自己淡出；重复调用只换文字、重置计时，不会叠出第二条。
+// options.announce === false：同一个字符串如果已经由顶部状态条（role="status"）念过一遍，
+//   这里就把自己从 live region 里摘出去，读屏不会连读两遍——条子本身照样看得见。
+//   元素是复用的，所以两种状态都要显式写回去，不能只在创建时设一次。
+// options.duration：错误那句话比「至少要留一本书」长得多，默认 3.4 秒读不完。
 let selectionNoticeTimer = null;
-function showSelectionNotice(text) {
+function showSelectionNotice(text, options) {
     let el = document.getElementById('selection-notice');
     if (!el) {
         el = document.createElement('div');
         el.id = 'selection-notice';
         el.className = 'selection-notice';
+        document.body.appendChild(el);
+    }
+    if (options && options.announce === false) {
+        el.removeAttribute('role');
+        el.removeAttribute('aria-live');
+    } else {
         el.setAttribute('role', 'status');
         el.setAttribute('aria-live', 'polite');
-        document.body.appendChild(el);
     }
     el.textContent = text;
     el.classList.add('show');
     if (selectionNoticeTimer) clearTimeout(selectionNoticeTimer);
-    selectionNoticeTimer = setTimeout(() => el.classList.remove('show'), 3400);
+    selectionNoticeTimer = setTimeout(() => el.classList.remove('show'), (options && options.duration) || 3400);
 }
 
 function selectBook(bookId) {
@@ -1019,6 +1050,8 @@ function selectBook(bookId) {
     updateCompareButtonLabel();
     // 指标提示里有「你选中的 N 本在 X – X 之间」，选书一变就得跟着重算
     updateMetricHint();
+    // 卡片里那个点可能刚被取消掉了（或者它所属的书已经不在这张图上）
+    resetDetailPanelIfStale('换过书');
 
     // 刷新当前可见的图表
     if (realData) {
@@ -3086,14 +3119,21 @@ function showGalaxyError(message) {
     setGalaxyLoading(message);
 }
 
+// 加载提示统一带上「可能要等多久」。这一条不能只写在详情卡里：带 ?view=dashboard 的链接
+// 进来时 #detailPanel 是隐藏的（它长在 #view-main 里），顶部状态条才是唯一看得见的反馈。
+// 而这两个接口的第一次都可能很慢——api_server.py 里 /api/books 和 /api/fingerprint-data
+// 都会走 _ensure_demo_data()，首次要现场生成示例数据（那儿的注释写着重算要跑 1~3 分钟），
+// 光一句「正在加载数据...」在那三分钟里和没有提示是一样的。
+const LOADING_WAIT_HINT = '如果这台服务刚启动，需要先生成示例数据，可能要等 1–3 分钟，页面没有卡死。';
+
 function showLoading(message) {
-    setGlobalStatus('loading', message);
+    setGlobalStatus('loading', `${message} ${LOADING_WAIT_HINT}`);
     const detailPanel = document.getElementById('detailPanel');
     if (!detailPanel) return;
     detailPanel.innerHTML = `
         <div class="state-card loading">
             <h3>◌ ${escapeHtml(message)}</h3>
-            <p>正在从当前分析服务获取数据。首次运行需生成示例数据，约 1–2 分钟。</p>
+            <p>${escapeHtml(LOADING_WAIT_HINT)}</p>
             <div class="state-spinner" aria-hidden="true"></div>
         </div>
     `;
@@ -3114,6 +3154,12 @@ function showSuccess(message) {
 function showError(message) {
     setGlobalStatus('error', message);
     showGalaxyError(message);
+    // 状态条滚出屏幕外时补一条贴底的提示，否则「点了没反应」。
+    // 判断必须放在 setGlobalStatus 之后：是它负责把状态条显示出来的，在那之前量不到它的位置。
+    // announce:false——同一句话已经由状态条那个 live region 念过，别让读屏连读两遍。
+    if (statusBarOffscreen()) {
+        showSelectionNotice(message, { announce: false, duration: 7000 });
+    }
     const detailPanel = document.getElementById('detailPanel');
     if (!detailPanel) return;
     detailPanel.innerHTML = `
@@ -3134,6 +3180,34 @@ function showNoDataMessage(message = '请在上方选择一本已有数据的书
             <p>${escapeHtml(message)}</p>
         </div>
     `;
+}
+
+// 详情卡记的是「某个片段在某个指标下的数值」。换过观察角度、换过书之后图会重画，
+// 那张卡却原样留着——纵轴已经变成「用词重复度」，卡片里还写着「平均句长 24.97」，
+// 看上去就像是当前这张图上的数字。这里把它打回未选择状态，并说明为什么没了。
+//
+// 只在「指标变了」「选中的书变了」这两处调。换图形（热力图 ↔ 折线）不影响卡里的内容；
+// 窗口 resize 更不该把用户刚点开的卡抹掉——那两处都会经过 refreshAllActiveCharts。
+//
+// 判据用卡里独有的 .block-location，而不是另立一个「现在有没有卡」的变量：写这块面板的
+// 地方有六处，多一个要同步的状态就多一个能漂移的地方。加载中/失败的卡没有这个类，不受影响。
+function resetDetailPanelIfStale(reason) {
+    const detailPanel = document.getElementById('detailPanel');
+    if (!detailPanel || !detailPanel.querySelector('.block-location')) return;
+    detailPanel.innerHTML = `
+        <h3>▤ 数据详情</h3>
+        <p>${escapeHtml(reason)}后，之前选中的那个点已经取消，重新点一下即可查看。</p>
+    `;
+}
+
+// 顶部状态条长在页面最上面。切页签会滚到视图顶部，用户已经在看「全书对比」「风格星系」时，
+// 这条消息落在视口上方几百像素处——点「导出图像」失败看上去就像没反应。
+// 「看不看得见」是几何问题，就用几何量判断，不另立标志位：滚动位置是唯一的事实来源。
+function statusBarOffscreen() {
+    const el = document.getElementById('global-status');
+    if (!el || el.hidden) return true;
+    const rect = el.getBoundingClientRect();
+    return rect.bottom <= 1 || rect.top >= window.innerHeight - 1;
 }
 
 // ==========================================
