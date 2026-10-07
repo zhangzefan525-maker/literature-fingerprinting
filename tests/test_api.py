@@ -630,5 +630,192 @@ class UploadProjectionTestCase(unittest.TestCase):
         self.assertEqual(captured["overlap"], api_server.OVERLAP)
 
 
+class DemoCorpusStalenessTestCase(unittest.TestCase):
+    """
+    _demo_corpus_is_current：判断 all_books.json 是不是当前管线生成的。
+
+    纯函数，只读文件内容，不碰任何全局状态。
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.target = Path(self._tmp.name) / "all_books.json"
+
+    def _write(self, payload):
+        self.target.write_text(payload, encoding="utf-8")
+
+    def _corpus(self, **meta):
+        self._write(json.dumps({BUILTIN_NAME: {"metadata": meta}}, ensure_ascii=False))
+
+    def test_current_version_is_current(self):
+        self._corpus(schemaVersion=api_server._DEMO_SCHEMA_VERSION)
+        self.assertTrue(api_server._demo_corpus_is_current(self.target))
+
+    def test_newer_version_still_counts_as_current(self):
+        """将来管线再升级（3、4…）时，这个判定不该反过来把新数据当成旧的。"""
+        self._corpus(schemaVersion=api_server._DEMO_SCHEMA_VERSION + 1)
+        self.assertTrue(api_server._demo_corpus_is_current(self.target))
+
+    def test_missing_schema_version_is_stale(self):
+        """线上那份一个月的旧数据就是这个形状：只有 4 个统计量，没有 schemaVersion。"""
+        self._corpus(totalBlocks=22, totalWords=220000, avgSentenceLength=18.97)
+        self.assertFalse(api_server._demo_corpus_is_current(self.target))
+
+    def test_older_version_is_stale(self):
+        self._corpus(schemaVersion=api_server._DEMO_SCHEMA_VERSION - 1)
+        self.assertFalse(api_server._demo_corpus_is_current(self.target))
+
+    def test_corrupt_json_is_stale(self):
+        self._write("not-json{{{")
+        self.assertFalse(api_server._demo_corpus_is_current(self.target))
+
+    def test_missing_file_is_stale(self):
+        self.assertFalse(api_server._demo_corpus_is_current(self.target))
+
+    def test_unexpected_shapes_are_stale(self):
+        """文件可能被别的东西覆盖成任意形状，读不动一律当过期，别抛异常。"""
+        for payload in ("[]", '"a string"', "null", '{"White Fang": null}', '{"White Fang": "x"}'):
+            with self.subTest(payload=payload):
+                self._write(payload)
+                self.assertFalse(api_server._demo_corpus_is_current(self.target))
+
+
+class DemoDataSelfHealTestCase(unittest.TestCase):
+    """
+    _ensure_demo_data：判断「示例数据要不要重算」。
+
+    旧实现只看文件在不在，而 data/processed/ 不进版本库——旧克隆里那份旧管线产物会
+    一直存在、也就永远不会被重算，线上因此喂了一个月的旧数据。这里钉住两件事：
+    结构过旧要重算；重算失败时**不能**让此后每个请求都卡满一次生成。
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self.raw = root / "data" / "raw"
+        self.processed = root / "data" / "processed"
+        self.raw.mkdir(parents=True)
+        self.processed.mkdir(parents=True)
+        self.target = self.processed / "all_books.json"
+        (self.raw / f"{BUILTIN_NAME}.txt").write_text("builtin content. " * 30, encoding="utf-8")
+
+        # 这几个都是模块级状态、跨用例共享，进出都要摆正
+        self._saved = (api_server._demo_data_ready, api_server._demo_repair_stamp)
+        api_server._demo_data_ready = False
+        api_server._demo_repair_stamp = None
+
+        self._patches = [
+            mock.patch.object(api_server, "BASE_DIR", root),
+            mock.patch.object(api_server, "DATA_DIR", self.raw),
+            mock.patch.object(api_server, "_projection_model", {"loaded": False, "model": None}),
+            mock.patch.object(api_server, "_corpus_cache", {"key": None, "data": None, "message": None}),
+        ]
+        for p in self._patches:
+            p.start()
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        for p in self._patches:
+            p.stop()
+        api_server._demo_data_ready, api_server._demo_repair_stamp = self._saved
+        self._tmp.cleanup()
+
+    def _write_corpus(self, schema_version):
+        """写一份 all_books.json；schema_version 传 None 表示旧管线那种没有该字段的。"""
+        meta = {"totalBlocks": 1, "totalWords": 2}
+        if schema_version is not None:
+            meta["schemaVersion"] = schema_version
+        self.target.write_text(
+            json.dumps({BUILTIN_NAME: {"metadata": meta, "sentenceLength": []}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _run(self, side_effect=None):
+        """跑一次 _ensure_demo_data，返回 (结果, 生成函数被调用次数)。"""
+        def fake_process_all_books():
+            if side_effect is not None:
+                side_effect()
+
+        with mock.patch("generate_data.process_all_books", side_effect=fake_process_all_books) as gen:
+            result = api_server._ensure_demo_data()
+            return result, gen.call_count
+
+    # ---- 该重算的场合 ----
+
+    def test_missing_file_is_generated(self):
+        result, calls = self._run(side_effect=lambda: self._write_corpus(2))
+        self.assertTrue(result)
+        self.assertEqual(calls, 1)
+
+    def test_stale_file_is_regenerated(self):
+        """本批针对线上那个真实故障：文件在、但只有旧管线的字段。"""
+        self._write_corpus(None)
+        result, calls = self._run(side_effect=lambda: self._write_corpus(2))
+        self.assertTrue(result)
+        self.assertEqual(calls, 1)
+        self.assertTrue(api_server._demo_corpus_is_current(self.target))
+
+    def test_corrupt_file_is_regenerated(self):
+        self.target.write_text("not-json{{{", encoding="utf-8")
+        result, calls = self._run(side_effect=lambda: self._write_corpus(2))
+        self.assertTrue(result)
+        self.assertEqual(calls, 1)
+
+    # ---- 不该重算的场合 ----
+
+    def test_current_file_is_left_alone(self):
+        self._write_corpus(api_server._DEMO_SCHEMA_VERSION)
+        result, calls = self._run()
+        self.assertTrue(result)
+        self.assertEqual(calls, 0)
+
+    def test_ready_flag_short_circuits(self):
+        api_server._demo_data_ready = True
+        self._write_corpus(None)  # 哪怕是旧的也不再看文件
+        result, calls = self._run()
+        self.assertTrue(result)
+        self.assertEqual(calls, 0)
+
+    def test_no_raw_sources_returns_false(self):
+        for stray in self.raw.glob("*.txt"):
+            stray.unlink()
+        result, calls = self._run()
+        self.assertFalse(result)
+        self.assertEqual(calls, 0)
+
+    # ---- 失败不能变成每请求一次重算 ----
+
+    def test_failed_generation_is_not_retried(self):
+        """重算要跑 1~3 分钟。同一份旧文件只试一次，否则线上每个请求都要卡满。"""
+        self._write_corpus(None)
+        result1, calls1 = self._run()  # 生成函数没写文件 = 失败
+        self.assertFalse(result1)
+        self.assertEqual(calls1, 1)
+
+        result2, calls2 = self._run()
+        self.assertFalse(result2)
+        self.assertEqual(calls2, 0, "同一份旧文件不该被反复重算")
+
+    def test_retry_allowed_after_file_changes(self):
+        """文件被换过（比如管理员手动拷了一份进来）就该重新判一次。"""
+        self._write_corpus(None)
+        self._run()
+        self._write_corpus(1)  # 仍然是旧的，但是另一份
+        result, calls = self._run(side_effect=lambda: self._write_corpus(2))
+        self.assertTrue(result)
+        self.assertEqual(calls, 1)
+
+    def test_generation_exception_is_swallowed(self):
+        """生成函数抛异常（例如 raw/ 里的书读坏了）不能把请求变成 500。"""
+        self._write_corpus(None)
+
+        def boom():
+            raise RuntimeError("nltk 挂了")
+
+        with mock.patch("generate_data.process_all_books", side_effect=boom):
+            self.assertFalse(api_server._ensure_demo_data())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
