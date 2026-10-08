@@ -1569,6 +1569,9 @@
             else if (config.mode === 'name' && config.order === 'asc') config.order = 'desc';
             else { config.mode = 'value'; config.order = 'desc'; }
             updateAdvCharts();
+            // 排序也要写回网址，和框选一个规矩：不写的话，排好序之后按 F5、或者直接
+            // 复制地址栏里那串链接发出去，还回来的都是默认顺序。
+            if (typeof syncUrlState === 'function') syncUrlState();
         }
 
         function updateSortUI() {
@@ -1649,6 +1652,15 @@
 
         window.advReset = function() {
             advState.brushRange = null; advState.selectedIds = [];
+            // 排序也回到默认。「重置视图」现在连着框选、选书、详情卡一起复位，排序不进
+            // 网址时它可以不动；一旦进了网址，不复位就会留下一个「非默认但没人改过」的
+            // 参数——链接自称还原的是本视图，那本视图就得真的是默认那一版。
+            // 默认值不在这里另写一遍，取 d3-charts.js 里那一份定义。
+            if (typeof DEFAULT_ADV_SORT === 'string') {
+                const parts = DEFAULT_ADV_SORT.split('-');
+                advState.sortConfig.mean.mode = parts[0];
+                advState.sortConfig.mean.order = parts[1];
+            }
             // 回到进页面时的样子：详情卡重新跟着图上的书全铺开
             advState.drillAuto = true; advState.previewId = null;
             d3.select(".brush").call(d3.brushX().move, null);

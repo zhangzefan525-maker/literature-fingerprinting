@@ -48,6 +48,12 @@ const METRIC_KEYS = ['sentenceLength', 'simpsonIndex', 'hapaxLegomena', 'functio
 const VIEW_IDS = ['view-main', 'view-galaxy', 'view-dashboard'];
 const DEFAULT_SMOOTHNESS = 3;
 
+// 「全书对比」页那排柱子（整体水平对比）的排序，四个状态由 advCycleSort 循环产生。
+// 第一项就是页面打开时的默认值，链接里只在不是它的时候才写出来。
+// 默认值只在这一份定义：页面内那段脚本要用它复位，走的是同一个常量，不另抄一遍。
+const ADV_SORT_STATES = ['value-desc', 'value-asc', 'name-asc', 'name-desc'];
+const DEFAULT_ADV_SORT = ADV_SORT_STATES[0];
+
 // 初始化
 document.addEventListener('DOMContentLoaded', function() {
     applyUrlState(readUrlState()); // 先按链接里的状态设置视图，再加载数据
@@ -97,6 +103,10 @@ function readUrlState() {
     }
     const brush = params.get('brush');
     if (brush && /^\d+(\.\d+)?-\d+(\.\d+)?$/.test(brush)) state.brush = brush.split('-').map(Number);
+    // 白名单校验，和 metric / chart 一个规矩：链接是手打的、也会被聊天软件截断，
+    // 认不出来的值一律当没写，不能让一个错参数把页面带到别处去
+    const sort = params.get('sort');
+    if (sort && ADV_SORT_STATES.includes(sort)) state.sort = sort;
     return state;
 }
 
@@ -117,6 +127,19 @@ function applyUrlState(state) {
         smoothness = state.smoothness;
         const slider = document.getElementById('smoothness');
         if (slider) slider.value = String(state.smoothness);
+    }
+    // 「全书对比」页柱子的排序。它也是「看得见的选择」：老师按书名排好再发链接，
+    // 收链接的人却看到按数值排的那一份，这个链接就没做到它自称的「打开即还原本次选择」。
+    // 就地改字段、不换掉整个对象：页面内几处渲染会先取到 config 再读它。
+    if (state.sort) {
+        try {
+            const parts = state.sort.split('-');
+            advState.sortConfig.mean.mode = parts[0];
+            advState.sortConfig.mean.order = parts[1];
+            // 光改状态不够：标题右边那行「数值/书名」和图标是 updateSortUI 画的，
+            // 而它平时只在重画图表时才跑，此刻一张图都还没建（首次渲染会直接 return）
+            if (typeof updateSortUI === 'function') updateSortUI();
+        } catch (e) { /* 看板状态还没建起来，就保持默认排序 */ }
     }
     // 先记住链接里的选书再切标签：switchTab 会顺手把状态写回网址，
     // 晚一步记就会把 books 参数抹掉
@@ -158,6 +181,16 @@ function buildStateUrl() {
             params.set('brush', `${brushRange[0].toFixed(4)}-${brushRange[1].toFixed(4)}`);
         }
     } catch (e) { /* 没有框选状态，忽略 */ }
+
+    // 「全书对比」页柱子的排序：只在不是默认顺序时才写。默认顺序带上去只会让链接
+    // 长出一串没人改过的参数，而链接是要被念出来、被微信折行的。
+    try {
+        const meanSort = (typeof advState !== 'undefined' && advState) ? advState.sortConfig.mean : null;
+        if (meanSort) {
+            const key = `${meanSort.mode}-${meanSort.order}`;
+            if (key !== DEFAULT_ADV_SORT) params.set('sort', key);
+        }
+    } catch (e) { /* 没有看板状态，按默认排序 */ }
 
     const query = params.toString();
     return `${window.location.origin}${window.location.pathname}${query ? `?${query}` : ''}`;
