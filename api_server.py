@@ -49,9 +49,10 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
 # 而分析开销随片段数线性增长（每个片段都要做分词与指标计算）。
 #
 # 这个上限现在由**线上超时**反推，不再是「能装多少装多少」：
-# 线上 gunicorn 是 --timeout 180 --workers 1，实测服务器上每个片段约 0.30 秒
-# （README 记过一次 248 个片段跑了 75 秒）。600 个片段要 180 秒，正好撞上超时线，
-# worker 被 SIGKILL——而只有一个 worker，那 3 分钟里整站没人应答。
+# 线上 gunicorn 是 --timeout 180 --workers 2（2026-10-08 从 1 提到 2），
+# 实测服务器上每个片段约 0.30 秒（README 记过一次 248 个片段跑了 75 秒）。
+# 600 个片段要 180 秒，正好撞上超时线，worker 被 SIGKILL——一个 worker 被占满的那 3 分钟里
+# 整站只剩一半容量（提到 2 个 worker 就是为这个）。
 # 300 个片段约 90 秒，是超时预算的一半，留了一倍余量。
 #
 # 代价写在这里，因为它是一次真实的降级：300 个片段覆盖约 31 万英文单词，
@@ -856,7 +857,7 @@ def analyze_upload():
     用户上传文本文件，即时计算文学指纹。
     复用与示例书籍完全相同的 src/* 管线，返回与 all_books.json 单本书一致的结构。
     """
-    from src.data_loader import get_blocks, detect_language
+    from src.data_loader import get_blocks, detect_language, count_blocks, decode_upload
     from src.pipeline import build_book_data
 
     if _rate_limited(request.remote_addr or "unknown"):
@@ -872,8 +873,19 @@ def analyze_upload():
     if not file or file.filename == '':
         return jsonify({"status": "error", "message": "未选择文件"}), 400
 
+    # 只收 .txt。判后缀不是「图省事」：Word 文档（.docx 其实是个压缩包）和 PDF 都是二进制，
+    # 进了分析管线只会得到一堆无意义的数值。所以这里要明说「怎么办」，而不是只说「不行」——
+    # 非技术用户手上多半就是一份 Word 文档，不给出转法他只会以为网站坏了。
+    # （前端把文件选择框的 accept 过滤去掉了，所以用户永远能选中自己的文件、看到这句话；
+    #  留着 accept=".txt" 的话他的文件在选择框里根本看不见，连这句提示都读不到。）
     if not file.filename.lower().endswith('.txt'):
-        return jsonify({"status": "error", "message": "仅支持 .txt 文本文件"}), 400
+        return jsonify({
+            "status": "error",
+            "message": "只支持纯文本文件（.txt）。如果文本在 Word 文档或 PDF 里，请先转成纯文本："
+                       "Word 打开后「文件 → 另存为 → 纯文本 (*.txt)」；"
+                       "PDF 里的文字需要先复制粘贴进一个 .txt 文件。"
+                       "如果它本来就是纯文本，把文件名后缀改成 .txt 也能上传。"
+        }), 400
 
     # 用文件名（不含扩展名）作为该书的基础名；最终键由 _resolve_final_name 决定。
     # 注意两种同名是两种结局：撞书库里的旧书 = 原地替换（旧的被整份换掉，所以响应里
@@ -881,15 +893,26 @@ def analyze_upload():
     base_name = Path(file.filename).stem
 
     try:
-        uploaded_text = file.read().decode('utf-8')
-    except UnicodeDecodeError:
-        return jsonify({
-            "status": "error",
-            "message": "文件不是有效的 UTF-8 编码。请将文本另存为 UTF-8 后重试。"
-        }), 400
+        raw_bytes = file.read()
     except Exception:
         app.logger.exception("读取上传文件失败")
         return jsonify({"status": "error", "message": "读取文件失败，请重新选择文件后再试。"}), 400
+
+    # 不假定 UTF-8。以前这一步是 raw.decode('utf-8')，解不开就回一句「请另存为 UTF-8」——
+    # 而中文 Windows 的 Word/记事本另存纯文本默认就是 GBK，西文 Windows 另存 ANSI 是 cp1252，
+    # 两种都不是 UTF-8。结果是**一份完全正常的英文小说**（正文里带 Word 生成的弯引号）
+    # 被编码卡住，用户拿到的提示还在教他改一个他改不动的东西。
+    # 现在按候选编码解一遍，具体怎么挑见 src/data_loader.py 的 decode_upload。
+    uploaded_text, encoding = decode_upload(raw_bytes)
+    if uploaded_text is None:
+        return jsonify({
+            "status": "error",
+            "message": "这个文件读不出文本内容，看起来不是纯文本文件。"
+                       "本工具只读 .txt；Word 文档请「另存为 → 纯文本 (*.txt)」，"
+                       "PDF 请先把文字复制进一个 .txt 文件。"
+        }), 400
+    if encoding != 'utf-8':
+        app.logger.info("上传文件不是 UTF-8，按 %s 解读", encoding)
 
     if not uploaded_text.strip():
         return jsonify({
@@ -914,9 +937,15 @@ def analyze_upload():
         app.logger.info("上传文本未通过语言闸门: %s", lang_stats)
         return jsonify({"status": "error", "message": reason}), 400
 
-    blocks = get_blocks(raw_text, block_size=BLOCK_SIZE, overlap=OVERLAP)
-    if not blocks:
-        word_count = len(raw_text.split())
+    # 两个长度闸门都先用**算术**算出片段数，再决定要不要真的切块。
+    # get_blocks 切一份大文本很贵：2026-10-09 实测 20 MB 正文（约 425 万词）切出 4,244 块
+    # 要 2.07 秒、峰值内存 415 MB，而这么大的文本无论切不切都要被上限拒掉——先切后判
+    # 等于白付这笔（线上是 2 GB 上下的机器、2 个 worker，415 MB 是实打实的风险）。
+    # 顺序仍是「语言闸门 → 长度闸门」，理由见上面 detect_language 那一段。
+    word_count = len(raw_text.split())
+    n_blocks = count_blocks(word_count, BLOCK_SIZE, OVERLAP)
+
+    if n_blocks == 0:
         return jsonify({
             "status": "error",
             "message": f"文本太短，无法生成指纹（至少需要约 {BLOCK_SIZE} 个英文单词，"
@@ -925,16 +954,18 @@ def analyze_upload():
 
     # 上限必须在这里拦，不能等 build_book_data 跑完——那正是要避免的等待。
     # 报错要说清「多少、上限多少、怎么办」，不然用户只会以为服务器坏了。
-    if len(blocks) > MAX_BLOCKS:
+    if n_blocks > MAX_BLOCKS:
         # 片段之间重叠 9 千词，覆盖到的词数不是「片段数 × 1 万」，而是
         # 最后一块的末尾位置：(n-1) × 步长 + 块长。
         covered = (MAX_BLOCKS - 1) * (BLOCK_SIZE - OVERLAP) + BLOCK_SIZE
         return jsonify({
             "status": "error",
             "message": f"文本太长，单次最多分析约 {MAX_BLOCKS} 个片段（覆盖约 {covered // 10000} "
-                       f"万英文单词），这份文本约 {len(blocks)} 个片段。"
+                       f"万英文单词），这份文本约 {n_blocks} 个片段。"
                        "请拆分文件后分次上传，或先截取要研究的那些章节。"
         }), 400
+
+    blocks = get_blocks(raw_text, block_size=BLOCK_SIZE, overlap=OVERLAP)
 
     # 前端在勾选「存入我的图书馆」时随 multipart 附 save=1
     want_save = request.form.get("save", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -953,7 +984,7 @@ def analyze_upload():
         app.logger.exception("上传文本分析失败")
         return jsonify({
             "status": "error",
-            "message": "文本分析失败，请确认文件是英文 UTF-8 纯文本后重试。"
+            "message": "文本分析失败，请确认这是一份英文纯文本后重试。"
         }), 422
 
     final_name = _resolve_final_name(base_name)
@@ -1225,6 +1256,35 @@ def claim_shelf():
     })
     resp.headers["Cache-Control"] = "no-store"  # 切身份的响应绝不能进任何缓存
     return resp
+
+
+def _warm_up_analysis_deps():
+    """
+    把第一次分析要用到的东西在启动时就装好，而不是留给第一个上传的人。
+
+    2026-10-09 实测：`import nltk` 本身要 3.9 秒（Windows 开发机；服务器上量级相近），
+    而这一步发生在「第一次调用 detect_language」的时候——src/data_loader.py 里
+    stopwords 是延迟导入的。服务每次 systemctl restart 都要重新付这笔，付的人是那一轮
+    第一个上传文本的用户：他看到「正在分析…」多转四秒，而那一次分析其实还没开始。
+
+    只预热「读本地文件/加载模块」这部分，**不碰** _ensure_nltk_data()：那条路在本地
+    缺数据时会去 nltk.download()，放到启动阶段会把 systemctl restart 卡在网络超时上。
+
+    放在模块层：gunicorn 的每个 worker 各自付一次（两个 worker 并行，开销量级不变），
+    而测试进程本来就要 import nltk（tests/test_data_loader.py 顶部就导入了 sent_tokenize），
+    不增加任何成本。
+    """
+    try:
+        from nltk.tokenize import sent_tokenize  # noqa: F401  先导，避免第一次切句时现装
+        from src.metrics import function_word_matrix  # noqa: F401  这个模块顶层就 import nltk
+        from src.data_loader import _english_stopwords
+        _english_stopwords()
+    except Exception:
+        # 预热失败不该拦住服务：后面真正用到时会自己再试一次，最坏也不过是慢一点
+        app.logger.exception("预热分析依赖失败（不影响功能，只是第一个请求会慢一些）")
+
+
+_warm_up_analysis_deps()
 
 
 if __name__ == '__main__':

@@ -192,6 +192,53 @@ def detect_language(text):
     return True, None, stats
 
 
+# 上传的字节不一定是 UTF-8，而「另存为纯文本」的两种现实产物都不是：
+#   1) 中文 Windows 的 Word / 记事本另存为 txt，默认写 GBK/GB18030；
+#   2) 西文 Windows 的记事本另存 ANSI，写 cp1252。
+# 英文小说正文里几乎一定有弯引号（第二十四批量过：四本内置书全用弯引号），
+# 而弯引号在 GBK 里是 A1B0 这样的双字节、在 cp1252 里是 93 这样的单字节，
+# 两者都不是合法 UTF-8。于是「把一份正常的英文小说用 Word 存成 txt 再上传」
+# 会卡在编码上，可这份文本本身一点问题都没有。
+#
+# 顺序不能改成「谁先解开用谁」：GBK 的字节往往也能被 cp1252 解出来，只是满屏乱码
+# （实测 GBK 的「他说：“你好。”」用 cp1252 解出来是「ËûËµ£º¡°ÄãºÃ¡£¡±」），
+# 反过来也一样。挑哪一份交给语言闸门去判，见 decode_upload。
+_FALLBACK_ENCODINGS = ('gb18030', 'cp1252')
+
+# 挑编码时只看开头这么多字符。这一步的候选是「哪种读法更像英文」，
+# 不必扫全书——真去扫 20 MB 要 4 秒多（detect_language 的实测值）。
+# 最后的判官仍是完整的语言闸门，这里只是选一份交给它。
+_ENCODING_SNIFF_CHARS = 200_000
+
+
+def decode_upload(raw):
+    """
+    把上传的字节解成文本。返回 (text, encoding)；都解不出来时返回 (None, None)。
+
+    UTF-8 单独优先：它是自校验的，解得开就不会解错（utf-8-sig 顺带吃掉 BOM）。
+    解不开才轮到 GB18030 与 cp1252，并用语言闸门自己来挑：先选解得开
+    （detect_language 通过）的那一份；都通不过就选非 ASCII 字符最少的那一份，
+    这样接下来报错时引用的比例，是两种读法里更可信的那个。
+    """
+    try:
+        return raw.decode('utf-8-sig'), 'utf-8'
+    except (UnicodeDecodeError, LookupError):
+        pass
+
+    best = None  # (非 ASCII 比例, 文本, 编码)
+    for encoding in _FALLBACK_ENCODINGS:
+        try:
+            text = raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        ok, _reason, stats = detect_language(text[:_ENCODING_SNIFF_CHARS])
+        if ok:
+            return text, encoding
+        if best is None or stats["nonAsciiRatio"] < best[0]:
+            best = (stats["nonAsciiRatio"], text, encoding)
+    return (best[1], best[2]) if best else (None, None)
+
+
 def get_blocks(text, block_size=BLOCK_SIZE, overlap=OVERLAP):
     """
     滑动窗口切分 (论文核心逻辑)
@@ -200,14 +247,32 @@ def get_blocks(text, block_size=BLOCK_SIZE, overlap=OVERLAP):
     """
     words = text.split() # 按空格分词
     step = block_size - overlap # 移动步长，默认1000
-    
+
     blocks = []
     # 循环切分
     for i in range(0, len(words) - block_size + 1, step):
         block = " ".join(words[i : i + block_size])
         blocks.append(block)
-        
+
     return blocks
+
+
+def count_blocks(n_words, block_size=BLOCK_SIZE, overlap=OVERLAP):
+    """
+    get_blocks 会切出几个片段——纯算术，不真的去切。
+
+    上传路径要先判「够不够长、有没有超过上限」。真的去切一份大文本代价很高：
+    2026-10-09 实测 20 MB 正文（约 425 万词）切出 4,244 块要 2.07 秒、峰值内存 415 MB，
+    而这么大的文本无论切不切都会被上限拒掉——先切后判等于白付这笔。
+    （线上 nginx 在 20 MB 就拦，本地直跑到 50 MB。）
+
+    与 get_blocks 的一致性由 tests/test_data_loader.py 的对照测试钉住：两处算法一旦分家，
+    就会出现「判过的片段数」和「真去切的片段数」对不上。
+    """
+    step = block_size - overlap
+    if n_words < block_size:
+        return 0
+    return (n_words - block_size) // step + 1
 
 def get_chapters(text):
     """
