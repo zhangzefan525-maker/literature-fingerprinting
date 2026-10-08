@@ -55,8 +55,11 @@
         </symbol>
     </svg>
 
-    <!-- 1. 背景画布 -->
-    <canvas id="matrix-canvas" style="position: fixed; top: 0; left: 0; z-index: 0; pointer-events: none;"></canvas>
+    <!-- 1. 背景画布。纯装饰（书名关键词的「文字雨」），标 aria-hidden：
+         画在 canvas 里的东西对读屏本来就是不可见的，但这块画布是固定定位、铺满全屏，
+         不标的话它在无障碍树里仍是一个「画布」节点，读屏用户会先撞上一个没有名字的空壳。
+         开关它的按钮 #btn-matrix 有名字与 aria-pressed，装饰本身不该有声音。（第三十一批） -->
+    <canvas id="matrix-canvas" aria-hidden="true" style="position: fixed; top: 0; left: 0; z-index: 0; pointer-events: none;"></canvas>
 
     <!-- 2. 全局悬浮开关 -->
     <button id="btn-matrix" onclick="toggleMatrixRain()" class="cyber-btn-float active">

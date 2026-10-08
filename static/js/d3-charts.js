@@ -1557,6 +1557,52 @@ async function loadRealData() {
     }
 }
 
+// 图表的「一句话名字」——给读屏用户，不是给眼睛看的。（第三十一批）
+//
+// 读屏用户切到主视图，最先撞上的就是这张图。没有名字的话，他听到的是一个没有标签的
+// 图形容器，然后掉进几十上百个没有上下文的片段元素里，不知道自己在哪、也不知道能做什么。
+//
+// 三件事是刻意这么定的：
+//
+// 1. **不在这里加 role="img"。** ARIA 规定 role="img" 的后代是 presentational，会被
+//    整体抹出无障碍树——而这张图里每一个片段（热力图的格子、折线图的点、星系的圆）
+//    都是 tabindex="0"、各自带 aria-label 的可聚焦元素。加上 role="img" 等于用
+//    「听到一句概述」换「再也听不到任何一个片段」，是亏的。所以只挂名字，角色不动。
+// 2. **名字里要说清怎么用键盘走。** 这张图对读屏用户唯一真正的用法是 Tab 逐个遍历片段、
+//    回车打开详情；不说，他听完名字就只能卡在那里。
+// 3. **每次重绘都要重设。** 名字里有书名、指标、片段数，图变了名字不变就是假话。
+//    所以它由调用方在画完之后设，而不是写在 HTML 里当静态属性——那边写死一个
+//    「白牙的风格走向」会一直在那儿，跟当前这张图没关系。
+//
+// 片段数按选中的这几本书算：内置四本长度一致，用户上传的书可能长短不一，不一致时
+// 改成区间并写明，不假装它们一样长。
+function describeChartForScreenReader({ kind, booksArray }) {
+    const names = booksArray.map(b => getBookDisplayName(b));
+    const booksText = names.length === 1
+        ? `《${names[0]}》`
+        : `《${names[0]}》等 ${names.length} 本书`;
+
+    if (kind === 'galaxy') {
+        return `风格星系图：${booksText}的每个片段各画成一个圆点，按高频小词用法排布，`
+             + `靠得近说明用词习惯接近。按 Tab 键可逐个片段查看，回车打开该片段的详情。`;
+    }
+
+    const counts = booksArray.map(b => getBookBlockCount(b)).filter(n => n > 0);
+    let blockText = '';
+    if (counts.length > 0) {
+        blockText = counts.every(n => n === counts[0])
+            ? `，共 ${counts[0]} 个片段`
+            : `，各书片段数不同（${Math.min(...counts)} 到 ${Math.max(...counts)} 个片段）`;
+    }
+
+    const chartText = kind === 'heatmap'
+        ? '指纹热力图：颜色越深数值越大，一行是一本书，横向按阅读顺序排开'
+        : '折线趋势图：每本书一条曲线，横向是按阅读顺序排开的片段';
+
+    return `${chartText}，${booksText}的${getMetricLabel(currentMetric)}${blockText}。`
+         + `按 Tab 键可逐个片段查看，回车打开该片段的详情。`;
+}
+
 // 修改原 initChart，只在 Main Tab 激活时工作
 function initChart() {
     // 如果不在主视图，不进行渲染，节省性能
@@ -1564,6 +1610,10 @@ function initChart() {
 
     const svg = d3.select("#main-chart");
     svg.selectAll("*").remove();
+    // 名字先撤掉：下面三条 return 路径都会留下一个画不出东西的空容器，
+    // 顶着上一次的名称（「指纹热力图：白牙的……共 43 个片段」）比没有名字更糟。
+    // 真画出来之后在末尾重新设上。
+    svg.attr("aria-label", null);
 
     if (!realData || selectedBooks.size === 0) {
         showNoDataMessage();
@@ -1581,6 +1631,8 @@ function initChart() {
     } else {
         drawMultiLineChart(svg, booksArray);
     }
+
+    svg.attr("aria-label", describeChartForScreenReader({ kind: chartType, booksArray }));
 }
 
 function drawMultiLineChart(svg, booksArray) {
@@ -1868,8 +1920,13 @@ function getChapterGridDividers(bookName, data) {
 const HEATMAP_LOW = '#7f9dc4';
 const HEATMAP_MID = '#ece0c3';
 const HEATMAP_HIGH = '#8f1d16';
-// 格子描边：中段米色与卡片底仍接近，靠描边把网格画出来
-const HEATMAP_STROKE = '#cbb894';
+// 格子描边：中段米色与卡片底仍接近，靠描边把网格画出来。
+// 2026-10-09 实测（第三十一批）：原来的 #cbb894 对卡片底 1.85:1、对中段 #ece0c3 只有
+// 1.48:1——描边的职责就是把相邻格分开，这个比值下它自己就快看不见了，格子连成一片。
+// 换成 #8f7a55：对卡片底 3.93:1、对中段 3.15:1、对纸底 3.36:1，三处都过 WCAG 1.4.11
+// 给「图形对象与相邻颜色」定的 3:1 线。它本身是个偏灰的褐，在米色系里不抢眼，
+// 只是把网格线从「若有若无」拉到「确实看得见」。格子的填色、色阶、数值映射一律未动。
+const HEATMAP_STROKE = '#8f7a55';
 // 图例两端「低 / 高」那两个字用的墨色。色阶本身要拉明暗，但文字得够黑才读得清
 // （AA 正文 4.5:1）：浅蓝 #7f9dc4 当文字只有 2.66:1，所以文字仍用深色，
 // 浅色只出现在它旁边那条渐变色条上。
@@ -4058,6 +4115,10 @@ function initStyleGalaxy() {
     const books = Array.from(selectedBooks);
     if (books.length === 0) {
         setGalaxyLoading('请先在上方选择书籍');
+        // 这条路径不重建 svg，上一轮那张图还留在容器里（历史行为，本批不改），
+        // 但它的名字不能再留着——读屏用户会听到「《白牙》的每个片段……」，
+        // 而画面上其实一本书都没选。名字是给当下的图用的，图不换了名字就得撤。
+        d3.select("#galaxy-container svg").attr("aria-label", null);
         return;
     }
 
@@ -4096,6 +4157,9 @@ function initStyleGalaxy() {
     const svg = d3.select("#galaxy-container").append("svg")
         .attr("width", width)
         .attr("height", height)
+        // 名字每次重建 svg 时设一次（这处每次渲染都是新节点，不存在残留），
+        // 循环里的圆点靠父节点的名字交代「这张图是什么」。
+        .attr("aria-label", describeChartForScreenReader({ kind: 'galaxy', booksArray: plotBooks }))
         .style("background", "radial-gradient(ellipse at center, #f8efda 0%, #f2e7cd 100%)");
 
     const defs = svg.append("defs");
