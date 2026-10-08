@@ -3239,12 +3239,67 @@ function collectExportAxisNote() {
 
 function exportLegendLineHeight() { return 18; }
 
+// 导出图底部那行「这是谁、哪张图、什么时候生成的」。
+//
+// 为什么必须跟着图走：导出的 PNG/SVG 是要贴进论文、课件、汇报里的那份产物。
+// 贴出去之后它就和这个页面脱钩了——半年后翻到这张图，没人知道它出自哪里、
+// 是什么时候按哪次选择生成的。图里现有的标题只写了指标（「平均句长 - 指纹对比」），
+// 图例只写了书名，两样都答不了「哪来的」。
+//
+// 为什么单独算行数、不并进 collectExportAxisNote：那段说明已经顶到
+// wrapAxisNote 的 MAX_LINES 上限（星系正好 6 行），再挂一句进去会有被尾部
+// 截成「…」的风险——一行署名被截掉半句比没有更糟。这里单独折行、单独计高。
+function exportProvenanceLines(maxWidth) {
+    const where = currentTab === 'view-galaxy'
+        ? '风格星系'
+        : (currentTab === 'view-dashboard' ? '全书对比' : (chartType === 'line' ? '折线趋势图' : '指纹热力图'));
+    // 时间用本地时间（和文件名、和文本摘要一致），不用 toISOString 的 UTC
+    const text = `文印·文学指纹　${where}　观察角度：${getMetricLabel(currentMetric)}　${new Date().toLocaleString('zh-CN')} 生成`;
+    // 按画布实际宽度折行：署名是 10px 字，CJK 近似全宽，所以每字算 10px，
+    // 左右各留 24px 边距。下限 24 字——画布再窄也别折成一堆碎片，那还不如让它出去。
+    const budget = Math.max(24, Math.floor(((maxWidth || 800) - 48) / 10));
+    return wrapProvenance(text, budget);
+}
+
+// 署名行的折行：断点优先落在「　」上，而不是按固定字数硬切。
+// 一开始直接复用 wrapAxisNote，手机上正好切在日期中间，切出
+// 「…观察角度：平均句长　2026/」+「10/9 02:34:11 生成」这种半截日期——
+// 半截日期比换行难看，也更容易被误读成别的意思。署名里每一段（谁、哪张图、
+// 什么角度、什么时候）本来就是独立字段，断在字段之间既不丢信息也读得通。
+// 装不下就一段一行，最多 4 行（署名固定 4 段），不会顶到 wrapAxisNote 那个行数上限。
+function wrapProvenance(text, maxChars) {
+    const MAX = maxChars || 46;
+    const lines = [];
+    String(text).split('　').forEach(part => {
+        if (!part) return;
+        // 单段自己就超宽（窄画布 + 长角度名）只能硬切，碎下来的尾巴照常往下塞
+        let rest = part;
+        while (rest.length > MAX) {
+            lines.push(rest.slice(0, MAX));
+            rest = rest.slice(MAX);
+        }
+        if (!rest) return;
+        const last = lines.length - 1;
+        // 「+ 1」是算上要塞回去的那个分隔空格；塞不进去就另起一行——
+        // 这时不补空格，换行本身已经把两段分开了
+        if (last >= 0 && lines[last].length + 1 + rest.length <= MAX) {
+            lines[last] += '　' + rest;
+        } else {
+            lines.push(rest);
+        }
+    });
+    return lines.length ? lines : [''];
+}
+
 // 轴说明的折行。算高度和画文字**必须**都走这一个函数：以前两边各写各的
 // （高度按 Math.ceil(len/46) 估、画的时候按 i += 46 且硬顶 4 行），一旦说明超过
 // 4 行或长度不是 46 的整数倍，两者就对不上，图例带会盖住图或多出一截空白。
 // 折行优先断在「；」处（那是前后两段轴的天然断点），单段超长才按 46 字硬折。
-function wrapAxisNote(axisNote) {
-    const MAX = 46;
+//
+// maxChars 可传：署名那行是 10px 字、且画布宽度会变（手机上导出的画布只有桌面一半宽），
+// 固定 46 字在窄画布上会横穿出去。默认 46 保持轴说明原来的行为不变。
+function wrapAxisNote(axisNote, maxChars) {
+    const MAX = maxChars || 46;
     // 上限从 6 提到 7：星系的说明多了「大小 = …」一行（大小那行 + 两条轴说明 +
     // 范围说明 实测正好折到 6 行），刚好顶到上限就没有余量了，再多一条告警就会
     // 从尾部吃掉一整段。高度和画字都走这个函数，改了不会失配。
@@ -3273,13 +3328,16 @@ function wrapAxisNote(axisNote) {
     return lines;
 }
 
-// 图例带的高度：每条图例一行，轴说明按 wrapAxisNote 的实际行数
-function exportLegendBandHeight(items, axisNote) {
-    if (!items.length && !axisNote) return 0;
+// 图例带的高度：每条图例一行，轴说明按 wrapAxisNote 的实际行数，署名行另算
+function exportLegendBandHeight(items, axisNote, provenanceLines) {
+    const sign = (provenanceLines || []).length;
+    if (!items.length && !axisNote && !sign) return 0;
     const lineH = exportLegendLineHeight();
     let lines = items.length;
     if (axisNote) lines += wrapAxisNote(axisNote).length;
-    return lines * lineH + 16;
+    if (sign) lines += sign;
+    // 署名与上面那段之间空一行：一行 18px 的间距太大，取半个行高，够分开就行
+    return lines * lineH + 16 + (sign ? lineH / 2 : 0);
 }
 
 // 三种图的 svg 尺寸写法并不统一：基础趋势/全书对比是 viewBox + inline 高度，
@@ -3304,8 +3362,8 @@ function prepareExportSvg(svg, extraHeight) {
     return { clone, vbX, vbY, vbW, vbH, totalH };
 }
 
-function attachExportLegend(prep, items, axisNote, shape) {
-    if (!items.length && !axisNote) return;
+function attachExportLegend(prep, items, axisNote, shape, provenanceLines) {
+    if (!items.length && !axisNote && !(provenanceLines || []).length) return;
     const NS = 'http://www.w3.org/2000/svg';
     const g = document.createElementNS(NS, 'g');
     const x0 = prep.vbX + 24;
@@ -3356,6 +3414,17 @@ function attachExportLegend(prep, items, axisNote, shape) {
         });
     }
 
+    if ((provenanceLines || []).length) {
+        // 与上面那段之间留半个行高。这里的间距必须和 exportLegendBandHeight 里
+        // 加的那半个行高是同一个数：一边加一边不加，署名就会压着轴说明最后一行。
+        y += lineH / 2;
+        provenanceLines.forEach(line => {
+            // 比轴说明再小一档、淡一档：它是署名，不该跟图例抢注意力
+            addText(x0, y, 10, '#8a8172', line);
+            y += lineH;
+        });
+    }
+
     g.setAttribute('class', 'export-legend');
     prep.clone.appendChild(g);
 }
@@ -3364,9 +3433,16 @@ function attachExportLegend(prep, items, axisNote, shape) {
 function buildExportSvg(svg) {
     const legend = collectExportLegend();
     const axisNote = collectExportAxisNote();
-    const extra = exportLegendBandHeight(legend.items, axisNote);
+    // 署名行折几行取决于画布多宽，而宽度由 prepareExportSvg 从 viewBox 里读出来。
+    // 所以先跑一遍 prepareExportSvg(svg, 0) 只为拿宽度——它只克隆、不写盘，多跑一次
+    // 的代价远小于「宽度判断各写一份」带来的漂移（viewBox 的解析规则已经有几处依赖了）。
+    const probe = prepareExportSvg(svg, 0);
+    // 署名行只算一次，算高和画字用同一份：分头各折一次行，一旦折出来的行数不同，
+    // 图例带就会少一截或多一截（这条教训轴说明那里已经吃过一次）。
+    const provenanceLines = exportProvenanceLines(probe.vbW);
+    const extra = exportLegendBandHeight(legend.items, axisNote, provenanceLines);
     const prep = prepareExportSvg(svg, extra);
-    attachExportLegend(prep, legend.items, axisNote, legend.shape);
+    attachExportLegend(prep, legend.items, axisNote, legend.shape, provenanceLines);
     return prep;
 }
 
@@ -3406,9 +3482,8 @@ function exportChart() {
         context.drawImage(img, 0, 0, canvas.width, canvas.height);
         
         const link = document.createElement('a');
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
-        link.download = `文印_${exportFileLabel()}_${target.label}_${timestamp}.png`;
+        link.download = `文印_${exportFileLabel()}_${target.label}_${exportTimestamp()}.png`;
         link.href = canvas.toDataURL('image/png');
         
         document.body.appendChild(link); 
@@ -3622,8 +3697,25 @@ function downloadBlob(content, filename, mime) {
     URL.revokeObjectURL(link.href);
 }
 
+// 导出文件名里的时间戳。**用本地时间，不用 toISOString()。**
+//
+// toISOString() 给的是 UTC。北京时间比 UTC 早 8 小时，于是上午 8 点前导出的文件，
+// 文件名里的日期是**前一天**：2026-10-09 凌晨 2 点导出的 PNG 会叫
+// 「…_2026-10-08T18-20-00.png」。而同一份导出里的文本摘要、CSV 注释行写的都是
+// `new Date().toLocaleString('zh-CN')`（本地时间）——摘要说 10 月 9 日、文件名说 10 月 8 日，
+// 同一次导出的产物互相打架。文件名里带日期本来就是为了「一眼认出这是哪次导出的」，
+// 差一天正好把这点用处抵消掉。
+//
+// 格式保持原样（ISO 样式、冒号点号换成横线、截到秒）：用 - 分隔在 Windows/macOS/Linux
+// 上都合法，顺序也仍然可排序。只换时区，换的是那两个数字的来源。
+//
+// 全项目只有这一个地方生成导出时间戳——画图那条路径原来自己又写了一遍同款表达式，
+// 两处一起漂移的可能性比只留一处大得多。
 function exportTimestamp() {
-    return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+        + `T${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
 }
 
 // 当前屏幕上真正参与分析的那几本书。
