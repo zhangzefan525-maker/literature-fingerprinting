@@ -29,6 +29,14 @@ import api_server  # noqa: E402
 
 BUILTIN_NAME = "White Fang"
 
+# 测试用的访客编号。真实运行时这枚编号由服务器随机签发（见 api_server._identify_visitor），
+# 这里固定一个，好让「存进去的书」和「读出来的书」落在同一个书架目录里，且可以断言。
+TEST_VISITOR = "testvisitor00000001"
+
+# 模拟线上域名：删除保护的用例靠伪造 Host 头来区分「本机 / 线上」。
+# 它同时决定了 cookie 归属哪个站点——换 Host 就是换站点，按 localhost 存的那枚带不过去。
+REMOTE_HOST = "literature-fingerprinting.onrender.com"
+
 # 结构与真实单书一致的最小桩（足够让路由/合并逻辑消费）。
 # 注意 hapaxLegomena 是 Honoré R（量级 1700–2500，见 data/processed/all_books.json），
 # 不是「只出现一次的词的个数」——写文案时别照这个桩的数值反推语义。
@@ -127,6 +135,8 @@ class LibraryApiTestCase(unittest.TestCase):
         self.raw.mkdir(parents=True)
         self.processed.mkdir(parents=True)
         self.library.mkdir(parents=True)
+        # 书架的真正落盘位置：LIBRARY_DIR 下面按访客编号分的一格
+        self.shelf = self.library / TEST_VISITOR
 
         (self.raw / f"{BUILTIN_NAME}.txt").write_text("builtin content. " * 30, encoding="utf-8")
         (self.processed / "all_books.json").write_text(
@@ -145,6 +155,12 @@ class LibraryApiTestCase(unittest.TestCase):
 
         api_server.app.config["TESTING"] = True
         self.client = api_server.app.test_client()
+        # 书架按访客编号分目录：客户端带上固定的编号，请求才会落在 self.shelf 里。
+        # 不带上也不是错——服务器会给一个新编号——但那样每请求换一格，存了就读不回来。
+        # 两个域名各存一枚同号的：删除保护的用例会伪造 Host 头，那是另一个站点，
+        # 按 localhost 存的那枚带不过去。
+        self.client.set_cookie(api_server.VISITOR_COOKIE, TEST_VISITOR)
+        self.client.set_cookie(api_server.VISITOR_COOKIE, TEST_VISITOR, domain=REMOTE_HOST)
         # 限流是进程级的：不清理的话，用例一多就会互相拖累（后跑的用例收到 429）
         api_server._rate_state.clear()
 
@@ -154,19 +170,28 @@ class LibraryApiTestCase(unittest.TestCase):
         self._tmp.cleanup()
 
     def _put_library(self, name, payload=None):
-        target = self.library / f"{name}.json"
+        self.shelf.mkdir(parents=True, exist_ok=True)
+        target = self.shelf / f"{name}.json"
         target.write_text(json.dumps(payload if payload is not None else FAKE_BOOK, ensure_ascii=False),
                           encoding="utf-8")
         return target
 
-    def _post_analyze(self, filename, content=b"content", save=True):
+    def _post_analyze(self, filename, content=b"content", save=True, client=None):
         """带桩地走 /api/analyze：不做真实 NLTK 分析。"""
         with mock.patch("src.data_loader.get_blocks", return_value=["alpha", "beta"]), \
              mock.patch("src.pipeline.build_book_data", return_value=FAKE_BOOK):
             data = {"file": (io.BytesIO(content), filename)}
             if save:
                 data["save"] = "1"
-            return self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
+            return (client or self.client).post("/api/analyze", data=data,
+                                                content_type="multipart/form-data")
+
+    def _another_visitor(self, visitor):
+        """再开一个「浏览器」：另一个客户端，另一个访客编号。"""
+        client = api_server.app.test_client()
+        client.set_cookie(api_server.VISITOR_COOKIE, visitor)
+        client.set_cookie(api_server.VISITOR_COOKIE, visitor, domain=REMOTE_HOST)
+        return client
 
     # ---- /api/books ----
     def test_books_mark_builtin_then_library(self):
@@ -194,7 +219,7 @@ class LibraryApiTestCase(unittest.TestCase):
         self.assertEqual(result["book"], f"{BUILTIN_NAME}（我的）")
         self.assertTrue(result["saved"])
         self.assertEqual(result["storage"], "local-library")  # test client host 为 localhost
-        self.assertTrue((self.library / f"{BUILTIN_NAME}（我的）.json").exists())
+        self.assertTrue((self.shelf / f"{BUILTIN_NAME}（我的）.json").exists())
         # 内置原始文件未被覆盖
         self.assertTrue((self.raw / f"{BUILTIN_NAME}.txt").exists())
 
@@ -204,12 +229,12 @@ class LibraryApiTestCase(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertFalse(result["saved"])
         self.assertNotIn("storage", result)
-        self.assertEqual(list(self.library.glob("*.json")), [])
+        self.assertEqual(list(self.shelf.glob("*.json")), [])
 
     def test_analyze_same_name_twice_replaces_single_file(self):
         self._post_analyze("MyDoc.txt")
         self._post_analyze("MyDoc.txt")
-        files = list(self.library.glob("*.json"))
+        files = list(self.shelf.glob("*.json"))
         self.assertEqual([f.name for f in files], ["MyDoc.json"])
 
     # ---- /api/fingerprint-data 合并 ----
@@ -218,7 +243,7 @@ class LibraryApiTestCase(unittest.TestCase):
         # 与内置同名的书库文件不应覆盖内置数据
         self._put_library(BUILTIN_NAME, {"metadata": {}, "sentenceLength": []})
         # 损坏文件应被跳过，不影响其余合并
-        (self.library / "Bad.json").write_text("not-json{{{", encoding="utf-8")
+        (self.shelf / "Bad.json").write_text("not-json{{{", encoding="utf-8")
 
         resp = self.client.get("/api/fingerprint-data")
         self.assertEqual(resp.status_code, 200)
@@ -240,7 +265,7 @@ class LibraryApiTestCase(unittest.TestCase):
         self._put_library("Alice", dict(FAKE_BOOK, _deleteToken="tok-alice"))
         resp = self.client.delete("/api/library/Alice", headers={"X-Delete-Token": "tok-alice"})
         self.assertEqual(resp.status_code, 200)
-        self.assertFalse((self.library / "Alice.json").exists())
+        self.assertFalse((self.shelf / "Alice.json").exists())
         # 二次删除 → 404
         resp2 = self.client.delete("/api/library/Alice", headers={"X-Delete-Token": "tok-alice"})
         self.assertEqual(resp2.status_code, 404)
@@ -255,7 +280,96 @@ class LibraryApiTestCase(unittest.TestCase):
         path = "/api/library/" + quote("实验（我的）")
         resp = self.client.delete(path, headers={"X-Delete-Token": "tok-cjk"})
         self.assertEqual(resp.status_code, 200)
-        self.assertFalse((self.library / "实验（我的）.json").exists())
+        self.assertFalse((self.shelf / "实验（我的）.json").exists())
+
+
+class VisitorIsolationTestCase(LibraryApiTestCase):
+    """
+    每人一个书架：别人存的书，你既看不见、也删不掉、更不会进到你自己的图里。
+
+    不做账号，靠的是一枚存在浏览器里的随机编号（api_server._identify_visitor）。
+    """
+
+    OTHER_VISITOR = "othervisitor00000002"
+
+    def test_first_request_hands_out_a_visitor_cookie(self):
+        client = api_server.app.test_client()
+        resp = client.get("/api/books")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(f"{api_server.VISITOR_COOKIE}=", resp.headers.get("Set-Cookie", ""))
+        # 编号发一次就够：第二趟不该再回设
+        again = client.get("/api/books")
+        self.assertNotIn(api_server.VISITOR_COOKIE, again.headers.get("Set-Cookie", ""))
+        # 第二趟请求带回去的，正是第一趟发下来的那枚编号
+        handed = resp.headers["Set-Cookie"].split(";")[0]  # lf_visitor=xxxx
+        self.assertIn(handed, again.request.headers.get("Cookie", ""))
+
+    def test_books_and_corpus_are_per_visitor(self):
+        self._put_library("Alice")
+        other = self._another_visitor(self.OTHER_VISITOR)
+
+        mine = {b["id"] for b in self.client.get("/api/books").get_json()["books"]}
+        theirs = {b["id"] for b in other.get("/api/books").get_json()["books"]}
+        self.assertIn("Alice", mine)
+        self.assertNotIn("Alice", theirs)
+        self.assertIn(BUILTIN_NAME, theirs, "内置示例书是所有人共用的")
+
+        self.assertIn("Alice", self.client.get("/api/fingerprint-data").get_json()["data"])
+        self.assertNotIn("Alice", other.get("/api/fingerprint-data").get_json()["data"])
+
+    def test_library_book_data_is_not_reachable_by_others(self):
+        self._put_library("Alice")
+        other = self._another_visitor(self.OTHER_VISITOR)
+        self.assertEqual(self.client.get("/api/book/Alice").status_code, 200)
+        self.assertEqual(other.get("/api/book/Alice").status_code, 404)
+
+    def test_cannot_delete_another_visitors_book(self):
+        self._put_library("Alice", dict(FAKE_BOOK, _deleteToken="tok-alice"))
+        other = self._another_visitor(self.OTHER_VISITOR)
+        # 连删除令牌一起带上也删不掉：这本书根本不在他的书架上
+        resp = other.delete("/api/library/Alice", headers={"X-Delete-Token": "tok-alice"})
+        self.assertEqual(resp.status_code, 404)
+        self.assertTrue((self.shelf / "Alice.json").exists())
+
+    def test_same_name_can_live_on_two_shelves(self):
+        self._put_library("MyDoc")
+        other = self._another_visitor(self.OTHER_VISITOR)
+        result = self._post_analyze("MyDoc.txt", client=other).get_json()
+        # 甲先占了 MyDoc，不影响乙：乙存下来还是 MyDoc，不会变成 MyDoc（我的）(2)，
+        # 也不会把甲那份整份换掉
+        self.assertEqual(result["book"], "MyDoc")
+        self.assertFalse(result.get("replacedExisting"))
+        self.assertTrue((self.shelf / "MyDoc.json").exists())
+        self.assertTrue((self.library / self.OTHER_VISITOR / "MyDoc.json").exists())
+
+    def test_another_visitors_book_never_enters_your_corpus(self):
+        other = self._another_visitor(self.OTHER_VISITOR)
+        etag = other.get("/api/fingerprint-data").headers["ETag"]
+        self._put_library("Alice")  # 甲存了一本书，乙那边什么都没变
+        resp = other.get("/api/fingerprint-data", headers={"If-None-Match": etag})
+        # 乙的内容确实一点没变，304 是对的。这一条专钉「书架指纹必须按访客取」：
+        # 若指纹又变回「扫全库」，甲的保存会把乙的 ETag 一起改掉，这里就会变成 200。
+        self.assertEqual(resp.status_code, 304)
+        self.assertEqual(other.get("/api/book/Alice").status_code, 404)
+
+    def test_forged_visitor_cookie_cannot_escape_the_library_dir(self):
+        """伪造的编号只有一种下场：当成没有编号，另发一枚；绝不用它去拼路径。"""
+        root = Path(self._tmp.name)
+        for bad in ["../../escaped", "..", ".", "short", "with/slash", "a" * 200]:
+            with self.subTest(cookie=bad):
+                client = api_server.app.test_client()
+                client.set_cookie(api_server.VISITOR_COOKIE, bad)
+                resp = self._post_analyze("MyDoc.txt", client=client)
+                self.assertEqual(resp.status_code, 200)
+                # 服务器另发了一枚合法编号
+                self.assertIn(f"{api_server.VISITOR_COOKIE}=", resp.headers.get("Set-Cookie", ""))
+        # 落盘只可能落在 data/library/ 下面，外面一个目录都没多出来
+        self.assertFalse((root / "escaped").exists())
+        self.assertFalse((root.parent / "escaped").exists())
+        saved = list((root / "data" / "library").rglob("MyDoc.json"))
+        self.assertEqual(len(saved), len(["../../escaped", "..", ".", "short", "with/slash", "a" * 200]))
+        for path in saved:
+            self.assertEqual(path.parent.parent, root / "data" / "library")
 
 
 class LegacyLibraryTestCase(LibraryApiTestCase):
@@ -303,7 +417,7 @@ class LegacyLibraryTestCase(LibraryApiTestCase):
 class DeleteProtectionTestCase(LibraryApiTestCase):
     """删除保护：非本机访问必须带上保存时签发的删除令牌。"""
 
-    REMOTE = {"Host": "literature-fingerprinting.onrender.com"}
+    REMOTE = {"Host": REMOTE_HOST}
 
     def test_nonlocal_delete_without_token_is_rejected(self):
         target = self._put_library("Alice")
@@ -332,13 +446,13 @@ class DeleteProtectionTestCase(LibraryApiTestCase):
         self.assertTrue(token)
 
         # 令牌随书落盘，保存它的浏览器下次还拿得到
-        stored = json.loads((self.library / "MyDoc.json").read_text(encoding="utf-8"))
+        stored = json.loads((self.shelf / "MyDoc.json").read_text(encoding="utf-8"))
         self.assertEqual(stored["_deleteToken"], token)
 
         resp = self.client.delete("/api/library/MyDoc",
                                   headers=dict(self.REMOTE, **{"X-Delete-Token": token}))
         self.assertEqual(resp.status_code, 200)
-        self.assertFalse((self.library / "MyDoc.json").exists())
+        self.assertFalse((self.shelf / "MyDoc.json").exists())
 
     def test_localhost_delete_needs_token_by_default(self):
         """
@@ -361,7 +475,7 @@ class DeleteProtectionTestCase(LibraryApiTestCase):
         self._put_library("Alice", dict(FAKE_BOOK, _deleteToken="right-token"))
         resp = self.client.delete("/api/library/Alice", headers={"X-Delete-Token": "right-token"})
         self.assertEqual(resp.status_code, 200)
-        self.assertFalse((self.library / "Alice.json").exists())
+        self.assertFalse((self.shelf / "Alice.json").exists())
 
     def test_localhost_delete_without_token_when_explicitly_allowed(self):
         """显式开关：ALLOW_LOCAL_DELETE=1 时本机才免令牌（默认关闭）。"""

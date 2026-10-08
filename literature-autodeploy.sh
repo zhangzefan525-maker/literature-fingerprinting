@@ -26,7 +26,13 @@ cd /opt/literature-fingerprinting || exit 1
 # 超时兜底：这台机器到 github.com 经常卡满两分钟（GnuTLS recv error / 443 连不通），
 # 不设上限会把每一轮 cron 都拖住、并连带跳过下一轮。
 # 拉取失败一律安静退出——下一轮会自动重试；**绝不能因为拉不动就去重启服务**。
-if ! timeout 90 git fetch origin master -q 2>>"$LOG"; then
+#
+# `-c http.version=HTTP/1.1`：2026-10-08 查线上日志，cron 里的失败几乎全是
+#   error: RPC failed; curl 16 Error in the HTTP2 framing layer
+#   fatal: expected flush after ref listing
+# 这不是慢、是秒失败（跟上面的超时是两回事，所以两条都得在）。手动加这条开关实测
+# **第一次就拉下来了**。默认走 HTTP/2，这台机器的网络路径谈不下。
+if ! timeout 90 git -c http.version=HTTP/1.1 fetch origin master -q 2>>"$LOG"; then
   exit 0
 fi
 

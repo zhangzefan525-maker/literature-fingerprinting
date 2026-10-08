@@ -18,7 +18,7 @@ function isLocalHost() {
 // 窗口里要折三行、整条 120px 高，而其中「勾选「存入我的图书馆」后……」半句与勾选框自己的
 // title 逐字重复（那个 title 里说得很完整），删掉；剩下的隐私告知必须留在明面上——折进
 // 抽屉反而是想藏起来的样子——所以是压缩措辞，不是折叠。
-const DEFAULT_UPLOAD_STATUS = '支持英文 .txt，建议 1 万词以上。';
+const DEFAULT_UPLOAD_STATUS = '支持英文 .txt，建议 1 万词以上；超长篇（几十万词）请分次上传。';
 
 // 全局变量
 let realData = null;
@@ -227,10 +227,14 @@ function setUploadBusy(isBusy) {
 }
 
 function getErrorMessage(response, result) {
-    if (response.status === 413) {
-        return '文件太大，单个文件不能超过 50 MB。请选择较小的 .txt 文件后重试。';
-    }
+    // 先认服务端给的 message，再管状态码。原来的顺序反了：413 一律被下面这句硬编码的
+    // 「不能超过 50 MB」顶掉，而那个数字在线上是错的（nginx 在 20 MB 就拦），
+    // 连服务端自己写好的解释也一并丢掉。走到兜底 413 只剩一种情况——请求根本没到应用，
+    // 是 nginx 直接回的 HTML 错误页，那种响应里读不到 message。
     if (result && result.message) return result.message;
+    if (response.status === 413) {
+        return '文件太大，服务器不接受这么大的上传。请先截取要研究的章节，或拆成几个文件分次上传。';
+    }
     if (!response.ok) return `服务器暂时无法完成分析（HTTP ${response.status}），请稍后重试。`;
     return '服务器返回了无法识别的结果，请稍后重试。';
 }
@@ -739,7 +743,9 @@ async function handleFileUpload(event) {
         syncUrlState();
         const nBlocks = result.data && result.data.metadata ? result.data.metadata.totalBlocks : 0;
         const savedMsg = result.saved
-            ? '已存入「我的图书馆」，刷新后仍在，可点书名旁 ✕ 删除。'
+            // 「只有这个浏览器能看到」必须说出来：书架是按浏览器里的一枚编号分开放的，
+            // 不说的话，用户会以为别人也能看到、或者以为自己换个设备还找得回来。
+            ? '已存入「我的图书馆」（只有这个浏览器能看到），刷新后仍在，可点书名旁 ✕ 删除。'
             : (result.warning ? '' : '本次未勾选保存，刷新后不会保留。');
         // 书名跟用户以为的不一致时，必须说出来。三种情况，后果完全不同：
         //   1) renamedFrom   —— 撞了内置示例书，存成了《X（我的）》，谁都没被覆盖；
@@ -755,10 +761,10 @@ async function handleFileUpload(event) {
                 : `${oldName}是内置示例书的书名，这次的分析以${newName}显示。`);
         }
         if (result.replacedExisting) {
-            notes.push(`书库里同名的${newName}已被这次的结果整份替换，上一版分析不再保留。`);
+            notes.push(`你书架上同名的${newName}已被这次的结果整份替换，上一版分析不再保留。`);
         } else if (result.shadowsExisting) {
             notes.push(`书名和你已保存的${newName}重名：屏幕上显示的是这次的分析结果，`
-                + '书库里存着的仍是上次保存的那一份（这次未勾选保存）。');
+                + '书架里存着的仍是上次保存的那一份（这次未勾选保存）。');
         }
         if (result.warning) notes.push(result.warning);
         setUploadStatus(

@@ -4,10 +4,12 @@
 __pycache__/
 *.py[cod]
 data/processed/
+data/library/
 .venv/
 venv/
 .vscode/
 .idea/
+.claude/
 .DS_Store
 Thumbs.db
 *.log
