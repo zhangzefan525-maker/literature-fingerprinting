@@ -322,6 +322,64 @@ def _strip_internal(book_data):
     return {key: value for key, value in book_data.items() if not key.startswith("_")}
 
 
+def _public_book_data(book_data):
+    """
+    下发用的书籍数据：每段摘录只留 150 字的 preview，摘掉 1200 字的 extended_preview。
+
+    长摘录占了首屏响应体量的七成，却只在「复制更长的摘录」和原文弹窗里用得到——
+    前端需要时改从 /api/excerpt 按段取（存储里原样保留，一个字节不动）。
+
+    **绝不就地修改**：传进来的可能是 _load_corpus 缓存里的共享对象。就地 pop 会让
+    /api/excerpt 从此只能取到短摘录，而且不报任何错——表现为「这本书就是没有更长的
+    摘录」这种看起来正常的降级。所以只新建 dict，其余条目原样引用。
+    """
+    if not isinstance(book_data, dict):
+        return book_data
+    public = {}
+    for key, value in book_data.items():
+        if isinstance(value, list):
+            public[key] = [
+                ({k: v for k, v in entry.items() if k != "extended_preview"}
+                 if isinstance(entry, dict) and "extended_preview" in entry else entry)
+                for entry in value
+            ]
+        else:
+            public[key] = value
+    return public
+
+
+def _public_corpus(data):
+    """整份语料的下发版：逐本书走 _public_book_data（同样绝不就地改缓存）。"""
+    if not isinstance(data, dict):
+        return data
+    return {name: _public_book_data(book) for name, book in data.items()}
+
+
+def _find_excerpt(book_data, block):
+    """
+    在一本书里找某个片段的摘录：返回 (文本, 是不是长摘录)。
+
+    必须两遍式：老数据（v1）只有 functionWords 一个指标带 extended_preview，
+    如果在「只有短摘录」的指标上找到就返回，就永远走不到那份长文。
+    _METRIC_KEYS 是 set，迭代顺序无定义，先排序再扫。
+    """
+    short_fallback = None
+    for key in sorted(_METRIC_KEYS):
+        entries = book_data.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("block") != block:
+                continue
+            extended = entry.get("extended_preview")
+            if isinstance(extended, str) and extended:
+                return extended, True
+            short = entry.get("preview")
+            if short_fallback is None and isinstance(short, str) and short:
+                short_fallback = short
+    return short_fallback, False
+
+
 # ---------------------------------------------------------------------------
 # 语料缓存：每次请求都重新解析 700 KB JSON 太浪费。
 # 按「源文件指纹」缓存，all_books.json 或**本书架**里任一文件变了才重读。
@@ -572,6 +630,16 @@ def visualization():
             app.logger.exception("找不到可视化页面文件")
             return "错误: 找不到可视化页面文件。请确保 d3_visualization.html 在项目根目录或 static 文件夹中。", 404
 
+@app.route('/favicon.ico')
+def favicon():
+    """
+    站点图标。浏览器（以及各种爬虫）默认都会来要 /favicon.ico——以前这里 404，
+    是历次批次记录在案的那条控制台噪音。页面 head 里同时有 <link rel="icon">，
+    这条路由是给不起 link 的场景兜底；图标是 SVG，就近发同一份。
+    """
+    return send_from_directory(str(STATIC_DIR), 'favicon.svg',
+                               mimetype='image/svg+xml', max_age=86400)
+
 # api_server.py
 
 @app.route('/api/fingerprint-data', methods=['GET'])
@@ -595,12 +663,15 @@ def get_fingerprint_data():
         resp = jsonify({
             "status": "success",
             "message": message,
-            "data": data
+            # 长摘录（每段 1200 字符）不下发：它占这份响应体量的七成，而只有
+            # 「复制更长的摘录」和原文弹窗用得到，需要时改从 /api/excerpt 按段取。
+            "data": _public_corpus(data)
         })
 
-        # 首屏每次都要拉这一份（未压缩 1.5 MB，gzip 后约 0.5 MB），而它只在重新生成数据
-        # 或书库变动时才会变。带上 ETag 让重复访问走 304：浏览器仍然每次都问一句，
-        # 只是问到的答案是「没变」，于是这 0.5 MB 不用重传。
+        # 首屏每次都要拉这一份（未压缩约 0.29 MB，gzip 后约 0.04 MB；摘掉长摘录之前
+        # 是 1.5 MB / 0.5 MB），而它只在重新生成数据或书库变动时才会变。带上 ETag 让
+        # 重复访问走 304：浏览器仍然每次都问一句，只是问到的答案是「没变」，于是这
+        # 0.04 MB 不用重传。
         # no-cache 是「可以存，但每次都要先确认」，不是「不许存」——数据会变，必须revalidate。
         # 内容是因人而异的（每人书架上放着自己的书），所以除了 ETag 认内容，
         # 还要用 Vary 告诉沿途的缓存：同一个网址，带着不同 cookie 来拿到的是不同的东西。
@@ -632,7 +703,9 @@ def get_book_data(book_name):
             return jsonify({
                 "status": "success",
                 "book": book_name,
-                "data": all_data[book_name]
+                # 与 /api/fingerprint-data 同一条规则：响应里不下发长摘录
+                # （按需取走 /api/excerpt）。该端点目前没有前端调用方。
+                "data": _public_book_data(all_data[book_name])
             })
 
         return jsonify({
@@ -645,6 +718,51 @@ def get_book_data(book_name):
         return jsonify({
             "status": "error",
             "message": "服务器读取这本书的数据时出错，请稍后重试。"
+        }), 500
+
+@app.route('/api/excerpt/<path:book_name>', methods=['GET'])
+def get_block_excerpt(book_name):
+    """
+    按需取某个片段的长摘录（首屏响应不再带它，见 _public_book_data）。
+
+    只查数据、不拼文件路径，所以不做 sanitize——穿越串在这里只是查不到（同 /api/analysis）。
+    用户点击驱动、无序请求无批量，与 /api/book、/api/analysis 一样不限流。
+    """
+    try:
+        block = int(str(request.args.get("block", "")).strip())
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "片段号必须是一个非负整数。"}), 400
+    if block < 0:
+        return jsonify({"status": "error", "message": "片段号必须是一个非负整数。"}), 400
+
+    try:
+        _ensure_demo_data()
+        all_data, _message = _load_corpus()
+        book_data = (all_data or {}).get(book_name)
+        if not isinstance(book_data, dict):
+            return jsonify({
+                "status": "error",
+                "message": "这本书不在当前数据里，请刷新页面后重试。"
+            }), 404
+        excerpt, extended = _find_excerpt(book_data, block)
+        if not excerpt:
+            return jsonify({
+                "status": "error",
+                "message": "这个片段没有可用的摘录。"
+            }), 404
+        return jsonify({
+            "status": "success",
+            "book": book_name,
+            "block": block,
+            "excerpt": excerpt,
+            # false = 只有 150 字短摘录可用（老数据或该段没有长文本），前端据此换文案
+            "extended": bool(extended),
+        })
+    except Exception:
+        app.logger.exception("读取片段摘录失败")
+        return jsonify({
+            "status": "error",
+            "message": "服务器读取这段摘录时出错，请稍后重试。"
         }), 500
 
 @app.route('/api/analysis/<path:book_name>', methods=['GET'])
@@ -865,11 +983,19 @@ def analyze_upload():
         else:
             book_data.pop("_deleteToken", None)
 
+    # 长摘录同样不下发（首屏瘦身那套，见 _public_book_data）——唯一的例外是**没落盘**
+    # 的这次分析：那份响应是长摘录在世界上唯一的副本（磁盘上没有），剥了用户就只能
+    # 复制到 150 字。落盘的那份由 /api/excerpt 按需取；这份响应里的则由前端直接
+    # 从内存里拿（见前端 resolveExcerpt 的「先查本地」）。
+    public_data = _strip_internal(book_data)
+    if want_save and not save_error:
+        public_data = _public_book_data(public_data)
+
     resp = {
         "status": "success",
         "book": final_name,  # 前端必须以 result.book 作为数据键与展示名
         "saved": bool(want_save and not save_error),
-        "data": _strip_internal(book_data),
+        "data": public_data,
     }
     # 改名要说出来：撞上内置示例书时书名会加「（我的）」后缀，用户上传时按的是原名，
     # 不提一句他会以为书没进来。
@@ -1116,6 +1242,8 @@ if __name__ == '__main__':
     print("  GET /visualization            - D3.js可视化界面")
     print("  GET /api/fingerprint-data     - 获取所有书籍数据")
     print("  GET /api/book/<name>          - 获取特定书籍数据")
+    print("  GET /api/excerpt/<name>?block=N - 按需取某个片段的长摘录")
+    print("  GET /favicon.ico              - 站点图标")
     print("  GET /api/books                - 列出所有书籍（含「我的图书馆」）")
     print("  DELETE /api/library/<name>    - 删除「我的图书馆」中的一本书")
     print("  POST /api/shelf/claim         - 用书架编号找回「我的图书馆」（换设备）")

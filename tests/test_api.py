@@ -14,6 +14,7 @@
     python -m unittest discover -s tests -v
 """
 import io
+import copy
 import json
 import os
 import sys
@@ -1191,6 +1192,163 @@ class DemoDataSelfHealTestCase(unittest.TestCase):
 
         with mock.patch("generate_data.process_all_books", side_effect=boom):
             self.assertFalse(api_server._ensure_demo_data())
+
+
+class ExcerptEndpointTestCase(LibraryApiTestCase):
+    """第二十一批：长摘录不随页面下发，改由 /api/excerpt 按段取。
+
+    三条「写错了也不报错、只是功能静默变差」的规则各有用例钉住：
+      ① 下发剥离**绝不就地改**共享语料缓存（拉过首屏之后，长摘录仍要取得到）；
+      ② 找摘录必须扫完所有指标（v1 只有 functionWords 带长文，撞上别的指标的
+         短摘录就返回的话，永远拿不到那份长的）；
+      ③ 未落盘的上传响应仍带长摘录——那是它在世界上唯一的一份，剥了就没处取。
+    """
+
+    BOOK_NAME = "LongBook"
+
+    def _excerpt_book(self, long_on=None, short_only=False):
+        """四个指标各带一份能分辨出处的短摘录，长摘录只挂在指定/全部指标上。"""
+        book = copy.deepcopy(FAKE_BOOK)
+        for key in api_server._METRIC_KEYS:
+            entry = book[key][0]
+            entry["preview"] = f"SHORT-{key}"
+            entry.pop("extended_preview", None)
+            if not short_only and (long_on is None or key == long_on):
+                entry["extended_preview"] = f"LONG-{key} " + "x" * 20
+        return book
+
+    # ---- 取得到、且取的是最长的那份 ----
+
+    def test_excerpt_finds_long_text_scanned_last(self):
+        """长摘录只在 sentenceLength 上（排序后最后一个扫到），
+        前面几个指标只有短摘录——提前返回的实现会在这里拿到 SHORT- 开头。"""
+        self._put_library(self.BOOK_NAME, self._excerpt_book(long_on="sentenceLength"))
+        resp = self.client.get(f"/api/excerpt/{self.BOOK_NAME}?block=0")
+        self.assertEqual(resp.status_code, 200)
+        result = resp.get_json()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["book"], self.BOOK_NAME)
+        self.assertEqual(result["block"], 0)
+        self.assertTrue(result["extended"])
+        self.assertTrue(result["excerpt"].startswith("LONG-sentenceLength"))
+
+    def test_v1_book_only_functionwords_has_long_text(self):
+        """v1 老数据的长摘录只存在 functionWords 一处（出厂夹具就是这个形状）。"""
+        book = copy.deepcopy(FAKE_BOOK)
+        book["functionWords"][0]["extended_preview"] = "LONG-functionWords " + "y" * 20
+        self._put_library(self.BOOK_NAME, book)
+        result = self.client.get(f"/api/excerpt/{self.BOOK_NAME}?block=0").get_json()
+        self.assertTrue(result["extended"])
+        self.assertTrue(result["excerpt"].startswith("LONG-functionWords"))
+
+    def test_short_only_book_returns_preview_with_extended_false(self):
+        """只有短摘录的书（老数据或该段没长文）：照样 200，但 extended=False。"""
+        self._put_library(self.BOOK_NAME, self._excerpt_book(short_only=True))
+        resp = self.client.get(f"/api/excerpt/{self.BOOK_NAME}?block=0")
+        self.assertEqual(resp.status_code, 200)
+        result = resp.get_json()
+        self.assertFalse(result["extended"])
+        self.assertTrue(result["excerpt"].startswith("SHORT-"))
+
+    # ---- 找不到的时候 ----
+
+    def test_unknown_block_returns_404(self):
+        self._put_library(self.BOOK_NAME, self._excerpt_book())
+        resp = self.client.get(f"/api/excerpt/{self.BOOK_NAME}?block=999")
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.get_json()["status"], "error")
+
+    def test_unknown_book_returns_404(self):
+        resp = self.client.get("/api/excerpt/NoSuchBook?block=0")
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.get_json()["status"], "error")
+
+    def test_block_without_any_text_returns_404(self):
+        book = copy.deepcopy(FAKE_BOOK)
+        for key in api_server._METRIC_KEYS:
+            book[key][0].pop("extended_preview", None)
+            book[key][0].pop("preview", None)
+        self._put_library(self.BOOK_NAME, book)
+        resp = self.client.get(f"/api/excerpt/{self.BOOK_NAME}?block=0")
+        self.assertEqual(resp.status_code, 404)
+        self.assertIn("摘录", resp.get_json()["message"])
+
+    def test_block_param_validated(self):
+        """缺参 / 空 / 非数字 / 小数 / 负数都是 400，不能落进 int() 的异常里变成 500。"""
+        self._put_library(self.BOOK_NAME, self._excerpt_book())
+        for query in ("", "?block=", "?block=abc", "?block=1.5", "?block=-1", "?block= "):
+            with self.subTest(query=query):
+                resp = self.client.get(f"/api/excerpt/{self.BOOK_NAME}{query}")
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn("非负整数", resp.get_json()["message"])
+
+    # ---- 书架边界与中文书名 ----
+
+    def test_another_visitor_cannot_read_my_excerpt(self):
+        self._put_library(self.BOOK_NAME, self._excerpt_book())
+        other = self._another_visitor("othervisitor00000002")
+        resp = other.get(f"/api/excerpt/{self.BOOK_NAME}?block=0")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_cjk_book_name_round_trips(self):
+        name = "实验（我的）"
+        self._put_library(name, self._excerpt_book())
+        resp = self.client.get("/api/excerpt/" + quote(name) + "?block=0")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json()["extended"])
+
+    # ---- 剥离只发生在响应里 ----
+
+    def test_fingerprint_response_carries_no_long_excerpts(self):
+        self._put_library(self.BOOK_NAME, self._excerpt_book())
+        resp = self.client.get("/api/fingerprint-data")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_data(as_text=True)
+        self.assertNotIn("extended_preview", body)
+        self.assertIn('"preview"', body)  # 短摘录照旧下发
+
+    def test_single_book_endpoint_is_stripped_too(self):
+        resp = self.client.get(f"/api/book/{BUILTIN_NAME}")
+        self.assertEqual(resp.status_code, 200)
+        body = json.dumps(resp.get_json()["data"], ensure_ascii=False)
+        self.assertNotIn("extended_preview", body)
+
+    def test_fetching_first_does_not_break_excerpt(self):
+        """剥离若就地改动了 _load_corpus 的共享缓存，这条就会变成 extended=False。
+        同一份缓存既服务首屏、也服务按需取，就地 pop 是这类实现最容易踩的坑。"""
+        self._put_library(self.BOOK_NAME, self._excerpt_book(long_on="sentenceLength"))
+        self.client.get("/api/fingerprint-data")
+        self.client.get(f"/api/book/{self.BOOK_NAME}")
+        result = self.client.get(f"/api/excerpt/{self.BOOK_NAME}?block=0").get_json()
+        self.assertTrue(result["extended"])
+        self.assertTrue(result["excerpt"].startswith("LONG-sentenceLength"))
+
+    def test_saved_upload_strips_response_but_keeps_file(self):
+        resp = self._post_analyze("MyDoc.txt")
+        result = resp.get_json()
+        self.assertEqual(result["status"], "success")
+        body = json.dumps(result["data"], ensure_ascii=False)
+        self.assertNotIn("extended_preview", body)
+        # 落盘那份一个字节都不少：长摘录只是不下发，不是不存
+        on_disk = json.loads((self.shelf / "MyDoc.json").read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["functionWords"][0]["extended_preview"], "hello")
+
+    def test_unsaved_upload_response_keeps_long_excerpt(self):
+        """没落盘的上传，响应里的长摘录是唯一的一份副本，剥了用户就只能复制 150 字。"""
+        resp = self._post_analyze("MyDoc.txt", save=False)
+        data = resp.get_json()["data"]
+        self.assertEqual(data["functionWords"][0]["extended_preview"], "hello")
+        # 同时确认没有把模块级夹具就地改坏（后面还有用例要用它）
+        self.assertEqual(FAKE_BOOK["functionWords"][0]["extended_preview"], "hello")
+
+    # ---- 站点图标 ----
+
+    def test_favicon_is_served(self):
+        resp = self.client.get("/favicon.ico")
+        self.addCleanup(resp.close)  # 文件响应持着句柄，不关会有 ResourceWarning
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.mimetype, "image/svg+xml")
+        self.assertIn(b"<svg", resp.get_data())
 
 
 if __name__ == "__main__":

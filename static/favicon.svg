@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="文学指纹">
+  <!-- 印章样站点图标：纯几何，不引任何字体（浏览器标签页 16px 下也能看清） -->
+  <rect width="64" height="64" rx="13" fill="#b5472f"/>
+  <rect x="5.5" y="5.5" width="53" height="53" rx="9" fill="none" stroke="#f4ede0" stroke-width="2.6"/>
+  <g fill="none" stroke="#f4ede0" stroke-width="3.6" stroke-linecap="round">
+    <path d="M26 40a6 6 0 0 1 12 0"/>
+    <path d="M19.5 40a12.5 12.5 0 0 1 25 0"/>
+    <path d="M13 40a19 19 0 0 1 38 0"/>
+  </g>
+</svg>

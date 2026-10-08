@@ -10,16 +10,51 @@
          所以谁先谁后都不影响后面的内联脚本。 -->
     <script src="static/js/vendor/d3.v7.min.js"></script>
     <script>window.d3 || document.write('<script src="https://d3js.org/d3.v7.min.js"><\/script>');</script>
-    <!-- 图标字体：只有 8 个装饰性图标，取不到时 <i> 渲染成空元素、不影响功能，所以原来是走
-         CDN 的。但那样一来离线（或校园内网）打开就一个图标都看不到，而 d3 从第三批起已经
-         改成仓库内的本地副本——留这一个外链等于整站还是「联不上网就掉东西」。
-         现在同版本（6.0.0）随仓库带一份，放在 static/vendor/fontawesome/：
-         css/all.min.css + webfonts/ 里 4 个 woff2（.ttf 是老浏览器的后备，没带，
-         现代浏览器都用 woff2）。许可证见文件头（图标 CC BY 4.0，字体 SIL OFL 1.1）。 -->
-    <link rel="stylesheet" href="static/vendor/fontawesome/css/all.min.css">
+    <!-- 图标：全站只用 8 个装饰性图标，第二十一批起改成页面内联的 SVG sprite
+         （见 <body> 开头的 <symbol> 定义），不再下载任何图标字体——
+         原先要为它们多传一份 89KB 的样式表 + 127KB 的 woff2 字体，
+         换来的只是 8 个形状。内联后离线打开也照样有图标。 -->
+    <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <link rel="stylesheet" href="static/css/d3-style.css">
 </head>
 <body>
+    <!-- 0. 图标 sprite：8 个装饰图标一次定义、处处 <use> 引用。hidden 的方式是把
+         整块缩到 0×0（不是 display:none——Safari 上那样会让 <use> 也一起消失）。
+         描边风格 24×24，颜色跟着 currentColor 走。 -->
+    <svg aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden">
+        <symbol id="i-cloud-upload" viewBox="0 0 24 24">
+            <path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.7a4.2 4.2 0 0 1-.6 8.3"/>
+            <path d="M12 12v7"/><path d="M8.8 15.2 12 12l3.2 3.2"/>
+        </symbol>
+        <symbol id="i-chart-line" viewBox="0 0 24 24">
+            <path d="M3 3v18h18"/><path d="M3 17l6-6 4 3 8-8"/>
+        </symbol>
+        <symbol id="i-chart-bar" viewBox="0 0 24 24">
+            <path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M3 20h18"/>
+        </symbol>
+        <symbol id="i-atom" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="1.6"/>
+            <ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(60 12 12)"/>
+            <ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(-60 12 12)"/>
+        </symbol>
+        <symbol id="i-sort-amount-down" viewBox="0 0 24 24">
+            <path d="M3 6h6"/><path d="M3 12h4"/><path d="M3 18h2"/>
+            <path d="M17 4v16"/><path d="M13 16l4 4 4-4"/>
+        </symbol>
+        <symbol id="i-sort-amount-up" viewBox="0 0 24 24">
+            <path d="M3 6h6"/><path d="M3 12h4"/><path d="M3 18h2"/>
+            <path d="M17 20V4"/><path d="M13 8l4-4 4 4"/>
+        </symbol>
+        <symbol id="i-sort-alpha-down" viewBox="0 0 24 24">
+            <path d="M4 12 7.5 4 11 12"/><path d="M5.2 9h4.6"/>
+            <path d="M17 4v16"/><path d="M13 16l4 4 4-4"/>
+        </symbol>
+        <symbol id="i-sort-alpha-up" viewBox="0 0 24 24">
+            <path d="M4 12 7.5 4 11 12"/><path d="M5.2 9h4.6"/>
+            <path d="M17 20V4"/><path d="M13 8l4-4 4 4"/>
+        </symbol>
+    </svg>
+
     <!-- 1. 背景画布 -->
     <canvas id="matrix-canvas" style="position: fixed; top: 0; left: 0; z-index: 0; pointer-events: none;"></canvas>
 
@@ -46,7 +81,7 @@
                  现在改成视觉隐藏（.visually-hidden），看得见的外观仍由 label 提供。 -->
             <label class="upload-btn" id="upload-btn">
                 <input type="file" id="file-upload" accept=".txt" class="visually-hidden">
-                <i class="fas fa-cloud-upload-alt" aria-hidden="true"></i> 上传文本分析
+                <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-cloud-upload"/></svg> 上传文本分析
             </label>
             <!-- 这句提示原来写的是「重名时会自动改名，不会覆盖」，与服务端 _resolve_final_name
                  的行为正好相反——同名时它是沿用同名、原地替换，旧的分析就没了。
@@ -68,6 +103,11 @@
                  在线上是反的（线上文件确实要发到服务器）。静态文案没法知道自己在哪种部署里，
                  所以这里只留部署无关的长度提示，隐私那句交给 JS 按环境给。 -->
             <span id="upload-status" class="upload-status" aria-live="polite">支持英文 .txt，建议 1 万词以上；超长篇（几十万词）请分次上传。</span>
+            <!-- 等待计时。刻意不写进 #upload-status：那是 aria-live="polite" 区域，
+                 每秒整句重写会让读屏一秒念一遍。这里 aria-hidden，纯给眼睛看。 -->
+            <span id="upload-elapsed" class="upload-elapsed" aria-hidden="true" hidden></span>
+            <!-- 可比性提醒。必须常驻：#upload-status 是单槽位，上传一开始就被整句覆写。 -->
+            <span class="upload-hint">提示：译本、删节本与原著不可直接对比。</span>
         </div>
 
         <!-- 全局指标选择器（三个标签页共用同一指标，切换后对所有视图生效） -->
@@ -102,13 +142,13 @@
         <!-- 新增：顶部 Tab 切换导航 -->
         <div class="tab-navigation" role="tablist" aria-label="分析视图">
             <button id="tab-view-main" class="tab-btn active" role="tab" aria-selected="true" aria-controls="view-main" onclick="switchTab('view-main')">
-                <i class="fas fa-chart-line"></i> 基础趋势分析
+                <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-line"/></svg> 基础趋势分析
             </button>
             <button id="tab-view-galaxy" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-galaxy" tabindex="-1" onclick="switchTab('view-galaxy')">
-                <i class="fas fa-atom"></i> 风格星系
+                <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-atom"/></svg> 风格星系
             </button>
             <button id="tab-view-dashboard" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-dashboard" tabindex="-1" onclick="switchTab('view-dashboard')">
-                <i class="fas fa-chart-bar"></i> 全书对比
+                <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-bar"/></svg> 全书对比
             </button>
         </div>
         
@@ -156,7 +196,7 @@
                  有地方能载入它了，功能等于从界面上消失。 -->
             <div class="adv-header">
                 <div>
-                    <h2 style="margin:0; color:#2f2a23; font-size: 18px;"><i class="fas fa-chart-line" aria-hidden="true"></i> 基础趋势分析</h2>
+                    <h2 style="margin:0; color:#2f2a23; font-size: 18px;"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-line"/></svg> 基础趋势分析</h2>
                     <small style="color:#6b6254">横轴是全书进度，纵轴是「观察角度」里选的这个指标；一格（一个点）约对应 1 万词。点一下图里的位置，右侧会显示那一段的详情。</small>
                 </div>
                 <div>
@@ -270,7 +310,7 @@
                                 ▤ 整体水平对比<span id="adv-mean-scope" class="adv-scope"></span>
                                 <button type="button" class="sort-control" onclick="advCycleSort('mean')" title="点击切换：数值大小 / 书名首字母">
                                     <span id="sort-text-mean">数值</span>
-                                    <i id="sort-icon-mean" class="fas fa-sort-amount-down" aria-hidden="true"></i>
+                                    <svg id="sort-icon-mean" class="icon" aria-hidden="true" focusable="false"><use href="#i-sort-amount-down"/></svg>
                                 </button>
                             </h4>
                             <div id="adv-mean" class="dash-chart-body"></div>
@@ -476,8 +516,7 @@
                         preview: d.preview,
                         keywords: d.keywords,
                         blockIndex: d.block,
-                        wordCount: d.wordCount,
-                        extendedPreview: d.extended_preview
+                        wordCount: d.wordCount
                     }))
                     .filter(d => typeof d.value === 'number' && Number.isFinite(d.value));
 
@@ -1286,7 +1325,7 @@
                 topBlocks.forEach((b, i) => {
                     const keywords = b.keywords ? b.keywords.join(", ") : "";
                     const loc = formatBlockLocation(book.name, b.blockIndex) + formatWordCount(b.wordCount);
-                    const copyTxt = b.extendedPreview || b.preview || '';
+                    // 长摘录不随数据下发（第二十一批）：按钮点下去时按书名+片段号现取
                     // 摘录和关键词都是英文（关键词是 the / his / of 这类功能词）。不标 lang，
                     // 读屏会拿中文音库逐字母念。但「无预览」这句兜底文案是中文，不能跟着标——
                     // 所以 lang 只在真有英文内容时才加。
@@ -1297,7 +1336,7 @@
                             <div style="margin:2px 0;color:#6b6254;font-size:10px">📍 ${escapeHtml(loc)}</div>
                             <p${previewLang} style="margin:0;color:#6b6254;line-height:1.2;max-height:50px;overflow:hidden">${b.preview ? escapeHtml(b.preview.substring(0,60)) + '...' : '无预览'}</p>
                             ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:9px">※ <span lang="en">${escapeHtml(keywords)}</span></div>` : ''}
-                            ${copyTxt ? `<div style="margin-top:4px;text-align:right;">${copyButtonHtml(copyTxt, 'drill-copy-btn')}</div>` : ''}
+                            ${b.preview ? `<div style="margin-top:4px;text-align:right;">${excerptCopyButtonHtml(book.name, b.blockIndex, b.preview, 'drill-copy-btn')}</div>` : ''}
                         </div>
                     `;
                 });
@@ -1395,9 +1434,15 @@
             const textEl = document.getElementById('sort-text-mean');
             const iconEl = document.getElementById('sort-icon-mean');
             if (textEl) textEl.innerText = config.mode === 'value' ? "数值" : "书名";
-            if (iconEl) iconEl.className = config.mode === 'value'
-                ? (config.order === 'desc' ? "fas fa-sort-amount-down" : "fas fa-sort-amount-up")
-                : (config.order === 'asc' ? "fas fa-sort-alpha-down" : "fas fa-sort-alpha-up");
+            // 图标是内联 sprite（<use>），切换的是引用的 symbol，不再是字体 class。
+            // 四态与原来一一对应：数值+降序/升序、书名+升序/降序。
+            if (iconEl) {
+                const symbolId = config.mode === 'value'
+                    ? (config.order === 'desc' ? 'i-sort-amount-down' : 'i-sort-amount-up')
+                    : (config.order === 'asc' ? 'i-sort-alpha-down' : 'i-sort-alpha-up');
+                const use = iconEl.querySelector('use');
+                if (use) use.setAttribute('href', '#' + symbolId);
+            }
         }
 
         // 框选之后，这一页上所有「均值」都只代表框选那一段了（getAdvComputed 会按

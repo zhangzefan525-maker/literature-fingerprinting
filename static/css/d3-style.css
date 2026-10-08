@@ -784,6 +784,20 @@ button:hover {
     border: 0;
 }
 
+/* 内联 SVG 图标（第二十一批起替换掉图标字体）。尺寸跟着字号走（1em），
+   颜色取 currentColor——和它换掉的字体图标行为一致。 */
+.icon {
+    width: 1em;
+    height: 1em;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vertical-align: -0.125em;
+    flex: none;
+}
+
 /* 键盘 Tab 到「上传文本分析」时，焦点其实落在里面那个视觉隐藏的 input 上，
    所以要看的是外层 label 的 :focus-within。鼠标点击 label 也会把焦点送进 input，
    若只用 :focus-within，主按钮每次点击都会亮一圈；能认出 :focus-visible 的浏览器
@@ -803,6 +817,21 @@ button:hover {
 .upload-status {
     font-size: 13px;
     color: var(--ink-50);
+}
+
+/* 上传等待计时（「已等待 X 秒」）。不换行——每秒变一次，换行会让整条栏抖动。 */
+.upload-elapsed {
+    font-size: 13px;
+    color: var(--ink-50);
+    white-space: nowrap;
+}
+
+/* 可比性提醒：独立占一行（上传栏是 flex-wrap），常驻不随状态覆写 */
+.upload-hint {
+    flex-basis: 100%;
+    font-size: 13px;
+    color: var(--ink-50);
+    line-height: 1.5;
 }
 
 /* ---------- 对比状态提示横幅 ---------- */
@@ -1269,8 +1298,9 @@ button:hover {
     box-shadow: none;
 }
 
-.sort-control i {
-    font-size: 10px;
+.sort-control .icon {
+    width: 10px;
+    height: 10px;
 }
 
 /* 片段详情卡右上角的「✕ 收起」。同样是从 <span> 改成 <button>（为了键盘够得到），

@@ -226,6 +226,40 @@ function setUploadBusy(isBusy) {
     if (uploadBtn) uploadBtn.classList.toggle('is-busy', isBusy);
 }
 
+// 「已等待 X 秒」：长文分析动辄几十秒，只有一句「请勿关闭页面」没有任何时间感。
+// 两处刻意的设计：
+//   1) 按墙钟算（Date.now 差值），不是数 setInterval 触发了几次——后台标签页里
+//      setInterval 会被浏览器节流到远低于每秒一次，数 tick 秒表会越走越慢；
+//   2) 只写给独立的 #upload-elapsed（aria-hidden），绝不写进 #upload-status——
+//      那是 aria-live="polite" 区域，每秒整句重写会让读屏一秒念一遍。
+// 也刻意不挂在 setUploadBusy 上：删书流程也会调它，会冒出莫名其妙的秒表。
+let uploadTicker = null;
+let uploadStartedAt = 0;
+
+function stopUploadTicker() {
+    if (uploadTicker !== null) {
+        clearInterval(uploadTicker);
+        uploadTicker = null;
+    }
+    const el = document.getElementById('upload-elapsed');
+    if (el) {
+        el.hidden = true;
+        el.textContent = '';
+    }
+}
+
+function startUploadTicker() {
+    stopUploadTicker(); // 先清旧的：绝不并存两个 interval（连传两个文件时）
+    const el = document.getElementById('upload-elapsed');
+    if (!el) return;
+    uploadStartedAt = Date.now();
+    el.hidden = false;
+    el.textContent = '已等待 0 秒';
+    uploadTicker = setInterval(() => {
+        el.textContent = `已等待 ${Math.floor((Date.now() - uploadStartedAt) / 1000)} 秒`;
+    }, 1000);
+}
+
 function getErrorMessage(response, result) {
     // 先认服务端给的 message，再管状态码。原来的顺序反了：413 一律被下面这句硬编码的
     // 「不能超过 50 MB」顶掉，而那个数字在线上是错的（nginx 在 20 MB 就拦），
@@ -730,6 +764,7 @@ async function handleFileUpload(event) {
 
     setUploadBusy(true);
     setUploadStatus(`正在分析「${file.name}」（长文本可能需要一会儿），请勿关闭页面...`, 'loading');
+    startUploadTicker();
 
     const formData = new FormData();
     formData.append('file', file);
@@ -747,6 +782,8 @@ async function handleFileUpload(event) {
 
         if (!realData) realData = {};
         realData[result.book] = result.data; // 一律以服务端返回的 result.book 作为键
+        // 同名重传后，缓存里的旧摘录必须作废，否则「复制更长的摘录」会给出上一版正文
+        _excerptCache.clear();
         selectedBooks.add(result.book);
         // 保存下来的书要记住服务端发的删除令牌，之后删它时才认得出是「保存这本书的浏览器」
         if (result.saved && result.deleteToken) rememberDeleteToken(result.book, result.deleteToken);
@@ -790,6 +827,7 @@ async function handleFileUpload(event) {
         console.error('上传分析失败:', e);
         setUploadStatus('上传失败：无法连接当前分析服务。请确认服务器已启动，或稍后重试。', 'error');
     } finally {
+        stopUploadTicker();
         setUploadBusy(false);
         input.value = ''; // 允许重复上传同一文件
     }
@@ -2027,17 +2065,17 @@ function showDetail(data, bookName) {
     const overviewHtml = overviewText
         ? `<p class="book-overview">全书概况：${escapeHtml(overviewText)}</p>`
         : '';
-    const sourceText = data.extended_preview || data.preview || '';
     // 引号里显示的和按钮复制到的是两段不同长度的文本（露 150 字、复制 1200 字）。
     // 这不是错，但不能不说：加一行小字说明复制到的是多长，按钮上也带字数。
+    // 长摘录自第二十一批起不随页面下发（占首屏流量七成），按钮点下去时才现取那一段。
     const previewHtml = data.preview ? `
             <div>
                 <h4>📄 原文片段</h4>
                 <p lang="en" style="margin-top: 10px; color: #6b6254; font-style: italic;">
                     "${escapeHtml(data.preview)}"
                 </p>
-                ${sourceText ? `<p class="excerpt-note">以上为片段开头的引文；复制得到的是更长的摘录，仍非全文（一个片段约 1 万词）。</p>` : ''}
-                ${sourceText ? copyButtonHtml(sourceText) : ''}
+                <p class="excerpt-note">以上为片段开头的引文；复制得到的是更长的摘录，仍非全文（一个片段约 1 万词）。</p>
+                ${excerptCopyButtonHtml(bookName, data.block, data.preview)}
             </div>` : '';
 
     detailPanel.innerHTML = `
@@ -2342,7 +2380,150 @@ function fallbackCopyText(text) {
     return ok;
 }
 
+// ---- 长摘录按需取（第二十一批）----
+// 页面响应里不再带长摘录（每段 1200 字，全站约七成流量都是它；口径见 README 第二十一批）。
+// 点「复制更长的摘录」时才现取那一段：先查本地内存（正在展示的数据里就带着——刚上传、
+// 未落盘的那本书的长摘录只存在于内存），再查本页缓存，最后才发一个请求。
+const _excerptCache = new Map(); // 键 `书名\u0000片段号`；同名重传成功时整表清空
+let galaxyExcerptToken = 0; // 星系弹窗的在途请求令牌：连开两段/关掉弹窗时，旧响应作废
+
+// 在已加载的数据里找某段的长摘录（本地命中就不发请求）。
+// 落盘的数据经服务端剥离后不带 extended_preview，只有未落盘的上传副本还带着。
+function getLocalExcerpt(bookName, blockIndex) {
+    const book = realData && realData[bookName];
+    if (!book) return null;
+    const wantBlock = Number(blockIndex);
+    if (!Number.isFinite(wantBlock)) return null;
+    for (const key of METRIC_KEYS) {
+        const entries = book[key];
+        if (!Array.isArray(entries)) continue;
+        for (const entry of entries) {
+            if (entry && Number(entry.block) === wantBlock
+                && typeof entry.extended_preview === 'string' && entry.extended_preview) {
+                return entry.extended_preview;
+            }
+        }
+    }
+    return null;
+}
+
+async function resolveExcerpt(bookName, blockIndex) {
+    const local = getLocalExcerpt(bookName, blockIndex);
+    if (local) return { excerpt: local, extended: true };
+    const cacheKey = `${bookName}\u0000${Number(blockIndex)}`;
+    const cached = _excerptCache.get(cacheKey);
+    if (cached) return cached;
+    const resp = await fetch(`${API_BASE_URL}/api/excerpt/${encodeURIComponent(bookName)}`
+        + `?block=${encodeURIComponent(blockIndex)}`);
+    const result = await resp.json().catch(() => null);
+    if (!resp.ok || !result || result.status !== 'success'
+        || typeof result.excerpt !== 'string' || !result.excerpt) {
+        throw new Error((result && result.message) || `取摘录失败（HTTP ${resp.status}）`);
+    }
+    const payload = { excerpt: result.excerpt, extended: !!result.extended };
+    _excerptCache.set(cacheKey, payload);
+    return payload;
+}
+
+// 「复制更长的摘录」按钮。与普通 copyButtonHtml 的区别：那段长文不在页面里，
+// 所以按钮上存的是「书名 + 片段号」，点的时候才去取——存不了 data-copy-idx。
+// fallbackText 是页面上已经显示着的短摘录：万一长文取不到，就复制它，并如实告诉用户。
+function excerptCopyButtonHtml(bookName, blockIndex, fallbackText, extraClass = '') {
+    const block = Number(blockIndex);
+    if (!bookName || !fallbackText || !Number.isFinite(block) || block < 0) return '';
+    const fallbackIdx = registerCopySource(fallbackText);
+    return `<button type="button" class="copy-block-btn${extraClass ? ` ${extraClass}` : ''}"`
+        + ` data-copy-excerpt-book="${escapeHtml(bookName)}"`
+        + ` data-copy-excerpt-block="${block}"`
+        + ` data-copy-fallback-idx="${fallbackIdx}">⧉ 复制更长的摘录</button>`;
+}
+
+// 永久改按钮文案必须走这里：flashCopyButton 首次点击时会把当时的 innerHTML 快照进
+// dataset.copyLabel，1.6 秒后照着快照还原——异步取回长摘录后再直接改 innerHTML，
+// 会被旧快照盖回去（按钮显示的字数和实际复制的文本对不上）。所以先清快照再改。
+function setCopyButtonLabel(button, html) {
+    if (!button) return;
+    if (button._copyTimer) {
+        clearTimeout(button._copyTimer);
+        button._copyTimer = null;
+    }
+    button.innerHTML = html;
+    button.dataset.copyLabel = html;
+    // flashCopyButton 还原时读 dataset.copyTitle；不先落一个定义的话，
+    // 之后第一次 flash 会把 title 设成字符串 "undefined"。
+    if (button.dataset.copyTitle === undefined) button.dataset.copyTitle = button.title || '';
+}
+
+// 复用同一个按钮节点、换一段文本显示前，把上一次留下的快照/索引/状态全部清掉。
+// （#modal-copy-btn 就是复用节点：不清的话，上一段的快照会跨段还原出旧字数。）
+function resetCopyButton(button) {
+    if (!button) return;
+    if (button._copyTimer) {
+        clearTimeout(button._copyTimer);
+        button._copyTimer = null;
+    }
+    delete button.dataset.copyLabel;
+    delete button.dataset.copyTitle;
+    delete button.dataset.copyIdx;
+    button.classList.remove('copy-failed');
+    button.disabled = false;
+    button.removeAttribute('aria-busy');
+    button.title = '';
+}
+
+// 点「复制更长的摘录」：取 → 复制 → 报告结果。三条路径都诚实：
+//   长文到手 → 复制长文，文案写真实字符数；
+//   只有短文（老数据）→ 复制短文，文案去掉「更长」；
+//   取不到 → 复制页面上那段短的，并明说「没能取到更长的」，不静默也不假装。
+async function copyExcerptFromButton(button) {
+    const bookName = button.dataset.copyExcerptBook;
+    const blockIndex = Number(button.dataset.copyExcerptBlock);
+    const fallbackText = _copySources[Number(button.dataset.copyFallbackIdx)] || '';
+    if (!bookName || !Number.isFinite(blockIndex)) return;
+
+    const local = getLocalExcerpt(bookName, blockIndex);
+    const known = local ? { excerpt: local, extended: true }
+        : _excerptCache.get(`${bookName}\u0000${blockIndex}`);
+    if (known) {
+        setCopyButtonLabel(button, known.extended
+            ? `⧉ 复制更长的摘录（${excerptCharCount(known.excerpt)} 字符）`
+            : `⧉ 复制摘录（${excerptCharCount(known.excerpt)} 字符）`);
+        copyTextToClipboard(known.excerpt, button, known.extended ? '✓ 已复制长摘录' : '✓ 已复制');
+        return;
+    }
+
+    // 要发请求才置忙：慢网络下按钮不能看起来没反应
+    const originalHtml = button.innerHTML;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.textContent = '正在取长摘录…';
+    try {
+        const payload = await resolveExcerpt(bookName, blockIndex);
+        setCopyButtonLabel(button, payload.extended
+            ? `⧉ 复制更长的摘录（${excerptCharCount(payload.excerpt)} 字符）`
+            : `⧉ 复制摘录（${excerptCharCount(payload.excerpt)} 字符）`);
+        copyTextToClipboard(payload.excerpt, button, payload.extended ? '✓ 已复制长摘录' : '✓ 已复制');
+    } catch (e) {
+        console.warn('取长摘录失败:', e);
+        button.innerHTML = originalHtml;
+        if (fallbackText) {
+            copyTextToClipboard(fallbackText, button, '✓ 已复制短摘录（没能取到更长的）');
+        } else {
+            flashCopyButton(button, false);
+        }
+    } finally {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+    }
+}
+
 document.addEventListener('click', (event) => {
+    // 长摘录按钮先认：它没有 data-copy-idx（文本还没取到），不能落进下面的分支
+    const excerptBtn = event.target.closest('[data-copy-excerpt-book]');
+    if (excerptBtn) {
+        copyExcerptFromButton(excerptBtn);
+        return;
+    }
     const target = event.target.closest('[data-copy-idx]');
     if (target) copyFromButton(target);
 });
@@ -3713,8 +3894,9 @@ function initStyleGalaxy() {
                     pcaX: d.value,
                     pcaY: d.value_y,
                     realValue: metricItem.value,
+                    // 长摘录不随节点预存（页面响应里已不带，见第二十一批）；
+                    // 弹窗打开时按「书名 + 片段号」现取
                     preview: metricItem.preview,
-                    extendedPreview: d.extended_preview || metricItem.preview,
                     wordCount: isFiniteNumber(d.wordCount) ? d.wordCount : metricItem.wordCount,
                     keywords: metricItem.keywords
                 });
@@ -3937,9 +4119,28 @@ function initStyleGalaxy() {
 // 📜 悬浮页控制函数
 // ==========================================
 
+// 弹窗里那句「这是摘录，不是全文」的说明。字数按真正显示出来的字符算（_preview 会补
+// 省略号，那三个点不是原文），不写死 1200——短摘录（150 字符）走到这里时，写死 1200
+// 就会变成另一句假话。取长摘录成功/失败两条路径都用它，保证口径一致。
+function modalExcerptNote(excerpt, wordCount) {
+    const shown = excerptCharCount(excerpt);
+    const wc = Number(wordCount);
+    if (Number.isFinite(wc) && wc > 0) {
+        // 英文平均一个词连同后随空格约 6 个字符，只用来给一个数量级感受
+        const pct = Math.max(1, Math.round(shown / (wc * 6) * 100));
+        return `本片段共约 ${wc.toLocaleString('en-US')} 个英文单词，`
+            + `此处显示开头 ${shown} 个字符（约占 ${pct}%），不是全文。`;
+    }
+    return `此处显示片段开头的 ${shown} 个字符，不是全文。`;
+}
+
 function openGalaxyModal(d) {
     const modal = document.getElementById('galaxy-modal');
     if (!modal) return;
+
+    // 在途请求令牌：弹窗是复用的一个节点，连开两段时后开的必须赢；
+    // 关掉弹窗后在途响应也要作废（见 closeGalaxyModal）
+    const excerptToken = ++galaxyExcerptToken;
 
     const titleEl = document.getElementById('modal-book-title');
     if (titleEl) titleEl.textContent = getBookDisplayName(d.book);
@@ -3976,42 +4177,76 @@ function openGalaxyModal(d) {
     }
 
     const textContainer = document.getElementById('modal-long-text');
-    const excerpt = d.extendedPreview || d.preview || '';
+    // 先显示页面上已有的短摘录（页面响应不再带长摘录），长的那段取到后再替换。
+    const shortExcerpt = d.preview || '';
     if (textContainer) {
-        textContainer.textContent = excerpt || "暂无详细文本内容...";
+        textContainer.textContent = shortExcerpt || "暂无详细文本内容...";
         // 有摘录时这段是英文原文，要标 lang 让读屏换英文音库；没有摘录时容器里放的是
         // 中文兜底文案，那就得把 lang 摘掉——元素是复用的，上一本书留下的 lang="en"
         // 会让这句中文也被按英文念。
-        if (excerpt) textContainer.lang = 'en';
+        if (shortExcerpt) textContainer.lang = 'en';
         else textContainer.removeAttribute('lang');
     }
 
-    // 说清「这是摘录，不是全文」。字数按真正显示出来的字符算（_preview 会补省略号，
-    // 那三个点不是原文），不写死 1200——老数据（只有 functionWords 带 extended_preview）
-    // 走到这里时拿到的是 150 字符，写死就会变成另一句假话。
     const noteEl = document.getElementById('modal-text-note');
-    if (noteEl) {
-        const shown = excerptCharCount(excerpt);
-        const wc = Number(d.wordCount);
-        if (Number.isFinite(wc) && wc > 0) {
-            // 英文平均一个词连同后随空格约 6 个字符，只用来给一个数量级感受
-            const pct = Math.max(1, Math.round(shown / (wc * 6) * 100));
-            noteEl.textContent = `本片段共约 ${wc.toLocaleString('en-US')} 个英文单词，`
-                + `此处显示开头 ${shown} 个字符（约占 ${pct}%），不是全文。`;
-        } else {
-            noteEl.textContent = `此处显示片段开头的 ${shown} 个字符，不是全文。`;
-        }
-    }
+    if (noteEl) noteEl.textContent = '正在取本片段更长的摘录…';
 
     const modalCopyBtn = document.getElementById('modal-copy-btn');
     if (modalCopyBtn) {
-        if (excerpt) {
-            modalCopyBtn.dataset.copyIdx = registerCopySource(excerpt);
-            modalCopyBtn.textContent = `⧉ 复制这段摘录（${excerptCharCount(excerpt)} 字符）`;
-            modalCopyBtn.hidden = false;
-        } else {
-            modalCopyBtn.hidden = true;
+        // 复用节点：先清掉上一段的快照/索引，否则会跨段还原出旧字数
+        resetCopyButton(modalCopyBtn);
+        modalCopyBtn.hidden = !shortExcerpt;
+        if (shortExcerpt) {
+            modalCopyBtn.disabled = true;
+            modalCopyBtn.setAttribute('aria-busy', 'true');
+            modalCopyBtn.textContent = '正在取长摘录…';
         }
+    }
+
+    // 只取到短文（或无文）时的降级显示：正文保持短摘录，备注/按钮按实际拿到的算
+    const showShortExcerptOnly = (reason) => {
+        if (noteEl) {
+            noteEl.textContent = shortExcerpt
+                ? modalExcerptNote(shortExcerpt, d.wordCount) + reason
+                : '这个片段暂时没有可显示的摘录。';
+        }
+        if (modalCopyBtn) {
+            modalCopyBtn.disabled = false;
+            modalCopyBtn.removeAttribute('aria-busy');
+            if (shortExcerpt) {
+                setCopyButtonLabel(modalCopyBtn,
+                    `⧉ 复制这段摘录（${excerptCharCount(shortExcerpt)} 字符）`);
+                modalCopyBtn.dataset.copyIdx = registerCopySource(shortExcerpt);
+                modalCopyBtn.hidden = false;
+            } else {
+                modalCopyBtn.hidden = true;
+            }
+        }
+    };
+
+    if (!d.book) {
+        showShortExcerptOnly('');
+    } else {
+        resolveExcerpt(d.book, d.blockIndex).then((payload) => {
+            if (excerptToken !== galaxyExcerptToken) return; // 已被新弹窗/关闭作废
+            if (textContainer) {
+                textContainer.textContent = payload.excerpt;
+                textContainer.lang = 'en';
+            }
+            if (noteEl) noteEl.textContent = modalExcerptNote(payload.excerpt, d.wordCount);
+            if (modalCopyBtn) {
+                modalCopyBtn.disabled = false;
+                modalCopyBtn.removeAttribute('aria-busy');
+                modalCopyBtn.hidden = false;
+                setCopyButtonLabel(modalCopyBtn,
+                    `⧉ 复制这段摘录（${excerptCharCount(payload.excerpt)} 字符）`);
+                modalCopyBtn.dataset.copyIdx = registerCopySource(payload.excerpt);
+            }
+        }).catch((e) => {
+            if (excerptToken !== galaxyExcerptToken) return;
+            console.warn('取长摘录失败:', e);
+            showShortExcerptOnly('（没能取到更长的摘录）');
+        });
     }
 
     modal.setAttribute('aria-hidden', 'false');
@@ -4057,6 +4292,7 @@ function closeGalaxyModal() {
     const modal = document.getElementById('galaxy-modal');
     if (!modal) return;
 
+    galaxyExcerptToken += 1; // 关掉后，还在路上的长摘录响应全部作废
     modal.classList.remove('show');
     modal.setAttribute('aria-hidden', 'true');
     document.removeEventListener('keydown', trapModalFocus);
