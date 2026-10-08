@@ -643,6 +643,12 @@ button:hover {
 /* ---------- 提示气泡 ---------- */
 .tooltip {
     position: absolute;
+    /* 必须显式给层级，否则它画在图表底下——页面上什么都看不见。
+       提示框是 JS 建出来挂在 <body> 上的，和 .container 是兄弟节点；而 .container
+       带 backdrop-filter，配上 position:relative; z-index:1 会自成层叠上下文，
+       于是「z-index:1 的容器」永远盖过「z-index:auto 的提示框」，跟挂在前还是在后无关。
+       取 100：高于页面内容，低于选中提示（9500）与弹窗（9999）——它们本来就该盖住提示框。 */
+    z-index: 100;
     background: rgba(47, 42, 35, 0.97);
     color: #f6f0e3;
     padding: 10px 12px;
