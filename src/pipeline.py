@@ -26,7 +26,12 @@ from src.projection import projection_metadata
 
 # 数据版本：2 起 metadata 里区分 totalWords / analyzedWords，并带块参数与章节信息。
 # 前端据 schemaVersion 判断要不要在内存里兼容升级老数据（磁盘上的旧文件不改写）。
-SCHEMA_VERSION = 2
+#
+# v3（2026-10-08，第二十四批）：数据形状与 v2 完全一样，只是数值不同——
+# 清洗管线补上了排版弯引号归一（见 src/data_loader.py 的 _normalize_quotes）。
+# 打新版号是为了让线上/别人克隆里那些 v2 的旧数据被自动判为过期、重算一次：
+# 不升版号的话，服务器会一直拿旧数值伺候，本地好、线上差，正是这个项目的老毛病。
+SCHEMA_VERSION = 3
 
 
 def _ensure_nltk_data():

@@ -580,6 +580,19 @@ button:hover {
     padding: 18px;
 }
 
+/* 热力图色标说明（第二十六批）。放在图下面而不是标题条里：标题条那两行在手机上
+   被截断成 2 行（第二十二批用来把首屏图表顶压到 ≤650px），往那里加行会把账还回去。
+   颜色取 --ink-70 而不是更浅的 --ink-50：这句话是「别拿两个颜色直接比」的口径提醒，
+   是正文而不是弱化说明，用的是 13px 小字，不想再往对比度上省。 */
+.chart-scale-note {
+    margin: 10px 0 0;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--ink-70);
+}
+
 .detail-panel {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -1648,49 +1661,62 @@ button:hover {
     .galaxy-hud { width: 220px; }
 }
 
+/* —— 第二十七批：首屏重排，桌面与手机同一套 ——
+   起因：真浏览器实测，1366×768 的笔记本上图表顶在第 984 像素，而可用高度只有
+   630 左右——打开页面要往下拨大半屏才看得见图表。占地方最大的一块是「上传文本分析」
+   栏（192px），它压在图表前面。手机上第二十二批已经把这一栏挪到图表之后，桌面没跟上。
+   这里做的只有「谁在前面」：一个控件不删、一段文字不删（隐私告知、格式说明都还在页面上，
+   只是位置变低）。摆位的依据还是第二十二批定下的那条：会影响图表的控件（选书、观察角度、
+   页签）留在图表前面；一次性全局动作（导出条、上传栏、快速开始）挪到图表之后。
+   DOM 顺序一个字节没动：读屏与 Tab 顺序仍是源码顺序，只是视觉顺序与源码顺序不一致
+   （代价记在 README）。
+
+   坑一：flex 下相邻 margin 不再合并，会相加。所以这里刻意**不**引入 gap、也**不**清零
+     子元素的下边距——本页的竖向间距全部来自「上一个元素的下边距」，块布局下合并与
+     flex 下相加得到的值恰好相同，于是图表以外的块间距一个像素不变。唯一的例外是
+     .footer（它用的是上边距，见下）。
+   坑二：.global-toolbar 原本靠 −8px 上边距贴住页签条；挪到图表之后负边距会把整条
+     拖进图里，必须换成正的（手机版当初踩过同一条，见本文件手机段里的同一句注释）。 */
+.container { display: flex; flex-direction: column; }
+/* 默认 order:20 = 兜底：将来 .container 里多出没列到的元素时它落在末尾，
+   不会因为默认 order:0 跳到页首。 */
+.container > * { order: 20; }
+.header { order: 1; }
+#bookSelector { order: 2; }
+.metric-bar { order: 3; }
+.tab-navigation { order: 4; }
+#global-status { order: 5; }
+#view-main, #view-galaxy, #view-dashboard { order: 6; }
+.global-toolbar { order: 7; margin: 10px 0 18px; }
+.upload-bar { order: 8; }
+#quickstart { order: 9; }
+/* footer 用的是上边距：块布局下它和前一个元素的下边距合并成 26px，flex 下会相加，
+   所以这里改成 8px，与它前面「快速开始」条的 18px 相加仍是 26px。
+   （快速开始条被 ✕ 收起时它前面成了上传栏的 16px，底距会差 2px——在整页最底部，看不出来。） */
+.footer { order: 30; margin-top: 8px; }
+
+/* 对比状态条（「已选 2 本书进行对比」）也挪到图表之后：它一出现会顶动图表，
+   挪下去之后图表位置不再跳。 */
+#view-main.active { display: flex; flex-direction: column; }
+#view-main.active > .comparison-mode { order: 9; }
+
 /* —— 手机 —— */
 @media (max-width: 560px) {
     body { padding: 10px 10px 24px; }
 
-    /* —— 第二十二批：手机首屏重排（目标：打开就能看见图表）——
-       两件事：
-       ① .container 变 flex 列，用 order 把「一次性全局动作」挪到图表之后——上传栏、
-          导出条、快速开始；会影响图表的控件（选书、观察角度、页签、排序筛选）留在图表前面。
-          DOM 顺序一个字节没动：读屏与 Tab 顺序仍是源码顺序，只是视觉顺序变了。
-       ② 逐块压缩留白与字号，三处超长说明文字收成两行（句子在 DOM 里一个字没少，
-          读屏/复制/搜索照旧）。
-       坑（实现时踩过就知道）：flex 下相邻 margin 不再合并（块布局下会合并），所以子元素的
-       下边距必须显式清零、统一交给 gap——不清零间距会凭空变大。 */
+    /* —— 第二十二批：手机首屏压缩（重排已在文件上方统一定义，这里只管尺寸）——
+       逐块压缩留白与字号，三处超长说明文字收成两行（句子在 DOM 里一个字没少，
+       读屏/复制/搜索照旧）。
+       手机上把间距统一交给 gap：flex 下相邻 margin 不再合并（块布局下会合并），
+       所以子元素的下边距必须显式清零——不清零间距会凭空变大。 */
     .container {
         padding: 18px 14px 18px;
         border-radius: 10px;
-        display: flex;
-        flex-direction: column;
         gap: 10px;
     }
-    /* 默认 order:20 = 兜底：将来 .container 里多出没列到的元素时它落在末尾，
-       不会因为默认 order:0 跳到页首。 */
-    .container > * { margin-bottom: 0; order: 20; }
-    .header { order: 1; }
-    #bookSelector { order: 2; }
-    .metric-bar { order: 3; }
-    .tab-navigation { order: 4; }
-    #global-status { order: 5; }
-    #view-main, #view-galaxy, #view-dashboard { order: 6; }
-    .global-toolbar { order: 7; }
-    .upload-bar { order: 8; }
-    #quickstart { order: 9; }
-    .footer { order: 30; }
-
-    /* 对比状态条（「已选 2 本书进行对比」）也挪到图表之后：它一出现会顶动图表，
-       挪下去之后图表位置不再跳。其余子元素保持源码顺序（默认 order:0）。 */
-    #view-main.active {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
+    .container > * { margin-bottom: 0; }
+    #view-main.active { gap: 10px; }
     #view-main.active > * { margin-bottom: 0; }
-    #view-main.active > .comparison-mode { order: 9; }
 
     .container::before { right: 26px; height: 40px; }
     .container::after { top: 22px; bottom: 22px; left: 10px; }
@@ -1792,13 +1818,16 @@ button:hover {
        （实测返回 "662px" 而不是 "auto"），拿它分档会永远走进桌面分支。 */
     .cyber-btn-float { --anchored-bottom: 12px; top: auto; bottom: var(--anchored-bottom); right: 12px; padding: 5px 11px; font-size: 11px; z-index: 20; }
 
-    /* 导出条原本靠负上边距贴住页签条（-8px），现在它被挪到图表后面，负边距没有意义了 */
+    /* 导出条原本靠负上边距贴住页签条（-8px），现在它被挪到图表后面，负边距没有意义了；
+       这里连正的上下边距也清零，间距统一交给容器的 gap。 */
     .global-toolbar { margin: 0; }
 
     .upload-bar { gap: 8px; padding: 8px 12px; }
     .upload-btn { padding: 9px 15px; }
 
-    .footer { font-size: 11px; letter-spacing: 1px; }
+    /* 手机上间距统一走 gap，所以 footer 的上边距保持改动前的 26px（桌面那条改成了 8px，
+       为的是抵消 flex 下不再合并的那 18px，见文件上方）。 */
+    .footer { font-size: 11px; letter-spacing: 1px; margin-top: 26px; }
 }
 
 /* 380px 及以下：三个页签去掉装饰图标，换页签条一行。
