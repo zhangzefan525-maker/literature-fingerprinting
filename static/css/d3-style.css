@@ -977,9 +977,12 @@ button:hover {
 
 /* ---------- 热力图 ---------- */
 /* 描边：色阶中段的米色和卡片底仍然接近（1.25:1），靠这条线把网格画出来。
-   与 d3-charts.js 里的 HEATMAP_STROKE 必须一致（悬停结束时 JS 会把它写回来）。 */
+   与 d3-charts.js 里的 HEATMAP_STROKE 必须一致（悬停结束时 JS 会把它写回来）。
+   2026-10-09（第三十一批）两处一起从 #cbb894 改成 #8f7a55：原来对卡片底 1.85:1、
+   对中段 1.48:1，描边自己都快看不见；现在 3.93 / 3.15 / 3.36:1，过 WCAG 1.4.11
+   的 3:1。改一处忘一处的话，鼠标扫过再移开，格子会当场变回另一种深浅。 */
 .heatmap-rect {
-    stroke: #cbb894;
+    stroke: #8f7a55;
     stroke-width: 1px;
     transition: stroke 0.2s ease, stroke-width 0.2s ease, fill 0.2s ease;
     cursor: pointer;
@@ -2211,8 +2214,31 @@ button.copy-failed:hover {
     .quick-preview-row,
     .shelf-code-btn,
     .shelf-code-input,
+    /* 第三十一批按标签把页面上的可点元素重新过了一遍（button/input/select/label 各取一遍，
+       再逐个对照这份名单），找出四个漏网的。390×844 触摸仿真实测高度：
+       「复制结论」25px、「✕ 收起」15px、「↻ 重新布局」29px、曲线滑块 34px——
+       前两个连 WCAG 2.5.8 的下限 24px 都不到。
+       滑块特别说明：<input type=range> 的整条盒子都是命中区（点轨道任意处都会把滑块移过去），
+       所以撑高盒子就够了，不必去改 ::-webkit-slider-thumb——那要一并接管轨道外观，
+       动的是全平台的样子。
+       顺带记：`#exportMoreBtn`、`#exportSvgBtn` 那几个虽然自己没写在这份名单里，
+       但都在 `.export-group` 内，被上面的 `.export-group button` 盖住了。 */
+    .insight-copy,
+    .drill-remove-btn,
+    #restartGalaxyBtn,
+    #smoothness,
     select {
         min-height: 44px;
+    }
+
+    /* 上面那组只管高度。实测（第三十一批，390×844）：「复制结论」74×44、「↻ 重新布局」
+       97×44、滑块 159×44 都够宽，只有 `.drill-remove-btn`（「✕ 收起」）是 30×44——
+       高够了宽不够。它原文是 padding:0 + 10px 字，宽度就是那四个字的宽度。
+       WCAG 2.5.8 的下限 24×24 它其实过得去，但它右边紧挨着「复制片段」几个按钮，
+       指头按下去容易点错，所以补横向内边距而不是只留高度。
+       只在触摸设备上补：桌面用鼠标，这个 10px 的小按钮保持原来的紧凑样子。 */
+    .drill-remove-btn {
+        padding: 0 8px;
     }
 
     /* 弹窗右上角那个 × ：字号 28px 但盒子只有二十来像素宽，给足 44×44 */
