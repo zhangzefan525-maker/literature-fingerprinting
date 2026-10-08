@@ -114,8 +114,10 @@ _DEMO_SCHEMA_VERSION = 2
 # 为「传一篇文本看指纹」这种一次性动作引入注册/登录/改密/会话，风险远大于收益。
 # 只发一枚随机编号，不收集任何个人信息。
 #
-# 代价写在明处：编号只活在浏览器里，清一次浏览器数据，书架就没了。
-# 也没有「换个设备还能找回」这回事——那是账号才有的东西。
+# 代价写在明处：编号只活在浏览器里，清一次浏览器数据，书架就从这台设备上消失了。
+# 第二十批补上了「找回」：编号由 /api/books 的 shelfCode 显示在页面上，在另一台
+# 设备上用 /api/shelf/claim 填回去就能切过去。规则没有变——知道编号 = 能看到这个
+# 书架——编号本身就是那把钥匙，只是原先从没人看见过它。
 # ---------------------------------------------------------------------------
 VISITOR_COOKIE = "lf_visitor"
 # 编号会被直接当成子目录名，所以只允许 URL-safe base64 的那一段字符。
@@ -930,9 +932,19 @@ def list_books():
 
         resp = jsonify({
             "status": "success",
-            "books": books
+            "books": books,
+            # 让页面能看见自己的书架编号——cookie 是 HttpOnly，JS 读不到
+            # document.cookie，这是全站唯一一条把编号交给前端的路（「书架编号」
+            # 弹窗靠它显示，换设备时用户才有东西可抄）。响应本来就按 cookie 变化，
+            # 所以新字段不改变缓存语义（下面那行 Vary 是给它兜底的那一条）。
+            "shelfCode": _current_visitor(),
         })
         resp.headers["Vary"] = "Cookie"  # 书单因人而异
+        # 第二十批加：这条响应现在带着书架编号，而「认领别人的编号」成功后是
+        # location.reload()——只要浏览器拿了一次启发式缓存（这条响应没有 ETag 之类的
+        # 校验器），刷新后页面就会显示**上一个**编号和上一个书单，看起来像没切成功，
+        # 而且是间歇性的、极难查。no-store 比 no-cache 更贴切：它本来也不该被复用。
+        resp.headers["Cache-Control"] = "no-store"
         return resp
 
     except Exception:
@@ -997,7 +1009,97 @@ def delete_library_book(book_name):
         app.logger.exception("删除书库文件失败")
         return jsonify({"status": "error", "message": f"删除《{name}》失败，请稍后重试。"}), 500
 
+    # 删掉最后一本时，把这一格空目录也收掉。rmdir 只在空目录上成功，所以
+    # 「还有书就一律不动」是天然成立的，不需要额外判断。删不掉（权限等）只是
+    # 留下一个空目录，不值得为此报错——线上另有一条手动清理命令（见 README）。
+    try:
+        _shelf_dir().rmdir()
+    except OSError:
+        pass
+
     return jsonify({"status": "success", "message": f"已从「我的图书馆」删除《{name}》。"})
+
+
+# ---------------------------------------------------------------------------
+# 书架找回：把另一个浏览器上的编号认领过来（换设备 / 清了浏览器数据的出口）
+#
+# 这是全站第一条「客户端字符串 → 身份」的入口（此前身份只有 cookie 一条路），
+# 所以四道门缺一不可，且**任何一步失败都不许动现有身份**——g.visitor_id 改错
+# 等于把用户当下的书架换掉。
+# ---------------------------------------------------------------------------
+_SHELF_CLAIM_HEADER = "X-Shelf-Claim"
+
+
+@app.route('/api/shelf/claim', methods=['POST'])
+def claim_shelf():
+    """
+    认领一个书架编号：此后这个浏览器就用那个编号。
+
+    1) 必须带自定义请求头 X-Shelf-Claim: 1。防的是「登录型 CSRF」——跨站的表单
+       POST 也能让浏览器接受响应里的 Set-Cookie，被诱导的用户此后上传的书会直接
+       落进别人的书架。简单表单发不出自定义头；跨站 fetch 加头又必然触发预检，
+       而 CORS 白名单只放行本机。
+    2) 编号必须满足 _VISITOR_RE：它接下来会被拿去拼路径，校验必须在拼路径之前
+       （与 cookie 那道校验同一条正则、同一个理由）。
+    3) 限流。单独一个桶，不跟 /api/analyze 抢——否则几次认领会把上传额度挤掉。
+    4) 那个编号下真的有一本书才算「找到」。**绝不 mkdir**：目录不存在与目录空着
+       同待遇（用户视角都是「没有书」），否则随机编号能把服务器刷出一地空目录。
+    """
+    if request.headers.get(_SHELF_CLAIM_HEADER) != "1":
+        return jsonify({
+            "status": "error",
+            "message": "请求缺少必要的标记，请刷新页面后重试。"
+        }), 403
+
+    payload = request.get_json(silent=True) or {}
+    code = str(payload.get("code") or "").strip()
+
+    if not _VISITOR_RE.match(code):
+        return jsonify({
+            "status": "error",
+            "message": "编号格式不对。请照抄那串字符（区分大小写，没有空格）。"
+        }), 400
+
+    if _rate_limited("claim:" + (request.remote_addr or "unknown")):
+        return jsonify({
+            "status": "error",
+            "message": "尝试太频繁，请等半分钟再试。"
+        }), 429
+
+    if not _library_keys(code):
+        return jsonify({
+            "status": "error",
+            "message": "这个编号下没有书架。请检查有没有抄错（区分大小写）。"
+        }), 404
+
+    # 身份交给 after_request 的 _hand_out_visitor_cookie 统一下发：cookie 属性
+    # （HttpOnly / SameSite / 有效期）只写一份，日后不会和第一次发牌时漂移。
+    g.visitor_id = code
+    g.visitor_cookie_new = True
+
+    # 连删除令牌一起交回：只交编号的话，找回后能看不能删（✕ 会 403「只有保存这本
+    # 书的浏览器可以删除它」），是个死胡同；编号本身就是完整凭据（知道编号就能看到
+    # 全部内容），令牌不扩大实际暴露面，只是把「找回」补完整。
+    # 代价：要把每本书的 JSON 读一遍（一本最多约 2.8 MB），书多时会慢几百毫秒。
+    books = []
+    for path in sorted(_shelf_dir(code).glob("*.json")):
+        token = None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                token = json.load(f).get("_deleteToken")
+        except Exception:
+            app.logger.warning("认领书架时读取删除令牌失败: %s", path.name)
+        if token:
+            books.append({"name": path.stem, "deleteToken": str(token)})
+
+    resp = jsonify({
+        "status": "success",
+        "shelfCode": code,
+        "books": books,
+    })
+    resp.headers["Cache-Control"] = "no-store"  # 切身份的响应绝不能进任何缓存
+    return resp
+
 
 if __name__ == '__main__':
     # 注意：横幅只用 ASCII 符号 + 中文，不用 emoji/生僻 Unicode——
@@ -1016,6 +1118,7 @@ if __name__ == '__main__':
     print("  GET /api/book/<name>          - 获取特定书籍数据")
     print("  GET /api/books                - 列出所有书籍（含「我的图书馆」）")
     print("  DELETE /api/library/<name>    - 删除「我的图书馆」中的一本书")
+    print("  POST /api/shelf/claim         - 用书架编号找回「我的图书馆」（换设备）")
     # 端口优先读环境变量 PORT（Render 等托管平台会注入），本地默认 5000
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
