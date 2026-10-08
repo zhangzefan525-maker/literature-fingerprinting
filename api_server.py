@@ -4,7 +4,7 @@
 为D3.js可视化提供JSON数据接口
 """
 
-from flask import Flask, jsonify, request, send_from_directory, send_file
+from flask import Flask, g, has_request_context, jsonify, request, send_from_directory, send_file
 from flask_cors import CORS
 from werkzeug.exceptions import RequestEntityTooLarge
 import hashlib
@@ -63,10 +63,19 @@ MAX_BLOCKS = 300
 
 @app.errorhandler(RequestEntityTooLarge)
 def handle_request_too_large(_error):
-    """将 Flask 默认 HTML 413 转为前端可解析的 JSON。"""
+    """
+    将 Flask 默认 HTML 413 转为前端可解析的 JSON。
+
+    这里**不报具体数字**（以前写的是「不能超过 50 MB」）。因为真正会拦下绝大多数
+    用户的不是字节数：线上 nginx 在 20 MB 就先返回 413，本地直跑没有 nginx、
+    要等 Flask 的 MAX_CONTENT_LENGTH（50 MB），而用户实际上多半是在更早的一步
+    ——片段数超过 MAX_BLOCKS，约合 1.9 MB 正文——被挡下的，那一步有自己的报错。
+    写死任何一个数字，都会在其中一种部署下是错的；能照做的建议只有「截取章节/拆文件」。
+    """
     return jsonify({
         "status": "error",
-        "message": "文件太大，单个文件不能超过 50 MB。请压缩内容或选择较小的 .txt 文件。"
+        "message": "文件太大，服务器不接受这么大的上传。请先截取要研究的章节，"
+                   "或拆成几个文件分次上传。"
     }), 413
 
 
@@ -92,6 +101,90 @@ _demo_repair_stamp = None
 # 它会一直存在、也就永远不会被重算——线上就因此喂了一个月的旧数据（没有 chapters、
 # 没有共享投影模型），前端拿不到章节和跨书坐标，只能退回「各书各自算」的降级分支。
 _DEMO_SCHEMA_VERSION = 2
+
+
+# ---------------------------------------------------------------------------
+# 访客身份：每个浏览器一枚匿名编号，「我的图书馆」按它分目录存放
+#
+# 以前所有人共用一份 data/library/，于是甲勾选保存的书不只出现在乙的书单里，
+# 还会并进乙看到的那份语料——乙能在「值得一看的片段」里读到甲上传文本的原文摘录，
+# 自己什么都没传，星系图上却凭空多出几个点。老师来评分时看到的是全班的合集。
+#
+# 不做账号：站点是 HTTP（没有证书，密码就是明文），项目里也没有数据库，
+# 为「传一篇文本看指纹」这种一次性动作引入注册/登录/改密/会话，风险远大于收益。
+# 只发一枚随机编号，不收集任何个人信息。
+#
+# 代价写在明处：编号只活在浏览器里，清一次浏览器数据，书架就没了。
+# 也没有「换个设备还能找回」这回事——那是账号才有的东西。
+# ---------------------------------------------------------------------------
+VISITOR_COOKIE = "lf_visitor"
+# 编号会被直接当成子目录名，所以只允许 URL-safe base64 的那一段字符。
+# 少了这道校验，cookie 就是访客手里一条直通 data/ 的路径穿越——all_books.json
+# 就躺在它的上一层。校验必须发生在它碰到任何路径之前。
+_VISITOR_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+_VISITOR_MAX_AGE = 365 * 24 * 3600
+
+
+def _current_visitor():
+    """
+    本请求的访客编号；不在请求上下文里（命令行、单元测试的直接调用）返回 None。
+
+    必须先问 has_request_context()：直接读 g 在没有上下文时会抛 RuntimeError，
+    而下面这些函数（_library_keys / _resolve_final_name …）是要能被直接调用的。
+    """
+    if not has_request_context():
+        return None
+    return getattr(g, "visitor_id", None)
+
+
+def _visitor_dir(visitor):
+    """
+    访客的书架目录。
+
+    visitor 为空 = 调用方没有访客身份（命令行、测试里的直接调用），退回顶层目录，
+    也就是这次改动之前的行为。编号不合法时同样退回顶层——**退回、而不是拿去拼路径**：
+    这样哪怕哪天有人把没校验过的值传进来，最坏也只是读到共享目录，不会跑出 data/library/。
+    """
+    if visitor and _VISITOR_RE.match(visitor):
+        return LIBRARY_DIR / visitor
+    return LIBRARY_DIR
+
+
+def _shelf_dir(visitor=None):
+    """书架目录：显式给了就用给的，没给就取本请求的访客编号。"""
+    return _visitor_dir(visitor if visitor is not None else _current_visitor())
+
+
+@app.before_request
+def _identify_visitor():
+    """每个请求认一次身份：带着合法编号就用它的，否则现发一枚。"""
+    raw = request.cookies.get(VISITOR_COOKIE, "")
+    if _VISITOR_RE.match(raw):
+        g.visitor_id = raw
+        g.visitor_cookie_new = False
+    else:
+        g.visitor_id = secrets.token_urlsafe(16)
+        g.visitor_cookie_new = True
+
+
+@app.after_request
+def _hand_out_visitor_cookie(resp):
+    """
+    只在「这一次才拿到编号」时回设 cookie，之后每次请求都带着它。
+
+    没有 secure 可用（线上是 HTTP），也就是说这枚编号在链路上是明文的：
+    它保证的是「别人的书单里不会出现你的书」，不是机密性。
+    """
+    if getattr(g, "visitor_cookie_new", False):
+        resp.set_cookie(
+            VISITOR_COOKIE,
+            g.visitor_id,
+            max_age=_VISITOR_MAX_AGE,
+            httponly=True,
+            samesite="Lax",
+            path="/",
+        )
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -169,13 +262,16 @@ def _builtin_keys():
     return {p.stem for p in DATA_DIR.glob("*.txt")}
 
 
-def _library_keys():
-    """当前「我的图书馆」已保存的书名集合（每次现读磁盘，避免缓存过期）。"""
-    return {p.stem for p in LIBRARY_DIR.glob("*.json")}
+def _library_keys(visitor=None):
+    """当前书架上已保存的书名集合（每次现读磁盘，避免缓存过期）。"""
+    return {p.stem for p in _shelf_dir(visitor).glob("*.json")}
 
 
-def _resolve_final_name(base):
+def _resolve_final_name(base, visitor=None):
     """决定上传文件最终采用的书名（= 前端数据键 = 磁盘文件名）。
+
+    这里的「重名」只在自己书架上算：甲和乙各存各的《MyDoc》互不相干，
+    谁也不会因为对方先存了而变成《MyDoc（我的）(2)》。
 
     优先级：
     1) 书库已存在同名 → 沿用同名（视为「替换更新」，不产生重复副本）；
@@ -188,11 +284,11 @@ def _resolve_final_name(base):
     与这里的行为正好相反，用户会因为信那句话而不去备份。
     """
     base = sanitize_book_name(base)
-    if base in _library_keys():
+    if base in _library_keys(visitor):
         return base
     if base in _builtin_keys():
         candidate = f"{base}（我的）"
-        taken = _library_keys() | _builtin_keys()
+        taken = _library_keys(visitor) | _builtin_keys()
         n = 2
         while candidate in taken:
             candidate = f"{base}（我的）({n})"
@@ -201,9 +297,13 @@ def _resolve_final_name(base):
     return base
 
 
-def _save_library_book(name, book_data):
-    """把一本书的指纹数据写入 data/library/（JSON，UTF-8 无转义，保留可读）。"""
-    path = LIBRARY_DIR / f"{sanitize_book_name(name)}.json"
+def _save_library_book(name, book_data, visitor=None):
+    """把一本书的指纹数据写入这个访客自己的书架（JSON，UTF-8 无转义，保留可读）。"""
+    shelf = _shelf_dir(visitor)
+    # 目录只在这里（真的落盘时）建。读路径永远不建目录：否则一个伪造的编号
+    # 就能让服务器凭空造出一堆空目录。
+    shelf.mkdir(parents=True, exist_ok=True)
+    path = shelf / f"{sanitize_book_name(name)}.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(book_data, f, ensure_ascii=False, indent=2)
 
@@ -222,15 +322,31 @@ def _strip_internal(book_data):
 
 # ---------------------------------------------------------------------------
 # 语料缓存：每次请求都重新解析 700 KB JSON 太浪费。
-# 按「源文件指纹」缓存，all_books.json 或任一书库文件的修改时间/大小变了才重读。
+# 按「源文件指纹」缓存，all_books.json 或**本书架**里任一文件变了才重读。
+#
+# 以前这里只有一个槽位：两位访客交替请求时，指纹每轮都不同，于是每轮都落空、
+# 反复重解那 700 KB。改成按指纹做键的小字典（上限 _CORPUS_CACHE_MAX）——
+# 键就是内容本身的指纹，同一份内容谁问都是它，不同内容各占一格。
 # ---------------------------------------------------------------------------
-_corpus_cache = {"key": None, "data": None, "message": None}
+_CORPUS_CACHE_MAX = 8
+_corpus_cache = {}
 
 
-def _library_stamp():
-    """书库指纹：文件名 + 修改时间 + 大小。新增、删除、覆盖都能检出。"""
+def _corpus_path():
+    """全量语料的路径（生成脚本与这里必须指向同一个文件）。"""
+    return BASE_DIR / "data" / "processed" / "all_books.json"
+
+
+def _library_stamp(visitor=None):
+    """
+    书架指纹：文件名 + 修改时间 + 大小。新增、删除、覆盖都能检出。
+
+    **必须按访客取。** 忘了这一点（继续 glob 顶层目录）它就会永远是空的，
+    于是缓存永不失效——用户存了书却看不见，直到 all_books.json 变动才突然冒出来。
+    这类错不报错、不报红，只是功能静默失灵。
+    """
     stamp = []
-    for path in sorted(LIBRARY_DIR.glob("*.json")):
+    for path in sorted(_shelf_dir(visitor).glob("*.json")):
         try:
             stat = path.stat()
         except OSError:
@@ -248,49 +364,58 @@ def _file_stamp(path):
     return (stat.st_mtime_ns, stat.st_size)
 
 
-def _corpus_stamp(target_file):
+def _corpus_stamp(target_file, visitor=None):
     stamp = _file_stamp(target_file)
     if stamp is None:
         return None
-    return (stamp[0], stamp[1], _library_stamp())
+    return (stamp[0], stamp[1], _library_stamp(visitor))
 
 
-def _corpus_etag():
+def _corpus_etag(stamp):
     """
-    当前语料的 ETag。
+    语料指纹 → ETag。
 
-    直接拿 _load_corpus 判断「要不要重读文件」用的那个指纹去算 —— 重新生成数据、
-    「我的图书馆」增删改，都会让它变；没变就说明这次要发的东西和上次一模一样。
-    还没读过文件（没有指纹）时返回 None，调用方按「不带条件缓存」处理。
+    指纹就是 _load_corpus 判断「要不要重读文件」用的那个：重新生成数据、本书架增删改，
+    都会让它变；没变就说明这次要发的东西和上次一模一样。没有指纹时返回 None，
+    调用方按「不带条件缓存」处理。
+
+    它**只由「这份内容是什么」决定**，与缓存有没有命中无关。以前这里读的是缓存槽里存的
+    那个键，而槽位会被别人的请求挤掉——同一个访客、同一份内容，也能拿到一个新 ETag，
+    304 就这么白丢了。
     """
-    stamp = _corpus_cache.get("key")
     if stamp is None:
         return None
     return hashlib.sha1(repr(stamp).encode("utf-8")).hexdigest()
 
 
-def _load_corpus():
+def _current_corpus_etag():
+    """本次请求要发的这份语料的 ETag（按本请求的访客算，因人而异）。"""
+    return _corpus_etag(_corpus_stamp(_corpus_path()))
+
+
+def _load_corpus(visitor=None):
     """
-    读取（并缓存）全量语料：内置示例书 + 「我的图书馆」。
+    读取（并缓存）全量语料：内置示例书 + 这个访客自己的书架。
 
     Returns:
         (dict | None, str | None): (语料字典, 给前端的来源说明)；取不到数据时返回 (None, None)
     """
-    processed_dir = BASE_DIR / "data" / "processed"
-    target_file = processed_dir / "all_books.json"
-    stamp = _corpus_stamp(target_file)
+    target_file = _corpus_path()
+    stamp = _corpus_stamp(target_file, visitor)
 
     if stamp is not None:
-        if _corpus_cache["key"] == stamp and _corpus_cache["data"] is not None:
-            return _corpus_cache["data"], _corpus_cache["message"]
+        cached = _corpus_cache.get(stamp)
+        if cached is not None:
+            return cached
 
         with open(target_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        # 合并「我的图书馆」中用户勾选保存的书籍（不与内置键冲突、不覆盖内置；
+        # 合并本书架里勾选保存的书籍（不与内置键冲突、不覆盖内置；
         # 单文件损坏只跳过，不影响其它书）
-        if LIBRARY_DIR.exists():
-            for lib_file in sorted(LIBRARY_DIR.glob("*.json")):
+        shelf = _shelf_dir(visitor)
+        if shelf.exists():
+            for lib_file in sorted(shelf.glob("*.json")):
                 if lib_file.stem in data:
                     continue
                 try:
@@ -302,10 +427,15 @@ def _load_corpus():
                     app.logger.warning("跳过无法读取的书库文件: %s", lib_file.name)
 
         message = f"成功加载数据文件: {target_file.name}"
-        _corpus_cache.update(key=stamp, data=data, message=message)
+        if len(_corpus_cache) >= _CORPUS_CACHE_MAX:
+            # 粗粒度淘汰：满了就全清。最坏代价是某位访客多解析一遍 700 KB，
+            # 不值得为这点开销引入 LRU。
+            _corpus_cache.clear()
+        _corpus_cache[stamp] = (data, message)
         return data, message
 
     # 找不到汇总文件时，退回「最新的单书文件」（保持原有后备逻辑）
+    processed_dir = target_file.parent
     if processed_dir.exists():
         data_files = sorted(processed_dir.glob("*.json"), key=os.path.getctime)
         if data_files:
@@ -402,7 +532,7 @@ def _ensure_demo_data():
         _demo_data_ready = _demo_corpus_is_current(target)
         # 刚生成完，投影模型文件这时才出现，让缓存重新去读
         _projection_model.update(loaded=False, model=None)
-        _corpus_cache.update(key=None, data=None, message=None)
+        _corpus_cache.clear()
     except Exception as e:
         print(f"自动生成演示数据失败: {e}")
         _demo_data_ready = False
@@ -470,7 +600,10 @@ def get_fingerprint_data():
         # 或书库变动时才会变。带上 ETag 让重复访问走 304：浏览器仍然每次都问一句，
         # 只是问到的答案是「没变」，于是这 0.5 MB 不用重传。
         # no-cache 是「可以存，但每次都要先确认」，不是「不许存」——数据会变，必须revalidate。
-        etag = _corpus_etag()
+        # 内容是因人而异的（每人书架上放着自己的书），所以除了 ETag 认内容，
+        # 还要用 Vary 告诉沿途的缓存：同一个网址，带着不同 cookie 来拿到的是不同的东西。
+        resp.headers["Vary"] = "Cookie"
+        etag = _current_corpus_etag()
         if etag is None:
             return resp
         resp.set_etag(etag)
@@ -783,9 +916,11 @@ def list_books():
                 {"id": "White Fang", "name": "White Fang", "filename": "White Fang.txt", "source": "builtin"}
             ]
 
-        # 追加「我的图书馆」中保存的书（source=library，前端据此显示删除按钮）
-        if LIBRARY_DIR.exists():
-            for lib_file in sorted(LIBRARY_DIR.glob("*.json")):
+        # 追加这个访客自己书架上保存的书（source=library，前端据此显示删除按钮）。
+        # 只看自己那一格：别人的书不进这份列表，前端也就永远不会给出「删除」按钮。
+        shelf = _shelf_dir()
+        if shelf.exists():
+            for lib_file in sorted(shelf.glob("*.json")):
                 books.append({
                     "id": lib_file.stem,
                     "name": lib_file.stem,
@@ -793,10 +928,12 @@ def list_books():
                     "source": "library"
                 })
 
-        return jsonify({
+        resp = jsonify({
             "status": "success",
             "books": books
         })
+        resp.headers["Vary"] = "Cookie"  # 书单因人而异
+        return resp
 
     except Exception:
         app.logger.exception("列出书籍失败")
@@ -812,7 +949,7 @@ def delete_library_book(book_name):
     从「我的图书馆」删除一本书。
 
     - 内置示例书不可删除（400）；
-    - 书库中不存在返回 404；
+    - 书库中不存在返回 404（**别人的书也不在你书架里，同样是 404**）；
     - 需要带上保存时签发的删除令牌（请求头 X-Delete-Token），只有存过这本书的
       浏览器才拿得到，避免任何人随手删别人的书。本机默认同样要令牌——
       Host 头是客户端说了算的，拿它当授权等于没授权；确有需要时可用
@@ -822,7 +959,9 @@ def delete_library_book(book_name):
     if name in _builtin_keys():
         return jsonify({"status": "error", "message": "内置示例书不能删除。"}), 400
 
-    target = LIBRARY_DIR / f"{name}.json"
+    # 只在自己书架上找：别人的书不在这个目录里，于是天然是 404——
+    # 「看不见」和「删不掉」在这里是同一件事，不需要两套判断。
+    target = _shelf_dir() / f"{name}.json"
     if not target.exists():
         return jsonify({"status": "error", "message": f"「我的图书馆」中不存在《{name}》。"}), 404
 
@@ -843,7 +982,8 @@ def delete_library_book(book_name):
                     "message": (
                         "无法删除：本机删除也需要保存时签发的令牌（存在本浏览器里）。"
                         "若已清除浏览器数据，可用 ALLOW_LOCAL_DELETE=1 启动服务，"
-                        f"或直接删除 data/library/{name}.json。"
+                        "或直接在 data/library/ 里找到并删掉那个同名的 .json"
+                        "（每个浏览器一个子目录，逐个找一下）。"
                     )
                 }), 403
             return jsonify({
