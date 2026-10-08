@@ -18,6 +18,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from nltk.tokenize import sent_tokenize
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -289,6 +291,50 @@ class TestCleanText(unittest.TestCase):
         if not path.exists():  # pragma: no cover - 取决于仓库内容
             self.skipTest("缺少语料")
         self.assertEqual(load_clean_text(path), clean_text(path.read_text(encoding="utf-8")))
+
+
+class TestTypographicQuotes(unittest.TestCase):
+    """
+    弯引号归一（2026-10-08，第二十四批）。
+
+    从 Word / PDF / 网页复制出来的英文引号几乎全是弯的，而之后两步都只认直引号：
+    句末切分认不出「.”」，缩写表全是直撇号。四本内置书无一例外全用弯引号、
+    直撇号 0 个——这不是边角情况，是每一本书都在受影响。
+    """
+
+    def test_curly_apostrophe_contractions_are_expanded(self):
+        """以前 don’t 一个都匹配不上，那句「常见缩写还原」是假话。"""
+        self.assertIn("do not", clean_text("i don’t know"))
+        self.assertIn("it is", clean_text("it’s a dog"))
+
+    def test_sentence_ending_in_curly_quote_is_split(self):
+        """
+        这是弯引号真正伤到数字的地方：句末的句号被引号挡住，
+        sent_tokenize 不切句 → 对话被并进上一句 → 平均句长虚高。
+        《汤姆·索亚历险记》全书句数 3666 → 4912（虚高 34%）。
+        """
+        curly = clean_text('He said “hello.” Then he left.')
+        self.assertEqual(len(sent_tokenize(curly)), 2)
+
+    def test_straight_quotes_are_left_alone(self):
+        """本来就是直引号的文本不许被动到（改动面越小越好）。"""
+        raw = "He said \"hello.\" Then he left."
+        self.assertEqual(clean_text(raw), raw)
+
+    def test_dashes_and_ellipsis_are_not_touched(self):
+        """只动引号形态：破折号、省略号在分词器眼里本来就是分隔符，不碰。"""
+        self.assertIn("—", clean_text("a word—another"))
+        self.assertIn("…", clean_text("wait…"))
+
+    def test_real_books_have_no_curly_quotes_left(self):
+        """四本内置书实测全用弯引号，清洗后必须一个不剩。"""
+        for name in ("White Fang.txt", "The call of the wild.txt"):
+            path = ROOT / "data" / "raw" / name
+            if not path.exists():  # pragma: no cover - 取决于仓库内容
+                self.skipTest("缺少语料")
+            cleaned = clean_text(path.read_text(encoding="utf-8"))
+            for ch in "‘’“”":
+                self.assertNotIn(ch, cleaned, f"{name} 里还剩弯引号 {ch!r}")
 
 
 class TestDetectLanguage(unittest.TestCase):

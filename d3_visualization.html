@@ -89,9 +89,18 @@
                  另：这是全页唯一解释「书存在哪」的地方。书架是按浏览器分的，所以必须说清
                  两件事——只有这个浏览器看得见；清除浏览器数据/换设备就找不回来。
                  不说第二句的话，用户会把它当网盘用。 -->
-            <label class="save-toggle" id="save-toggle" for="save-upload" title="勾选后：这次的分析结果会保留下来，刷新页面后仍在，可随时删除，只有这个浏览器能看到（清除浏览器数据或换台设备就找不回来了——书还在服务器上，用「书架编号」可以找回）。若「我的图书馆」里已有同名的书，会更新那一本（旧的分析被覆盖）；与内置示例书同名则自动加「（我的）」，示例书永不改动。">
-                <input type="checkbox" id="save-upload"> 存入「我的图书馆」
+            <label class="save-toggle" id="save-toggle" for="save-upload">
+                <input type="checkbox" id="save-upload" aria-describedby="save-note"> 存入「我的图书馆」
             </label>
+            <!-- 上一批把这段说明从「重名会自动改名、不会覆盖」改成了实话，但仍然只写在
+                 label 的 title 里——悬停几秒才出现，触摸屏点不到、键盘也读不到，而它说的
+                 正是「同名会把书架上那一本整份换掉」这件**会丢东西**的事。藏着等于没说。
+                 现在改成常驻可见的一行，并用 aria-describedby 挂在勾选框上：读屏聚焦勾选框
+                 时会念出来（title 在 checkbox 上是念不到的）。
+                 位置紧跟在勾选框之后（上传栏是 flex-wrap，.upload-hint 自带 flex-basis:100%，
+                 独占一行）。手机上整条上传栏被排到图表之后（第二十二批），所以这一行
+                 不占首屏；≥561px 时它在图表上方，加一行的高度是这个代价的代价。 -->
+            <span class="upload-hint" id="save-note">勾选后：分析结果存到本服务器，只有这个浏览器能看到，一直留到你点 ✕ 删除为止。其中含每片段最多 1200 字的原文摘录，但你上传的那个文件本身不留存。与书架上同名的一本会整份替换，上传前会再问你一次。</span>
             <!-- 书架编号：换设备 / 清了浏览器数据之后的找回入口。编号是 HttpOnly cookie，
                  页面本来读不到，靠 /api/books 的 shelfCode 现给（见 d3-charts.js）。
                  必须常驻显示，不能跟着「书架里有没有书」变——新设备上正需要它，
@@ -229,6 +238,14 @@
             <div class="visualization-container">
                 <div id="chart-container">
                     <svg id="main-chart" width="100%" height="400"></svg>
+                    <!-- 热力图色标是「相对的」，而且没说明过（切到折线图时由 updateChartTypeUI 藏掉）。
+                         色标范围取的是当前选中这几本书的最小值~最大值（见 drawMultiHeatmap 里的
+                         d3.extent），不是固定刻度：换一本书、去掉一本，剩下的格子颜色会全部重新
+                         分配。不写这一句，两张换过选择的截图并排看，同一个颜色会被当成同一个数——
+                         这正是「把图截进论文」时会犯的错。
+                         位置放在图**下面**（不是标题条里）：第二十二批把首屏图表顶压到 ≤650px
+                         是靠标题条那两行截断换来的，往那里加行会把那笔账还回去。 -->
+                    <p id="heatmap-scale-note" class="chart-scale-note" hidden>色标范围由当前选中的这几本书决定（图上「统一色标」那一行就是它）：换一批书，同一个数值的颜色会跟着变。所以不同次选择下截的图，颜色不能直接对比。</p>
                 </div>
                 <div class="detail-panel" id="detailPanel" role="status" aria-live="polite">
                     <h3>▤ 数据详情</h3>
@@ -422,6 +439,30 @@
             </div>
 
             <p id="shelf-modal-status" class="shelf-modal-status" role="status" aria-live="polite"></p>
+        </div>
+    </div>
+
+    <!-- 同名覆盖确认（第二十五批）。
+         服务端对「书架上已有同名书」的处理是沿用同名、**整份替换**（见 _resolve_final_name），
+         旧的分析就此消失，没有回收站。以前只在上传完成的响应里事后提一句——那时旧的
+         已经没了，用户除了重传别无办法。所以挡在上传之前问一次。
+         焦点默认落在「取消」上：破坏性动作不该能靠一个回车误触。
+         样式整套复用 .galaxy-modal-*（与 #shelf-modal 同款）；必须待在 .container 外面，
+         理由见上面 #galaxy-modal 那段注释（backdrop-filter 会把 fixed 的包含块变成容器）。 -->
+    <div id="overwrite-modal" class="galaxy-modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="overwrite-modal-title" aria-hidden="true">
+        <div class="galaxy-modal-content shelf-modal-content">
+            <button type="button" class="galaxy-modal-close" aria-label="取消并关闭" onclick="cancelOverwriteUpload()">&times;</button>
+
+            <h2 id="overwrite-modal-title">书架上已经有同名的书</h2>
+            <p class="shelf-modal-lead" id="overwrite-modal-lead"></p>
+            <p class="shelf-code-warn">
+                选「替换」之后，原来那一份的分析结果就找不回来了（服务器上没有回收站，也留不下旧版本）。
+            </p>
+
+            <div class="shelf-code-row">
+                <button type="button" id="overwrite-cancel" class="copy-block-btn" onclick="cancelOverwriteUpload()">取消，什么也不改</button>
+                <button type="button" id="overwrite-confirm" class="copy-block-btn" onclick="confirmOverwriteUpload()">替换它，继续上传</button>
+            </div>
         </div>
     </div>
 
@@ -817,7 +858,11 @@
         const INSIGHT_METRIC = {
             sentenceLength: { up: '后半段的平均句长高于前半段', down: '后半段的平均句长低于前半段', high: '句子最长', low: '句子最短' },
             simpsonIndex:  { up: '后半段的用词重复度高于前半段', down: '后半段的用词重复度低于前半段', high: '用词重复度最高（词汇较单调）', low: '用词重复度最低（词汇最丰富）' },
-            hapaxLegomena:{ up: '后半段只出现一次的词更多（用词更丰富）', down: '后半段只出现一次的词更少（用词更单调）', high: '用词最丰富', low: '用词最单调' },
+            // 这句原来写的是「后半段只出现一次的词更多」。方向对，但把原因说窄了：
+            // Honoré 的 R = 100·ln(N) / (1 − V1/V)，决定它的是 N（词数）、V（不同词数）、
+            // V1（只出现一次的词数）三个数一起——V 降得够多时 V1 一个没多，R 照样升高。
+            // 所以只描述「哪一端」，不替用户断定是哪个数在动。
+            hapaxLegomena:{ up: '后半段的独特词丰富度高于前半段（用词更多样）', down: '后半段的独特词丰富度低于前半段（用词更集中）', high: '用词最丰富', low: '用词最单调' },
             functionWords: { up: '后半段的高频小词用法整体移向坐标轴的一端', down: '后半段的高频小词用法整体移向坐标轴的另一端', high: null, low: null }
         };
 

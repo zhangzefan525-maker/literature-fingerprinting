@@ -1121,21 +1121,21 @@ class DemoDataSelfHealTestCase(unittest.TestCase):
     # ---- 该重算的场合 ----
 
     def test_missing_file_is_generated(self):
-        result, calls = self._run(side_effect=lambda: self._write_corpus(2))
+        result, calls = self._run(side_effect=lambda: self._write_corpus(api_server._DEMO_SCHEMA_VERSION))
         self.assertTrue(result)
         self.assertEqual(calls, 1)
 
     def test_stale_file_is_regenerated(self):
         """本批针对线上那个真实故障：文件在、但只有旧管线的字段。"""
         self._write_corpus(None)
-        result, calls = self._run(side_effect=lambda: self._write_corpus(2))
+        result, calls = self._run(side_effect=lambda: self._write_corpus(api_server._DEMO_SCHEMA_VERSION))
         self.assertTrue(result)
         self.assertEqual(calls, 1)
         self.assertTrue(api_server._demo_corpus_is_current(self.target))
 
     def test_corrupt_file_is_regenerated(self):
         self.target.write_text("not-json{{{", encoding="utf-8")
-        result, calls = self._run(side_effect=lambda: self._write_corpus(2))
+        result, calls = self._run(side_effect=lambda: self._write_corpus(api_server._DEMO_SCHEMA_VERSION))
         self.assertTrue(result)
         self.assertEqual(calls, 1)
 
@@ -1179,7 +1179,7 @@ class DemoDataSelfHealTestCase(unittest.TestCase):
         self._write_corpus(None)
         self._run()
         self._write_corpus(1)  # 仍然是旧的，但是另一份
-        result, calls = self._run(side_effect=lambda: self._write_corpus(2))
+        result, calls = self._run(side_effect=lambda: self._write_corpus(api_server._DEMO_SCHEMA_VERSION))
         self.assertTrue(result)
         self.assertEqual(calls, 1)
 

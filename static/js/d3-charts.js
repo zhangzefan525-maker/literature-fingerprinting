@@ -748,6 +748,11 @@ function updateChartTypeUI() {
     if (smoothnessGroup) {
         smoothnessGroup.style.display = chartType === 'heatmap' ? 'none' : 'flex';
     }
+
+    // 热力图色标是相对刻度（取当前选中这几本书的最小值~最大值），必须说明；
+    // 折线图的纵轴自带数字，这句反而会误导，所以只在热力图下显示。
+    const scaleNote = document.getElementById('heatmap-scale-note');
+    if (scaleNote) scaleNote.hidden = chartType !== 'heatmap';
 }
 
 // 上传自定义文本并即时分析
@@ -762,6 +767,22 @@ async function handleFileUpload(event) {
         return;
     }
 
+    // 这次上传会不会把书架上同名的那本整份换掉？会就先问一句再上传。
+    // 判据见 isOverwriteCandidate：只在「勾了保存」且书名真的已在书架上时才问，
+    // 所以绝大多数上传（新书、没勾保存）一个字都不会多。
+    if (isOverwriteCandidate(file.name)) {
+        openOverwriteModal(file);
+        return; // 等用户在弹窗里点「替换」；那时才调 proceedUpload
+    }
+
+    return proceedUpload(file);
+}
+
+// 真正把文件发出去分析。
+// 从 handleFileUpload 里拆出来，是因为「同名覆盖」那条路要先去问一句、用户点了
+// 「替换」才走到这里——两条路共用同一段流程，以后改上传逻辑不会只改到其中一条。
+async function proceedUpload(file) {
+    const input = document.getElementById('file-upload');
     setUploadBusy(true);
     setUploadStatus(`正在分析「${file.name}」（长文本可能需要一会儿），请勿关闭页面...`, 'loading');
     startUploadTicker();
@@ -787,6 +808,9 @@ async function handleFileUpload(event) {
         selectedBooks.add(result.book);
         // 保存下来的书要记住服务端发的删除令牌，之后删它时才认得出是「保存这本书的浏览器」
         if (result.saved && result.deleteToken) rememberDeleteToken(result.book, result.deleteToken);
+        // 同名覆盖的判据要用最新的书架名单：刚存进去的这本书，下次再传同名文件就该触发确认。
+        // 不更新的话，第二次上传会静默覆盖（名单还停在页面加载时那一份）——正是本批要挡的事。
+        if (result.saved) libraryBookNames.add(result.book);
         addUploadedBookButton(result.book, { deletable: !!result.saved });
         updateCompareButtonLabel();
         syncUrlState();
@@ -829,8 +853,127 @@ async function handleFileUpload(event) {
     } finally {
         stopUploadTicker();
         setUploadBusy(false);
-        input.value = ''; // 允许重复上传同一文件
+        if (input) input.value = ''; // 允许重复上传同一文件
     }
+}
+
+// ---------------------------------------------------------------------------
+// 「同名会整份替换」的事前确认（第二十五批）
+//
+// 服务端对「书架上已有同名书」是沿用同名、原地替换（见 _resolve_final_name），
+// 旧的分析就此消失。改好文稿重传恰好是最常见的用法，所以不能一律拒绝，
+// 但也绝不能默默换掉。挡在上传之前问一次，是唯一还能保住旧数据的位置——
+// 响应里那句 replacedExisting 是**事后**说的，那时旧的已经没了。
+//
+// 判据必须与服务端逐字一致：服务端的 base_name = Path(file.filename).stem，
+// 也就是剥掉**末尾最后一个**扩展名（Python 的 stem：'a.b.txt' → 'a.b'），
+// 再交给 sanitize_book_name（见 api_server.py）。所以这里用 replace(/\.txt$/i, '')
+// 而不是 split('.')[0]——后者对「Tom.Sawyer.txt」算出来是 'Tom'，两边名字不一致，
+// 弹窗就永远不出现。
+//
+// sanitizeBookName() 是那个 Python 函数的镜像。**只需要在「名字会被改动」时才准**：
+//   1) Python 的 stem 只剥最后一个扩展名 —— 用正则而不是 split 就对了；
+//   2) 非法字符 < > : " / \ | ? * 与控制字符 → '_' 并合并重复下划线；
+//   3) 首尾的 '_' '.' 与空白去掉（注意只去首尾，中间的 '.' 保留）；
+//   4) Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）加 '_' 前缀；
+//   5) 截断到 200 字符。
+// 两边万一漂移，最坏结果是「该问的没问」——静默退化成旧行为，但**不会更糟**：
+// 服务端照旧在响应里带 replacedExisting，界面上那句事后说明还在。
+// 所以这里是「多挡一层」，不是唯一一道门。
+// ---------------------------------------------------------------------------
+let libraryBookNames = new Set();   // 这个书架上的书名（来自 /api/books 的 source==='library'）
+let pendingOverwriteFile = null;    // 等用户回答的那个文件
+
+const _BOOK_NAME_FORBIDDEN_RE = /[<>:"/\\|?*\x00-\x1f\x7f]/g;
+const _BOOK_NAME_RESERVED_RE = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
+
+function sanitizeBookName(raw) {
+    let name = String(raw == null ? '' : raw);
+    // 丢掉除普通空格以外的空白（对应 Python 的 ch.isspace()，但半角空格要留）
+    name = name.replace(/[^\S ]/g, '');
+    name = name.replace(_BOOK_NAME_FORBIDDEN_RE, '_').replace(/_+/g, '_');
+    name = name.replace(/^[ _.]+/, '').replace(/[ _.]+$/, '');
+    if (!name) return 'book';
+    if (_BOOK_NAME_RESERVED_RE.test(name)) name = '_' + name;
+    return name.slice(0, 200);
+}
+
+function rememberLibraryBooks(books) {
+    libraryBookNames = new Set(
+        (books || [])
+            .filter(b => b && b.source === 'library' && b.name)
+            .map(b => b.name)
+    );
+}
+
+function isOverwriteCandidate(fileName) {
+    // 没勾保存 = 不落盘 = 谁也不会被覆盖，不必打扰
+    if (!isUploadSaveWanted()) return false;
+    const stem = String(fileName || '').replace(/\.txt$/i, '');
+    return libraryBookNames.has(sanitizeBookName(stem));
+}
+
+function openOverwriteModal(file) {
+    const modal = document.getElementById('overwrite-modal');
+    // 弹窗不在（旧页面缓存等）就照旧直接传：宁可退化成老行为，也不能把上传整个卡死
+    if (!modal) { proceedUpload(file); return; }
+
+    pendingOverwriteFile = file;
+    const name = getBookDisplayName(String(file.name || '').replace(/\.txt$/i, ''));
+    const lead = document.getElementById('overwrite-modal-lead');
+    if (lead) {
+        lead.textContent = `「我的图书馆」里已经有一本《${name}》。`
+            + '这次上传的文件名和它一样，而你又勾了「存入我的图书馆」，'
+            + '所以保存时会用这次的结果整份替换掉那一本。';
+    }
+
+    modal.setAttribute('aria-hidden', 'false');
+    modal.style.display = 'flex';
+    document.addEventListener('keydown', trapOverwriteModalFocus);
+    setTimeout(() => {
+        modal.classList.add('show');
+        // 焦点先落在「取消」上：破坏性动作不该一个回车就中
+        const cancel = document.getElementById('overwrite-cancel');
+        if (cancel) cancel.focus();
+    }, 10);
+}
+
+function closeOverwriteModal({ returnFocus = true } = {}) {
+    const modal = document.getElementById('overwrite-modal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    document.removeEventListener('keydown', trapOverwriteModalFocus);
+    setTimeout(() => {
+        modal.style.display = 'none';
+        if (!returnFocus) return;
+        // 焦点还给上传按钮。它是 <label>，本身不可聚焦，要转给里面的 file input——
+        // 直接对 label 调 focus() 会静默失败，焦点掉回页面开头。
+        const label = document.getElementById('upload-btn');
+        const target = label && label.querySelector('input') ? label.querySelector('input') : label;
+        if (target && typeof target.focus === 'function') target.focus();
+    }, 300);
+}
+
+function trapOverwriteModalFocus(event) {
+    trapFocusWithin(document.getElementById('overwrite-modal'), event);
+}
+
+function confirmOverwriteUpload() {
+    const file = pendingOverwriteFile;
+    pendingOverwriteFile = null;
+    closeOverwriteModal({ returnFocus: false }); // 接下来整条上传流程自己管焦点
+    if (file) proceedUpload(file);
+}
+
+function cancelOverwriteUpload() {
+    pendingOverwriteFile = null;
+    closeOverwriteModal();
+    // 清掉 input.value：不清的话，用户点了取消、再重新选同一个文件时不会触发 change，
+    // 看上去就是「选了文件没反应」。
+    const input = document.getElementById('file-upload');
+    if (input) input.value = '';
+    setUploadStatus('已取消这次上传，书架上那一本没有改动。', '');
 }
 
 // 生成一个「书名 chip」：来自「我的图书馆」的书带 ✕ 删除钮
@@ -1116,6 +1259,8 @@ async function deleteLibraryBook(bookName) {
         if (realData) delete realData[bookName];
         selectedBooks.delete(bookName);
         forgetDeleteToken(bookName);
+        // 书架名单同步删掉：删完再传同名文件就是「新增」，不该再弹覆盖确认
+        libraryBookNames.delete(bookName);
         document.querySelectorAll('.book-group').forEach(group => {
             if (group.dataset.bookId === bookName) group.remove();
         });
@@ -1195,6 +1340,10 @@ async function loadBooksList() {
             return;
         }
 
+        // 先记下书架上有哪些书：上传前那个「同名会不会覆盖」的判据用的就是它。
+        // 必须在 updateBookSelector 之前——book chip 建出来之后名单还是空的话，
+        // 从列表点进去的那本会被当成「不在书架上」。
+        rememberLibraryBooks(data.books);
         updateBookSelector(data.books);
         // 记下这个浏览器的书架编号（服务端现给，cookie 是 HttpOnly 读不到）。
         // 「书架编号」弹窗靠它显示，删除令牌的存放也按它分格。
@@ -2226,7 +2375,7 @@ function updateMetricHint() {
     const hints = {
         sentenceLength: '一句话平均几个词。句子长，读起来更书面、更正式；句子短，更口语、更利落。',
         simpsonIndex: '这本书是不是翻来覆去用同一批词。数值越高越重复（词有点单调）；越低，用词越多样。',
-        hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出。它通常不是 0–1 的比例，也不是百分比——数值越大，一般说明用词越丰富、越不单调。这个数已经按篇幅折算过，长短不同的书也能比。',
+        hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出。它通常不是 0–1 的比例，也不是百分比——数值越大，一般说明用词越丰富、越不单调。这个数对篇幅的依赖很弱（公式里篇幅取的是对数），字数相差不大的书可以直接比；字数差到好几倍时，光篇幅本身就会把这个数推高一点。',
         functionWords: `不看内容，而看高频小词${getAxisWordsHint()}的使用习惯。点越靠近只说明这些词的用法越像，不等于两本书本身相似。`
     };
     const ctxText = getMetricContextLine(currentMetric);
@@ -2262,7 +2411,10 @@ function normalizeBookMeta(bookName) {
     const raw = bookData && bookData.metadata;
     if (!raw || typeof raw !== 'object') return null;
 
-    const legacy = Number(raw.schemaVersion) !== 2;
+    // 判据写成「低于 2」而不是「不等于 2」：第二十四批为弯引号修复后重算的数据打了 v3，
+    // 写成 !== 2 的话 v3 会被当成旧数据，四本内置书全都挂上「没有共同坐标基准」的警告。
+    // v3 与 v2 的数据形状完全一样，只是数值按修好的清洗管线重算过。
+    const legacy = !(Number(raw.schemaVersion) >= 2);
     const totalBlocks = getBookBlockCount(bookName);
     const step = isFiniteNumber(raw.step) && raw.step > 0 ? raw.step : 1000;
     const blockSize = isFiniteNumber(raw.blockSize) && raw.blockSize > 0 ? raw.blockSize : 10000;
@@ -2685,9 +2837,11 @@ function getMetricContextLine(metric) {
     if (parts.length === 0) return '';
 
     let line = parts.join(' ');
-    if (metric === 'hapaxLegomena') {
-        line += ' 独特词丰富度已经按片段篇幅折算过，长短不同的片段与书之间都可以比。';
-    } else if (metric === 'functionWords') {
+    // hapaxLegomena 那句「对篇幅的依赖很弱」原本挂在这里，第二十六批挪进了
+    // updateMetricHint 的静态说明里：挂在这边时，一旦算出参考区间，屏幕上就会出现
+    // 同一句话连着说两遍（hint 一行 + 这一行），比不说还像凑字数；
+    // 而静态说明是无论有没有数据都在的，不会因为加载失败就把口径提醒吞掉。
+    if (metric === 'functionWords') {
         line += ' 「风格走向」只是高频小词用法的一个参照方向，请结合原文理解。';
     }
     return line;
@@ -2898,8 +3052,14 @@ function getExportTarget() {
             || document.querySelector('#adv-mean svg');
         return { element, label: `全书对比·${DASH_CHARTS[lastDashChart] || DASH_CHARTS['adv-mean']}` };
     }
+    // 另两个页签是「按容器查 svg」，查不到返回 null，于是拿不到图时有一句正经提示。
+    // 首屏这一张的 <svg> 是写死在 HTML 里的，永远存在——只是数据还没加载完时它是个空壳
+    // （没有 viewBox、也没有子节点）。这时点「导出图像」不会走进那个 null 分支，
+    // 而是照着 100%/400 的属性值算出一块画布，静静导出一张纯底色图：用户以为自己拿到了图，
+    // 拿去交作业才发现是白的。所以这里用「有没有内容」当判据，把它并进同一句提示。
+    const el = document.getElementById('main-chart');
     return {
-        element: document.getElementById('main-chart'),
+        element: (el && el.childElementCount > 0) ? el : null,
         label: chartType === 'line' ? '折线趋势图' : '指纹热力图'
     };
 }
@@ -3217,7 +3377,7 @@ function exportSummary() {
     const metricHint = {
         sentenceLength: '一句话平均几个词。',
         simpsonIndex: '数值越高，用词越重复。',
-        hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出，不是 0–1 的比例；数值越大用词越丰富。已按篇幅折算，长短不同的书可比。',
+        hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出，不是 0–1 的比例；数值越大用词越丰富。对篇幅的依赖很弱（公式里篇幅取的是对数），字数相差不大的书可直接比。',
         functionWords: `由高频小词${getAxisWordsHint()}的使用习惯得出，仅作参照。`
     }[currentMetric] || '';
     const contextLine = getMetricContextLine(currentMetric);
@@ -4515,6 +4675,20 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // 「同名覆盖」确认弹窗：点遮罩等同于取消、Esc 也等同于取消（不替换）。
+    // 两个出口都走 cancelOverwriteUpload：一致地清掉待传文件并把焦点还回去。
+    const overwriteModal = document.getElementById('overwrite-modal');
+    if (overwriteModal) {
+        overwriteModal.addEventListener('click', function(e) {
+            if (e.target === this) cancelOverwriteUpload();
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && overwriteModal.getAttribute('aria-hidden') === 'false') {
+                cancelOverwriteUpload();
+            }
+        });
+    }
+
     // 文本雨按钮避让吸顶页签条：滚动、窗口尺寸、以及页面高度的变化都要重算一次。
     syncMatrixBtnDodge();
     window.addEventListener('scroll', scheduleMatrixBtnDodge, { passive: true });
@@ -4530,6 +4704,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 window.openShelfModal = openShelfModal;
 window.closeShelfModal = closeShelfModal;
+window.cancelOverwriteUpload = cancelOverwriteUpload;
+window.confirmOverwriteUpload = confirmOverwriteUpload;
 
 window.restartGalaxy = function() {
     // 这个按钮承诺的是「重新布局」，所以要先丢掉上一轮的落点缓存——
