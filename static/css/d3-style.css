@@ -2267,3 +2267,153 @@ button.copy-failed:hover {
         bottom: -12px;
     }
 }
+/* ==========================================================================
+   打印 / 另存为 PDF（第三十四批）
+   --------------------------------------------------------------------------
+   先量，再改。用真排版引擎渲了一遍（Chrome Page.printToPDF，A4、四边 10mm，
+   「背景图形」开和关各一次）：
+
+     改前实测：**3 页**。第 1 页是标题、选书、观察角度、三个页签、图表类型选择器——
+     热力图整块被挤到第 2 页去了，第 1 页底下空出四成；第 2 页是图 + 数据详情；
+     第 3 页只有「上传文本分析」和「第一次来」那条引导，其余三分之二全空。
+
+   两个问题，第二个比第一个要紧：
+
+   1) 纸上有一堆不成立的东西：上传表单（纸上没法选文件）、引导条、三个页签、
+      导出与复制按钮（印在纸上的按钮按不动）、还有装饰用的文字雨画布
+      （position:fixed 铺满视口，落到纸上就是一大块噪声）。
+
+   2) **纸面上分不清选中的是哪两本书。** 浏览器打印默认**不打印背景色**
+      （Chrome 打印对话框里「背景图形」默认就是关的），而「这本书被选中」这件事
+      **只由底色表达**：.book-btn.active 是松烟墨底 + 近白字。底色一没，近白的字
+      落在白纸上——实测对比度 **1.04:1**，等于看不见。同一回事还有三处：
+      .metric-hint-label（「平均句长：」那个小花青标签，1.05:1）、
+      .seal 与 .footer-seal（朱砂底 + 近白字的印章，1.04:1）。
+      所以这一批不是「少印了几个按钮」，是**打出来那张纸上写着另一件事**。
+
+   做法：全部写在 @media print 里，屏幕上一行不动（media 互斥，也不受本文件末尾
+   那个 (pointer: coarse) 块影响——它只管触屏的可点面积）。状态不再由底色承担：
+   印章、选中的书名、指标标签在纸上改成「描边 + 同色字」，于是无论「背景图形」
+   开关是开是关，纸上长的是同一个样子——不依赖 print-color-adjust，也不多费墨，
+   更不会出现「开了背景图形反而更看不清」。
+   ========================================================================== */
+@media print {
+
+    /* 1. 纸上不成立、或只是屏幕上的一过性反馈 —— 一律不印 */
+    #matrix-canvas,         /* 装饰性文字雨：fixed 铺满视口，落到纸上是一大块噪声 */
+    #btn-matrix,            /* 它的开关 */
+    #upload-bar,            /* 上传表单：纸上没法选文件（隐私与格式告知见 README 代价清单） */
+    #quickstart,            /* 「第一次来？」引导条：它右边那个按钮也按不动 */
+    .tab-navigation,        /* 三个页签：一张纸上只可能是其中一页 */
+    #global-status,         /* 转瞬即逝的状态行 */
+    .global-toolbar,        /* 导出图像 / 复制此链接 / 更多导出 */
+    .selection-notice,      /* 一过性的选书提示（fixed，还可能在每页重复） */
+    .galaxy-modal-overlay,  /* 弹窗：是界面状态，不是内容 */
+    .controls,              /* 图表类型下拉 + 曲线平滑滑块 */
+    .adv-controls > button, /* 「重置视图」。写成「>」是量出来的：不加「>」会把
+                               #adv-filters 里那排选书 chip 一起藏掉（chip 也是
+                               <button>），于是「全书对比」页印出来只剩「选择书籍:」
+                               四个字——纸面上反而比改之前更说不清选的是哪几本。 */
+    #demo-entry,            /* 「载入对比示例」 */
+    #restartGalaxyBtn,      /* 「↻ 重新布局」 */
+    .insight-copy,          /* 「复制结论」 */
+    .copy-block-btn,        /* 「⧉ 复制更长的摘录」 */
+    .drill-remove-btn       /* 「✕ 收起」 */
+    {
+        display: none !important;
+    }
+
+    /* 片段详情在屏幕上是「固定一屏 + 内部滚动」：.drill-panel 是 flex 列、
+       #adv-drill-content 是 flex:1 + overflow-y:auto。屏幕里这是对的，纸上不成立——
+       量过：打印媒体下这个盒子高 540px、内容 1085px，会印出一条滚动条，而且**多出来的
+       545px 有被裁掉的危险**（实测这一份没丢内容，但那是浏览器替我们把滚动盒子摊开了，
+       不该指望）。纸上「滚动」本来就没有意义：改成自然高度，内容该多高就多高。 */
+    .drill-panel {
+        display: block;
+        overflow: visible;
+    }
+    #adv-drill-content {
+        flex: none;
+        height: auto;
+        overflow: visible;
+    }
+
+    /* 2. 状态不能只靠底色（默认不打印背景色）。改成描边 + 同色字，
+          两种「背景图形」设置下纸上都是同一个样子。
+          选中书名的边框从 1px 加到 2px：不靠底色以后，得让「选中」和旁边那圈
+          1px 的浅边框还分得开。box-sizing 是 border-box（见文件开头的 * 规则），
+          所以加粗边框不会把 chip 撑大。 */
+    .book-btn.active {
+        background: none;
+        color: var(--ink-100);
+        border-color: var(--vermilion);
+        /* 再加一圈内阴影凑成 2px 的红边。用 box-shadow 而不是把 border 加粗，
+           是因为内阴影不参与布局——加粗边框会让每个 chip 宽 2px，一行书名跟着重排。 */
+        box-shadow: inset 0 0 0 1px var(--vermilion);
+    }
+    /* 「全书对比」页那排选书 chip 的选中态同理：原来是淡朱砂底 + 朱砂描边，
+       底色一没，选中和没选中就只剩描边色一个差别（黑白打印机上更是分不出来）。 */
+    .adv-controls .filter-chip.active {
+        background: none;
+        border-color: var(--vermilion);
+        color: var(--ink-100);
+        box-shadow: inset 0 0 0 1px var(--vermilion);
+    }
+    /* 这一条是全篇唯一用 print-color-adjust 的地方，理由只有一个：星系的颜色图例
+       是一个 12px 的圆点，圆点整块的意义就是它的底色，而底色是 JS 用行内
+       style.background 写上去的（d3-charts.js 的 colorForBook）——CSS 改不了它，
+       也没法用「描边 + 文字」替代（图例里已经有书名了）。不这么写，纸上就是：
+       图里一片朱砂点、一片花青点，图例里两个空心圈，颜色和书对不上。
+       只有 12×12 一小块，费墨可以忽略。 */
+    .galaxy-legend-swatch {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .metric-hint-label {
+        background: none;
+        color: var(--indigo);
+        border: 1px solid var(--indigo);
+    }
+    .seal {
+        background: none;
+        color: var(--vermilion);
+        box-shadow: inset 0 0 0 2px var(--vermilion);
+    }
+    .footer-seal {
+        background: none;
+        color: var(--vermilion);
+        box-shadow: inset 0 0 0 1.5px var(--vermilion);
+    }
+    /* 异常片段里那个「偏高 / 偏低」的小标签，同样是朱砂底 + 近白字（1.04:1），
+       同一回事。好在它的方向是**字面**上的（「偏高」两个字本身），不靠颜色，
+       所以直接换成描边 + 朱砂字，不丢信息。
+       这一条是收尾复查时补上的：前面几轮只量了「趋势分析」页，这块只在
+       「全书对比」页出现，直到把三个页签都过一遍才露出来。 */
+    .anomaly-tag {
+        background: none;
+        color: var(--vermilion);
+        box-shadow: inset 0 0 0 1px var(--vermilion);
+    }
+
+    /* 3. 不要从中间断开。下面这几块各自都装得下一页，所以约束是有意义的
+          （真超过一页时浏览器会忽略 break-inside，不会把内容切掉）。
+
+          这份名单是量出来的，有两处**故意不加**：
+
+          · 图表容器（#chart-container）。加进来之后整张图会被推到第 2 页，第 1 页只剩
+            标题、选书和「基础趋势分析」那两行（1046px 的纸只用掉约 400px），读者要翻页
+            才看得见第一张图。不加，断开点正好落在图例之后、「色标范围由…」之前，
+            热力图连同图例整整齐齐留在第 1 页。这一条让热力图和折线图各少一页（3→2）。
+          · 「一句话解读」和「片段详情」这两块。它们本来就比一页高，avoid 约束不住，
+            却会把整块推到下一页：实测「全书对比」页的页数从 4 涨到 5。不加，页数不变，
+            断开点落在两张摘录卡之间，读起来和翻页读正文一样自然。 */
+    .header,
+    .metric-bar,
+    .adv-header,
+    .detail-panel,
+    .dash-card,
+    .galaxy-section,
+    .footer {
+        break-inside: avoid;
+    }
+}
