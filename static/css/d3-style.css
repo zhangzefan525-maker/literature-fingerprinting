@@ -1668,8 +1668,18 @@ button:hover {
     /* 挪到右下角：页签条是 position:sticky; z-index:30，而这个按钮是 z-index:9999，
        停在右上角时会压在吸顶页签上——320px 下实测两者重叠 1607px²（占「风格星系」
        那个页签 43%），点页签正中间 elementFromPoint 命中的是这个按钮，文本雨被
-       误开而页签没切。 */
-    .cyber-btn-float { top: auto; bottom: 12px; right: 12px; padding: 5px 11px; font-size: 11px; }
+       误开而页签没切。
+       挪到右下角仍不够：512px 下实测两者还重叠 338px²（占「全书对比」页签 9%），
+       中心点已归页签，但四角被按钮抢走。这里的 z-index: 20 是「万一将来层叠关系变了」
+       的保险，**它治不了当下的病**：.container 带 backdrop-filter（配上 position:relative;
+       z-index:1），整棵子树在根层叠上下文里只算 z-index 1，页签条自己的 z-index:30 出不去，
+       按钮不管是 20 还是 9999 都赢。真正的保证是 JS 里的几何避让（syncMatrixBtnDodge，
+       见 d3-charts.js）：两者矩形相交时把按钮抬到页签条上沿之上。代价：选中提示
+       （z-index:9500）弹出时会短暂盖住它，那本来就该盖住。
+       --anchored-bottom 是给那段 JS 的信号：有值 = 这一档按钮改钉在底部了。
+       别用 getComputedStyle(btn).top 判断——对定位元素浏览器返回的是**算好的像素值**
+       （实测返回 "662px" 而不是 "auto"），拿它分档会永远走进桌面分支。 */
+    .cyber-btn-float { --anchored-bottom: 12px; top: auto; bottom: var(--anchored-bottom); right: 12px; padding: 5px 11px; font-size: 11px; z-index: 20; }
 
     .upload-bar { gap: 8px; padding: 10px 12px; }
     .upload-btn { padding: 9px 15px; }
@@ -1706,7 +1716,8 @@ button:hover {
 }
 .state-card p { margin: 4px 0; }
 .state-card.loading { border-color: var(--indigo); background: rgba(90, 107, 140, 0.08); }
-.state-card.success { border-color: var(--ok); background: rgba(107, 143, 90, 0.10); }
+/* 这里原来还有一条 .state-card.success——第二十批把「成功加载 N 本书」那张卡整个删掉
+   （那块地方换成了能点进去的「先看这 3 段」），样式跟着删，不留死规则。 */
 .state-card.error   { border-color: var(--err); background: rgba(181, 71, 47, 0.08); color: var(--ink-70); }
 .state-card.error h3 { color: var(--err); }
 .state-card.empty   { border-style: dashed; color: var(--ink-50); }
@@ -1876,6 +1887,127 @@ button:hover {
     line-height: 1.5;
 }
 
+/* ---------- 第二十批：右侧面板空闲时的「先看这 3 段」 ---------- */
+/* 用户没点过任何格子时，这块顶替原来那张「成功加载 N 本书」状态卡。
+   每行是一个真按钮（点它 = 点图上那个格子），所以 hover / 焦点环一样不能少；
+   用的是 .quick-preview-row 而不是 div，键盘也能 Tab 到。 */
+.quick-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 10px 0 4px;
+}
+.quick-preview-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink-70);
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: var(--transition-control);
+}
+.quick-preview-row:hover { border-color: var(--vermilion); background: #fff; }
+.quick-preview-row:focus-visible { outline: 2px solid var(--vermilion); outline-offset: 2px; }
+.quick-preview-row .qp-value {
+    font-weight: 700;
+    color: var(--vermilion);
+    min-width: 3.4em;   /* 三行数字左边缘对齐，扫一眼就能比大小 */
+}
+.quick-preview-row .qp-loc { font-size: 0.85em; color: var(--ink-50); }
+
+/* ---------- 第二十批：「书架编号」按钮与弹窗 ---------- */
+/* 常驻在上传条里（新设备上正需要它，那时这个书架还是空的），外观跟旁边的
+   「存入我的图书馆」一档：13px、--ink-70，不跟上传按钮抢视线。 */
+.shelf-code-btn {
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink-70);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 5px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: var(--transition-control);
+}
+.shelf-code-btn:hover { color: var(--ink-100); border-color: var(--border); }
+.shelf-code-btn:focus-visible { outline: 2px solid var(--vermilion); outline-offset: 2px; }
+
+/* 弹窗内容沿用 .galaxy-modal-content 的壳，只收窄一点：它比原文弹窗短得多 */
+.shelf-modal-content { max-width: 520px; }
+.shelf-modal-content h2 { margin-bottom: 10px; }
+.shelf-modal-lead {
+    color: var(--ink-70);
+    font-size: 13px;
+    line-height: 1.65;
+    margin-bottom: 12px;
+}
+.shelf-code-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+/* 编号：等宽字体 + 可一键全选（复制按钮失败时还能手抄，它本来就区分大小写） */
+.shelf-code-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    color: var(--ink-100);
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    word-break: break-all;
+    -webkit-user-select: all;
+    user-select: all;
+}
+.shelf-code-row .copy-block-btn { margin-top: 0; }
+.shelf-code-warn {
+    margin-top: 10px;
+    color: #6b6254;
+    font-size: 12px;
+    line-height: 1.6;
+}
+.shelf-claim {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--border-soft);
+}
+.shelf-claim label {
+    display: block;
+    font-size: 13px;
+    color: var(--ink-70);
+    margin-bottom: 8px;
+}
+.shelf-code-input {
+    flex: 1 1 200px;
+    min-width: 0;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 7px 10px;
+    color: var(--ink-100);
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+.shelf-code-input:focus-visible { outline: 2px solid var(--vermilion); outline-offset: 1px; }
+/* 状态行：成功/失败都写这里。min-height 让空着的时候不跳高度 */
+.shelf-modal-status {
+    min-height: 1.2em;
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--ok-ink);
+}
+.shelf-modal-status.error { color: var(--err); }
+
 /* ---------- 无障碍：尊重系统的「减少动态效果」 ---------- */
 /* 只压掉界面上的过渡/动画，文本雨由脚本决定默认状态（这里不碰它的绘制逻辑） */
 /* ---------- 复制失败：按钮自己变成提示（http 站点没有剪贴板 API） ---------- */
@@ -1925,6 +2057,9 @@ button.copy-failed:hover {
     .save-toggle,
     .upload-btn,
     .cyber-btn-float,
+    .quick-preview-row,
+    .shelf-code-btn,
+    .shelf-code-input,
     select {
         min-height: 44px;
     }

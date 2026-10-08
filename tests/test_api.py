@@ -372,6 +372,221 @@ class VisitorIsolationTestCase(LibraryApiTestCase):
             self.assertEqual(path.parent.parent, root / "data" / "library")
 
 
+class ShelfClaimTestCase(LibraryApiTestCase):
+    """
+    书架找回（POST /api/shelf/claim）与编号下发（/api/books 的 shelfCode）。
+
+    这是全站唯一一条「客户端给的字符串 → 身份」的入口（此前身份只有 cookie 一条路），
+    所以**失败路径比成功路径重要**：每一条失败都必须原地不动——不换身份、不回设 cookie、
+    不建目录。成功路径则要证明「找回」是完整的：看得到、进得了自己的图、删得掉。
+    """
+
+    CLAIM = "/api/shelf/claim"
+    HEADERS = {"X-Shelf-Claim": "1"}
+    OTHER_VISITOR = "othervisitor00000002"
+
+    def _claim(self, code, client=None, headers=None):
+        return (client or self.client).post(
+            self.CLAIM, json={"code": code},
+            headers=self.HEADERS if headers is None else headers,
+        )
+
+    def _shelf_dirs(self):
+        return sorted(p.name for p in self.library.iterdir() if p.is_dir())
+
+    def _put_other_library(self, visitor, name, payload=None):
+        """写进**别人**那一格（认领用例要有一个「别人的书架」可认领）。"""
+        shelf = self.library / visitor
+        shelf.mkdir(parents=True, exist_ok=True)
+        target = shelf / f"{name}.json"
+        target.write_text(json.dumps(payload if payload is not None else FAKE_BOOK, ensure_ascii=False),
+                          encoding="utf-8")
+        return target
+
+    # ---- 编号下发 ----
+    def test_books_response_carries_the_shelf_code(self):
+        # cookie 是 HttpOnly，JS 读不到 document.cookie——这是全站唯一一条把编号
+        # 交给前端的路，「书架编号」弹窗没有它就没东西可显示
+        self.assertEqual(self.client.get("/api/books").get_json()["shelfCode"], TEST_VISITOR)
+
+    def test_first_visit_shelf_code_matches_the_handed_cookie(self):
+        client = api_server.app.test_client()
+        resp = client.get("/api/books")
+        handed = resp.headers["Set-Cookie"].split(";")[0].split("=", 1)[1]
+        self.assertEqual(resp.get_json()["shelfCode"], handed)
+
+    def test_shelf_code_is_not_a_token_leak(self):
+        """新字段只带编号：删除令牌绝不许搭这次顺风车。"""
+        self._put_library("Alice", dict(FAKE_BOOK, _deleteToken="tok-alice"))
+        for url in ["/api/books", "/api/fingerprint-data", "/api/book/Alice"]:
+            with self.subTest(url=url):
+                body = self.client.get(url).get_data(as_text=True)
+                self.assertNotIn("_deleteToken", body)
+                self.assertNotIn("tok-alice", body)
+
+    # ---- 认领：成功路径 ----
+    def test_claim_hands_over_the_shelf_and_its_tokens(self):
+        self._put_library("Alice", dict(FAKE_BOOK, _deleteToken="tok-alice"))
+        self._put_library("Bob", dict(FAKE_BOOK, _deleteToken="tok-bob"))
+        fresh = api_server.app.test_client()   # 另一台设备：还没拿到任何编号
+
+        resp = self._claim(TEST_VISITOR, client=fresh)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertEqual(body["status"], "success")
+        self.assertEqual(body["shelfCode"], TEST_VISITOR)
+        self.assertEqual({b["name"]: b["deleteToken"] for b in body["books"]},
+                         {"Alice": "tok-alice", "Bob": "tok-bob"})
+        # 切身份的响应绝不能进任何缓存
+        self.assertIn("no-store", resp.headers.get("Cache-Control", ""))
+        # 身份走的是首次发牌那条统一下发的路，属性一模一样
+        cookie = resp.headers.get("Set-Cookie", "")
+        self.assertIn(f"{api_server.VISITOR_COOKIE}={TEST_VISITOR}", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Lax", cookie)
+
+        # 认领之后真的就是那一格：书单看得到、取得到、用交回的令牌删得掉
+        listing = fresh.get("/api/books").get_json()
+        self.assertEqual(listing["shelfCode"], TEST_VISITOR)
+        self.assertIn("Alice", {b["id"] for b in listing["books"]})
+        self.assertEqual(fresh.get("/api/book/Alice").status_code, 200)
+        deleted = fresh.delete("/api/library/Alice", headers={"X-Delete-Token": "tok-alice"})
+        # 这条断言是整个令牌交接的意义所在：只交编号的话，找回后能看不能删
+        self.assertEqual(deleted.status_code, 200)
+        self.assertFalse((self.shelf / "Alice.json").exists())
+        self.assertTrue((self.shelf / "Bob.json").exists())
+
+    def test_claimed_shelf_joins_your_corpus(self):
+        other = self._another_visitor(self.OTHER_VISITOR)
+        self._put_library("Alice")
+        self.assertNotIn("Alice", other.get("/api/fingerprint-data").get_json()["data"])
+        self.assertEqual(self._claim(TEST_VISITOR, client=other).status_code, 200)
+        self.assertIn("Alice", other.get("/api/fingerprint-data").get_json()["data"])
+
+    def test_shelf_without_tokens_still_claims(self):
+        """旧版遗留的书没有令牌：认领要成功，只是「暂时删不掉」——不能因此整条失败。"""
+        self._put_library("Alice")
+        body = self._claim(TEST_VISITOR, client=api_server.app.test_client()).get_json()
+        self.assertEqual(body["status"], "success")
+        self.assertEqual(body["books"], [])
+
+    def test_you_can_switch_back_and_forth(self):
+        self._put_library("Mine")
+        self._put_other_library(self.OTHER_VISITOR, "Theirs")
+        client = api_server.app.test_client()
+
+        self.assertEqual(self._claim(self.OTHER_VISITOR, client=client).status_code, 200)
+        ids = {b["id"] for b in client.get("/api/books").get_json()["books"]}
+        self.assertIn("Theirs", ids)
+        self.assertNotIn("Mine", ids)
+
+        self.assertEqual(self._claim(TEST_VISITOR, client=client).status_code, 200)
+        ids = {b["id"] for b in client.get("/api/books").get_json()["books"]}
+        self.assertIn("Mine", ids)
+        self.assertNotIn("Theirs", ids)
+
+    # ---- 认领：失败路径（每一条都必须原地不动）----
+    def test_claim_without_the_custom_header_is_403(self):
+        """没有自定义头的跨站表单 POST 打不到这里——防的是「登录型 CSRF」。"""
+        self._put_other_library(self.OTHER_VISITOR, "Alice")
+        resp = self.client.post(self.CLAIM, json={"code": self.OTHER_VISITOR})
+        self.assertEqual(resp.status_code, 403)
+        self.assertNotIn(api_server.VISITOR_COOKIE, resp.headers.get("Set-Cookie", ""))
+        # 身份一点没动：还是自己那一格，看不到别人的书
+        listing = self.client.get("/api/books").get_json()
+        self.assertEqual(listing["shelfCode"], TEST_VISITOR)
+        self.assertNotIn("Alice", {b["id"] for b in listing["books"]})
+
+    def test_malformed_code_is_400_and_touches_nothing(self):
+        root = Path(self._tmp.name)
+        before = self._shelf_dirs()
+        for bad in ["", "   ", None, "short", "../../escaped", "with space", "a" * 200]:
+            with self.subTest(code=bad):
+                resp = self._claim(bad)
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn("格式不对", resp.get_json()["message"])
+                self.assertNotIn(api_server.VISITOR_COOKIE, resp.headers.get("Set-Cookie", ""))
+        # 校验发生在拼路径之前：伪造值什么都建不出来
+        self.assertFalse((root / "escaped").exists())
+        self.assertEqual(self._shelf_dirs(), before)
+
+    def test_unknown_code_is_404_and_creates_nothing(self):
+        before = self._shelf_dirs()
+        resp = self._claim("nosuchvisitor00000001")
+        self.assertEqual(resp.status_code, 404)
+        self.assertIn("没有书架", resp.get_json()["message"])
+        self.assertNotIn(api_server.VISITOR_COOKIE, resp.headers.get("Set-Cookie", ""))
+        # 绝不 mkdir：否则随机编号能把服务器刷出一地空目录
+        self.assertEqual(self._shelf_dirs(), before)
+
+    def test_empty_shelf_dir_is_404_not_a_new_shelf(self):
+        (self.library / "emptyvisitor00000001").mkdir()
+        resp = self._claim("emptyvisitor00000001")
+        # 目录在、但一本书都没有：与目录不存在同待遇（用户视角都是「没有书」）
+        self.assertEqual(resp.status_code, 404)
+        self.assertNotIn(api_server.VISITOR_COOKIE, resp.headers.get("Set-Cookie", ""))
+        self.assertEqual(self.client.get("/api/books").get_json()["shelfCode"], TEST_VISITOR)
+
+    def test_claim_lists_only_the_shelf_that_was_claimed(self):
+        self._put_library("Mine", dict(FAKE_BOOK, _deleteToken="tok-mine"))
+        self._put_other_library(self.OTHER_VISITOR, "Theirs", dict(FAKE_BOOK, _deleteToken="tok-theirs"))
+        body = self._claim(TEST_VISITOR).get_json()
+        self.assertEqual([b["name"] for b in body["books"]], ["Mine"])
+        self.assertNotIn("Theirs", resp_text := json.dumps(body, ensure_ascii=False))
+        self.assertNotIn("tok-theirs", resp_text)
+
+    def test_claiming_your_own_code_is_fine(self):
+        """认领自己正在用的编号：幂等成功，不是错误（用户可能只是想再确认一下）。"""
+        self._put_library("Mine")
+        resp = self._claim(TEST_VISITOR)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["shelfCode"], TEST_VISITOR)
+
+    def test_stray_files_do_not_count_as_a_shelf(self):
+        """「有没有书」只看 *.json：目录里躺着别的文件仍然是「这个编号下没有书架」。"""
+        shelf = self.library / "strayvisitor0000001"
+        shelf.mkdir()
+        (shelf / "notes.txt").write_text("hello", encoding="utf-8")
+        resp = self._claim("strayvisitor0000001")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_a_file_where_the_shelf_dir_would_be_does_not_crash(self):
+        """磁盘上那个位置是文件而不是目录：404，不是 500（glob 一个文件会抛异常）。"""
+        (self.library / "filevisitor00000001").write_text("not a dir", encoding="utf-8")
+        resp = self._claim("filevisitor00000001")
+        self.assertEqual(resp.status_code, 404)
+        self.assertNotIn(api_server.VISITOR_COOKIE, resp.headers.get("Set-Cookie", ""))
+
+    def test_claim_is_rate_limited_and_stops(self):
+        statuses = [self._claim(f"nosuchvisitor0000000{i}").status_code for i in range(12)]
+        self.assertEqual(statuses[0], 404)
+        self.assertEqual(statuses[-1], 429)
+        self.assertIn("太频繁", self._claim("nosuchvisitor00000099").get_json()["message"])
+
+    def test_claim_bucket_does_not_eat_the_upload_quota(self):
+        """单独一个桶：几次认领不能把上传额度挤掉（否则找回一次就没法传书了）。"""
+        for i in range(12):
+            self._claim(f"nosuchvisitor0000000{i}")
+        self.assertEqual(self._post_analyze("MyDoc.txt").status_code, 200)
+
+    # ---- 空目录回收 ----
+    def test_deleting_the_last_book_removes_the_empty_shelf_dir(self):
+        self._put_library("Alice", dict(FAKE_BOOK, _deleteToken="tok-a"))
+        self._put_library("Bob", dict(FAKE_BOOK, _deleteToken="tok-b"))
+        self.client.delete("/api/library/Alice", headers={"X-Delete-Token": "tok-a"})
+        self.assertTrue(self.shelf.exists(), "还有一本书，这一格必须在")
+        self.client.delete("/api/library/Bob", headers={"X-Delete-Token": "tok-b"})
+        self.assertFalse(self.shelf.exists(), "最后一本删掉后空目录一并收掉")
+        self.assertTrue(self.library.exists(), "收的是自己那一格，LIBRARY_DIR 本身不动")
+
+    def test_cleanup_leaves_other_shelves_alone(self):
+        self._put_library("Mine", dict(FAKE_BOOK, _deleteToken="tok-mine"))
+        other_book = self._put_other_library(self.OTHER_VISITOR, "Theirs")
+        self.client.delete("/api/library/Mine", headers={"X-Delete-Token": "tok-mine"})
+        self.assertFalse(self.shelf.exists())
+        self.assertTrue(other_book.exists(), "别人那一格一个字节都不许动")
+
+
 class LegacyLibraryTestCase(LibraryApiTestCase):
     """老版本（v1）书库文件：只做内存兼容，绝不改写磁盘上的旧文件。"""
 

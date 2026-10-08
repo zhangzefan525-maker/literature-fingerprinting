@@ -507,6 +507,9 @@ function initEventListeners() {
             // 数据变化时，更新所有图表
             refreshAllActiveCharts();
         }
+        // 面板空闲时那块「先看这 3 段」也是按指标算的，换指标必须跟着重算，
+        // 否则它会停在上一套数字上（图已经换了，卡片没换——正是最容易被当成 bug 的那种）
+        renderQuickPreviewIfIdle();
         syncUrlState();
     });
 
@@ -613,6 +616,24 @@ function initTabKeyboard() {
     });
 }
 
+// 挑出当前观察角度下「差别最明显的一对」：均值最小与最大的两本书。
+//
+// 候选优先只用内置示例书——与 getMetricContextLine 的参照基准同一条原则：
+// 用户自己上传的书不该被拿来当基准。内置书不够两本，才退回全部已加载的书。
+// 抽成函数是因为有两处要用：下面的「载入对比示例」按钮，以及首屏的默认选中。
+function pickMostDifferentPair() {
+    const candidates = (builtinBookNames.length > 0 ? builtinBookNames : Object.keys(realData || {}))
+        .filter(name => getMetricValues(name, currentMetric).length > 0);
+    if (candidates.length === 0) return [];
+    if (candidates.length === 1) return [candidates[0]];
+
+    const ranked = candidates
+        .map(name => ({ name, mean: d3.mean(getMetricValues(name, currentMetric).map(d => d.value)) }))
+        .filter(item => isFiniteNumber(item.mean))
+        .sort((a, b) => a.mean - b.mean);
+    return ranked.length > 1 ? [ranked[0].name, ranked[ranked.length - 1].name] : candidates.slice(0, 2);
+}
+
 // 「载入对比示例」：挑出在当前观察角度下差别最大的两本内置书
 // （帮第一次来的用户一键看到「对比」长什么样，而不是自己盲选）
 function loadComparisonExample() {
@@ -621,20 +642,10 @@ function loadComparisonExample() {
         return;
     }
 
-    const candidates = (builtinBookNames.length > 0 ? builtinBookNames : Object.keys(realData))
-        .filter(name => getMetricValues(name, currentMetric).length > 0);
-    if (candidates.length === 0) {
+    const picks = pickMostDifferentPair();
+    if (picks.length === 0) {
         setUploadStatus('暂时没有可用来做示例的书。', 'error');
         return;
-    }
-
-    let picks = [candidates[0]];
-    if (candidates.length > 1) {
-        const ranked = candidates
-            .map(name => ({ name, mean: d3.mean(getMetricValues(name, currentMetric).map(d => d.value)) }))
-            .filter(item => isFiniteNumber(item.mean))
-            .sort((a, b) => a.mean - b.mean);
-        picks = ranked.length > 1 ? [ranked[0].name, ranked[ranked.length - 1].name] : candidates.slice(0, 2);
     }
 
     selectedBooks = new Set(picks);
@@ -642,6 +653,7 @@ function loadComparisonExample() {
     updateMetricHint(); // 指标提示里那句「你选中的 N 本」要跟着选中数走，否则会停在初始的「1 本」
     resetDetailPanelIfStale('换过书');
     syncUrlState();
+    renderQuickPreviewIfIdle(); // 面板里那块内容也要跟着换的书重算
     // 这个按钮的承诺是「看看这个工具能做什么」，而结论（一句话解读、值得一看的片段）
     // 都长在「全书对比」页上。原地点完之后用户还站在基础图表页，看到的还是同一张热力图，
     // 等于什么都没发生——所以直接把页签切过去（switchTab 自己会重画目标页，不必先白画一遍当前页）。
@@ -773,6 +785,7 @@ async function handleFileUpload(event) {
         );
         updateMetricHint();
         refreshAllActiveCharts();
+        renderQuickPreviewIfIdle(); // 新书进来后，面板空闲时也该有内容可点
     } catch (e) {
         console.error('上传分析失败:', e);
         setUploadStatus('上传失败：无法连接当前分析服务。请确认服务器已启动，或稍后重试。', 'error');
@@ -840,7 +853,15 @@ function addUploadedBookButton(bookName, { deletable = false } = {}) {
 
 // 书库删除令牌：保存时服务端发一个，存在本浏览器里，删除时带回去。
 // 这样在线上演示环境里，别人无法凭一个书名就删掉你的书（本机访问不需要令牌）。
+//
+// 第二十批起按书架编号分格存（{编号: {书名: 令牌}}）：认领过别人的编号之后，
+// 两格书架上可能有同名的书而令牌不同，平铺存会拿错令牌（服务端 403，且无法自愈）。
+// 旧数据是平铺的 {书名: 令牌}，拿到编号时就地搬进这一格（见 setShelfCode）。
 const DELETE_TOKEN_KEY = 'wenxin.deleteTokens';
+
+// 当前浏览器的书架编号，由 /api/books 的 shelfCode 现给（cookie 是 HttpOnly，
+// JS 读不到）。接口没回来之前是空串。
+let currentShelfCode = '';
 
 function readDeleteTokens() {
     try {
@@ -858,22 +879,175 @@ function writeDeleteTokens(tokens) {
     } catch (e) { /* 写不进去就算了：本机访问本来就不需要令牌 */ }
 }
 
+// 这一格书架的令牌桶；还没有桶（或还不知道编号）时返回 null，调用方按旧版平铺表兜底
+function shelfTokenBucket(tokens) {
+    if (!currentShelfCode) return null;
+    const bucket = tokens[currentShelfCode];
+    return bucket && typeof bucket === 'object' ? bucket : null;
+}
+
+// 记下编号，并把旧版平铺表搬进这一格。幂等：搬完顶层就只剩编号键了。
+// 不搬的话，升级后老浏览器里那些书的 ✕ 会突然全变 403——令牌一直都在，
+// 只是没人再找得到它。
+function setShelfCode(code) {
+    currentShelfCode = typeof code === 'string' ? code : '';
+    if (!currentShelfCode) return;
+    const tokens = readDeleteTokens();
+    const legacyKeys = Object.keys(tokens).filter(k => typeof tokens[k] === 'string');
+    if (legacyKeys.length === 0) return;
+    const bucket = shelfTokenBucket(tokens) || {};
+    legacyKeys.forEach(k => {
+        bucket[k] = tokens[k];
+        delete tokens[k];
+    });
+    tokens[currentShelfCode] = bucket;
+    writeDeleteTokens(tokens);
+}
+
 function rememberDeleteToken(bookName, token) {
     if (!bookName || !token) return;
     const tokens = readDeleteTokens();
-    tokens[bookName] = token;
+    if (!currentShelfCode) {
+        tokens[bookName] = token; // 还不知道编号（接口失败等），按住旧版平铺表写
+        writeDeleteTokens(tokens);
+        return;
+    }
+    const bucket = shelfTokenBucket(tokens) || {};
+    bucket[bookName] = token;
+    tokens[currentShelfCode] = bucket;
     writeDeleteTokens(tokens);
 }
 
 function forgetDeleteToken(bookName) {
     const tokens = readDeleteTokens();
-    if (!(bookName in tokens)) return;
-    delete tokens[bookName];
-    writeDeleteTokens(tokens);
+    const bucket = shelfTokenBucket(tokens);
+    let changed = false;
+    if (bucket && bookName in bucket) { delete bucket[bookName]; changed = true; }
+    if (typeof tokens[bookName] === 'string') { delete tokens[bookName]; changed = true; }
+    if (changed) writeDeleteTokens(tokens);
 }
 
 function getDeleteToken(bookName) {
-    return readDeleteTokens()[bookName] || '';
+    const tokens = readDeleteTokens();
+    const bucket = shelfTokenBucket(tokens);
+    if (bucket && bookName in bucket) return bucket[bookName] || '';
+    const legacy = tokens[bookName]; // 旧版平铺表（还没搬过、或编号未知时）
+    return typeof legacy === 'string' ? legacy : '';
+}
+
+// 认领书架成功后，把服务端交回的令牌一次写进那一格（整格替换，避免和旧桶混在一起）
+function seedDeleteTokens(code, books) {
+    if (!code || !Array.isArray(books)) return;
+    const tokens = readDeleteTokens();
+    const bucket = {};
+    books.forEach(item => {
+        if (item && item.name && item.deleteToken) bucket[item.name] = item.deleteToken;
+    });
+    tokens[code] = bucket;
+    writeDeleteTokens(tokens);
+}
+
+// ---------------------------------------------------------------------------
+// 「书架编号」弹窗：显示自己的编号（可复制）+ 在另一台设备上填另一枚编号切过去
+//
+// 编号是 HttpOnly cookie，页面本来读不到，靠 /api/books 的 shelfCode 现给。
+// 切换成功之后要整页刷新：realData 是「合并」语义（loadRealData 不删旧键），
+// 重跑一遍加载清不掉上一格书架的书。刷新前先把链接里的 books 参数摘掉，
+// 否则会撞上「链接里的这 N 本书在这台服务器上找不到」那句假警报。
+// ---------------------------------------------------------------------------
+function openShelfModal() {
+    const modal = document.getElementById('shelf-modal');
+    if (!modal) return;
+    const valueEl = document.getElementById('shelf-code-value');
+    if (valueEl) valueEl.textContent = currentShelfCode || '（还没拿到，请刷新页面）';
+    const status = document.getElementById('shelf-modal-status');
+    if (status) {
+        status.textContent = '';
+        status.classList.remove('error');
+    }
+    const input = document.getElementById('shelf-code-input');
+    if (input) input.value = '';
+
+    modal.setAttribute('aria-hidden', 'false');
+    modal.style.display = 'flex';
+    document.addEventListener('keydown', trapShelfModalFocus);
+    setTimeout(() => {
+        modal.classList.add('show');
+        const closeButton = modal.querySelector('.galaxy-modal-close');
+        if (closeButton) closeButton.focus();
+    }, 10);
+}
+
+function closeShelfModal() {
+    const modal = document.getElementById('shelf-modal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    document.removeEventListener('keydown', trapShelfModalFocus);
+    setTimeout(() => {
+        modal.style.display = 'none';
+        const trigger = document.getElementById('shelf-code-btn');
+        if (trigger) trigger.focus(); // 焦点还给打开它的那个按钮，不然键盘用户会掉到页面开头
+    }, 300);
+}
+
+// 「切换到这个书架」：把编号交给服务端换发 cookie，回来后整页刷新
+async function claimShelfCode() {
+    const input = document.getElementById('shelf-code-input');
+    const status = document.getElementById('shelf-modal-status');
+    const btn = document.getElementById('shelf-code-claim');
+    const code = ((input && input.value) || '').trim();
+    if (!code) {
+        if (status) {
+            status.textContent = '请先输入另一台设备上的书架编号。';
+            status.classList.add('error');
+        }
+        return;
+    }
+    if (btn) btn.disabled = true;
+    try {
+        const resp = await fetch(`${API_BASE_URL}/api/shelf/claim`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Shelf-Claim': '1' },
+            body: JSON.stringify({ code }),
+        });
+        const contentType = resp.headers.get('content-type') || '';
+        const result = contentType.includes('application/json') ? await resp.json() : null;
+        if (!resp.ok || !result || result.status !== 'success') {
+            if (status) {
+                status.textContent = getErrorMessage(resp, result);
+                status.classList.add('error');
+            }
+            return;
+        }
+        // 先落牌：令牌跟这一格走，刷新后 ✕ 才认得出你
+        seedDeleteTokens(result.shelfCode, result.books);
+        stripBooksFromUrl();
+        if (status) {
+            status.textContent = '已切换，正在重新加载…';
+            status.classList.remove('error');
+        }
+        window.location.reload();
+    } catch (e) {
+        console.error('切换书架失败:', e);
+        if (status) {
+            status.textContent = '无法连接分析服务，请稍后重试。';
+            status.classList.add('error');
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+// 摘掉链接里的 books 参数（其余参数照旧），供切书架后刷新用
+function stripBooksFromUrl() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.has('books')) return;
+        params.delete('books');
+        const query = params.toString();
+        window.history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash);
+    } catch (e) { /* 改不了也照常刷新：最坏是刷新后多一句「链接里的书找不到」 */ }
 }
 
 // 正在删除中的书名。删除是一次网络往返，期间再点 ✕ 会重复发请求、重复弹确认，
@@ -925,6 +1099,8 @@ async function deleteLibraryBook(bookName) {
         } else {
             refreshAllActiveCharts();
         }
+        // 删掉的如果是面板里正列着的那本书，那块内容必须跟着换（或换成打回态）
+        renderQuickPreviewIfIdle();
     } catch (e) {
         console.error('删除书库书籍失败:', e);
         setUploadStatus('删除失败：无法连接当前分析服务。', 'error');
@@ -982,6 +1158,9 @@ async function loadBooksList() {
         }
 
         updateBookSelector(data.books);
+        // 记下这个浏览器的书架编号（服务端现给，cookie 是 HttpOnly 读不到）。
+        // 「书架编号」弹窗靠它显示，删除令牌的存放也按它分格。
+        setShelfCode(data.shelfCode);
         if (!data.books || data.books.length === 0) {
             showNoDataMessage();
             return;
@@ -1015,10 +1194,11 @@ function updateBookSelector(books) {
         // 链接里指定了选书：按它还原（不存在的书名会在数据加载后自动剔除）
         pendingUrlBooks = null;
         syncBookButtonStates();
-    } else {
-        // 默认选中第一本书
-        selectBook(books[0].id);
     }
+    // 没有链接参数时不在这里选书：首屏默认选的是「差别最明显的两本」，而那要等
+    // 数据到手才算得出来（见 loadRealData）。这里先如实空着——原来那句
+    // selectBook(books[0].id) 选的是未排序 glob 出来的「第一本」，本来就没有
+    // 确定含义，而且紧接着又会被数据到手后的默认值换掉，白画一遍图。
 }
 
 // 一次性的页面提示。故意挂在 body 直下：.container 有 backdrop-filter，会成为
@@ -1079,6 +1259,8 @@ function selectBook(bookId) {
     if (realData) {
         refreshAllActiveCharts();
     }
+    // 面板空闲时那块「先看这 3 段」是按书 + 指标算的，选书一变就得重算
+    renderQuickPreviewIfIdle();
     syncUrlState();
 }
 
@@ -1126,7 +1308,11 @@ async function loadRealData() {
             showNoDataMessage();
             return;
         }
-        showSuccess(`成功加载 ${availableBooks.length} 本书籍的数据`);
+        // 顶部状态条照旧报一句成功（6 秒后自己收起）。以前这里还往右侧面板里写一张
+        // 「成功」状态卡，一直挂到用户点某个格子为止；现在那块地方留给
+        // renderQuickPreviewIfIdle 的「先看这 3 段」（见本函数末尾）。
+        // 位置不能挪到下面：链接里点名的书丢了时，那句 notice 必须压过这句。
+        setGlobalStatus('success', `成功加载 ${availableBooks.length} 本书籍的数据`);
         updateMetricHint(); // 参考区间跟随当前已加载书集合
         renderAxisWordHints(); // 轴词说明也跟随已加载的书（用户可能还没切到星系页）
 
@@ -1142,11 +1328,34 @@ async function loadRealData() {
                 + '（可能已被删除，或链接来自别的部署）。下面显示的是现有的书。');
         }
         if (selectedBooks.size === 0) {
-            selectBook(availableBooks[0]); // 如果没选，默认选第一本
+            // 首屏默认：差别最明显的两本内置书（第一次来的用户打开就能看到「对比」
+            // 长什么样，而不是对着一张单书热力图猜这个工具能干什么）。
+            // 只在这一次定：之后选书、换指标都跟着用户走，不再重挑。
+            const picks = pickMostDifferentPair();
+            if (picks.length > 0) {
+                // 一次性把整个集合换上，不走两次 selectBook——那会白画两遍图。
+                selectedBooks = new Set(picks);
+                syncBookButtonStates();
+                updateMetricHint(); // 上面那次算的是空集合，这里要跟着新的选中数重算
+                syncUrlState();
+                refreshAllActiveCharts();
+                // 选中两本必须是「说明过的」：不说一句，用户打开就看到两张并排的图，
+                // 不知道这两本是谁挑的、凭什么。只在自动挑书这一次说（带书籍链接进来、
+                // 或者自己选过书之后都不会走到这个分支）。
+                showSelectionNotice(
+                    `已替你选中差别最大的两本：《${picks.map(getBookDisplayName).join('》《')}》——`
+                    + `它们的「${getMetricLabel(currentMetric)}」差得最远。`,
+                    { duration: 6000 }
+                );
+            } else {
+                selectBook(availableBooks[0]); // 兜底：连一对都挑不出来时，照旧选第一本
+            }
         } else {
             syncBookButtonStates(); // 链接还原 / 书籍变动后，把选中态落到按钮上
             refreshAllActiveCharts();
         }
+        // 右侧面板不再只剩一句「成功加载 N 本书籍的数据」——首屏就给出能点进去看的内容
+        renderQuickPreviewIfIdle();
     } catch (error) {
         console.error('加载数据失败:', error);
         showError('无法加载数据，请检查分析服务是否运行。');
@@ -1744,6 +1953,61 @@ function hideTooltip() {
         .transition()
         .duration(motionDuration(200))
         .style("opacity", 0);
+}
+
+// 右侧面板的「空闲内容」：第一本选中书里，当前指标最突出的 3 段。
+//
+// 这块地方原先在数据加载完之后只剩一句「成功加载 N 本书籍的数据」，一直挂到用户
+// 点某个格子为止——首屏最贵的一块地只放了一句状态话。现在换成能直接点进去的内容：
+// 点一行 = 点图上那个格子（同一个 showDetail，不新建第二条详情路径）。
+//
+// 只在面板「空闲」时渲染（没有 .block-location = 用户没有正在看某一段）：
+// 用户点过格子之后，任何自动内容都不许盖掉它——点击永远优先。所以它是「调用一下、
+// 自己判断」，而不是塞进 refreshAllActiveCharts（那条路径还被窗口 resize 与
+// 「重置视图」调用，既没必要，还可能打断键盘操作）。
+function renderQuickPreviewIfIdle() {
+    const detailPanel = document.getElementById('detailPanel');
+    if (!detailPanel || !realData) return;
+    if (detailPanel.querySelector('.block-location')) return; // 用户正在看某一段，不打扰
+
+    // 只列「第一本选中书」：面板只有一列，两本并排列会变成一份没有人要的清单。
+    // 选它自己的书（而不是硬取 availableBooks[0]）——用户换书后，这里跟着换。
+    const book = Array.from(selectedBooks).find(name => getMetricValues(name, currentMetric).length > 0);
+    const top = book
+        ? getMetricValues(book, currentMetric).slice().sort((a, b) => b.value - a.value).slice(0, 3)
+        : [];
+    if (top.length === 0) {
+        // 算不出内容时，面板上剩下的东西必须说得清「为什么没有」——不能留上一本书那 3 行
+        // （点开会弹出一本已经删掉/换掉的书），更不能留着那张「正在加载」的卡：
+        // loadRealData 先写它、末尾再调这里，这里一早退就没人回来关，它会一直转到刷新为止
+        // （比如 URL 带了 ?metric= 而选中的书没有这个指标）。
+        // 只收拾自己写过的两块（3 行清单 / 加载卡），用户点开的详情卡上面已经放行过了。
+        if (detailPanel.querySelector('.state-card.loading') || detailPanel.querySelector('.quick-preview')) {
+            showNoDataMessage('选中的书在当前「观察角度」下没有可展示的片段，换一个观察角度或再选一本书试试。');
+        }
+        return;
+    }
+
+    const loaded = Object.keys(realData).length;
+    const selectedCount = selectedBooks.size;
+    const rows = top.map(d => `
+            <button type="button" class="quick-preview-row" data-block="${escapeHtml(String(d.block))}">
+                <span class="qp-value">${escapeHtml(formatMetric(d.value))}</span>
+                <span class="qp-loc">${escapeHtml(formatBlockLocation(book, d.block))}</span>
+            </button>`).join('');
+
+    detailPanel.innerHTML = `
+        <h3>▤ 数据详情</h3>
+        <p>已加载 ${loaded} 本书${selectedCount > 1 ? `，图上选中 ${selectedCount} 本` : ''}。
+           先看《${escapeHtml(getBookDisplayName(book))}》里「${escapeHtml(getMetricLabel(currentMetric))}」最突出的 3 段：</p>
+        <div class="quick-preview" data-book-id="${escapeHtml(book)}">
+            ${rows}
+        </div>
+        <p class="excerpt-note">点上面任意一行，和点图上那个格子是一回事。</p>
+    `;
+    detailPanel.querySelectorAll('.quick-preview-row').forEach((btn, i) => {
+        btn.addEventListener('click', () => showDetail(top[i], book));
+    });
 }
 
 function showDetail(data, bookName) {
@@ -3231,8 +3495,9 @@ const LOADING_WAIT_HINT = '如果这台服务刚启动，需要先生成示例�
 // 顶部状态条那个 live region 念过一遍了——两块同时可见时，读屏会把整句话连读两遍。
 // 判据是「状态条上那条消息会不会比卡片先消失」：setGlobalStatus 只让 success/notice
 // 在 6 秒后自己收起，loading 和 error 会一直留到下一次状态更新。所以这两张卡片被摘掉
-// 也丢不了信息。反过来，「成功」「没有数据」两张卡片不摘：前者的第二句（点图看详情）
-// 是状态条里没有的，后者的状态条 6 秒就没了。
+// 也丢不了信息。反过来，「没有数据」那张卡片不摘：它的状态条 6 秒就没了。
+// （第二十批起「成功」那张卡不存在了：数据加载完，右侧面板换成了「先看这 3 段」——
+//   那是一块能点进去的内容，不是状态话，所以也不标 aria-hidden。）
 // 用 aria-hidden 而不是临时摘掉 #detailPanel 的 role/aria-live：后者要再设回去，而
 // 「live region 从非 live 变成 live 时，已有内容算不算一次新播报」各家读屏不一致，
 // 一旦判错，正常的片段详情卡（点数据点弹出来的那张）就整个不播了——那是回退，不是修复。
@@ -3245,18 +3510,6 @@ function showLoading(message) {
             <h3>◌ ${escapeHtml(message)}</h3>
             <p>${escapeHtml(LOADING_WAIT_HINT)}</p>
             <div class="state-spinner" aria-hidden="true"></div>
-        </div>
-    `;
-}
-
-function showSuccess(message) {
-    setGlobalStatus('success', message);
-    const detailPanel = document.getElementById('detailPanel');
-    if (!detailPanel) return;
-    detailPanel.innerHTML = `
-        <div class="detail-card state-card success">
-            <h3>${escapeHtml(message)}</h3>
-            <p>现在可以点击图表中的数据点查看详细信息。</p>
         </div>
     `;
 }
@@ -3773,8 +4026,7 @@ function openGalaxyModal(d) {
 
 // 键盘焦点陷阱：弹窗打开时 Tab 只在弹窗内部循环，
 // 否则焦点会跑到背后看不见的页面上，读屏用户会彻底迷失
-function trapModalFocus(event) {
-    const modal = document.getElementById('galaxy-modal');
+function trapFocusWithin(modal, event) {
     if (!modal || event.key !== 'Tab') return;
 
     const focusables = Array.from(
@@ -3791,6 +4043,14 @@ function trapModalFocus(event) {
         event.preventDefault();
         first.focus();
     }
+}
+
+function trapModalFocus(event) {
+    trapFocusWithin(document.getElementById('galaxy-modal'), event);
+}
+
+function trapShelfModalFocus(event) {
+    trapFocusWithin(document.getElementById('shelf-modal'), event);
 }
 
 function closeGalaxyModal() {
@@ -3821,7 +4081,54 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+
+    // 「书架编号」弹窗：点遮罩关闭、Esc 关闭、复制编号、切换书架
+    const shelfModal = document.getElementById('shelf-modal');
+    if (shelfModal) {
+        shelfModal.addEventListener('click', function(e) {
+            if (e.target === this) closeShelfModal();
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && shelfModal.getAttribute('aria-hidden') === 'false') {
+                closeShelfModal();
+            }
+        });
+        const copyBtn = document.getElementById('shelf-code-copy');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', function() {
+                // 编号还没到手（接口失败等）时按钮上本来就没东西可复制，别去闪一句错的提示
+                if (!currentShelfCode) return;
+                copyTextToClipboard(currentShelfCode, copyBtn, '✓ 已复制');
+            });
+        }
+        const claimBtn = document.getElementById('shelf-code-claim');
+        if (claimBtn) claimBtn.addEventListener('click', claimShelfCode);
+        const input = document.getElementById('shelf-code-input');
+        if (input) {
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    claimShelfCode();
+                }
+            });
+        }
+    }
+
+    // 文本雨按钮避让吸顶页签条：滚动、窗口尺寸、以及页面高度的变化都要重算一次。
+    syncMatrixBtnDodge();
+    window.addEventListener('scroll', scheduleMatrixBtnDodge, { passive: true });
+    window.addEventListener('resize', scheduleMatrixBtnDodge);
+    // 字体/图片到位后工具区高度还会再变一次，量早了会算在错的位置上。
+    window.addEventListener('load', scheduleMatrixBtnDodge);
+    if (typeof ResizeObserver === 'function') {
+        // 页签条上方那一片（选书 chip 换行、快速开始横幅收起、书单变长…）一变高变矮，
+        // 就推着页签条在文档里上下移动，body 的高度跟着变——盯 body 就覆盖得到。
+        new ResizeObserver(scheduleMatrixBtnDodge).observe(document.body);
+    }
 });
+
+window.openShelfModal = openShelfModal;
+window.closeShelfModal = closeShelfModal;
 
 window.restartGalaxy = function() {
     // 这个按钮承诺的是「重新布局」，所以要先丢掉上一轮的落点缓存——
@@ -4074,6 +4381,65 @@ function setMatrixRain(on) {
 
 function toggleMatrixRain() {
     setMatrixRain(!isMatrixOn);
+}
+
+// —— 文本雨悬浮按钮给吸顶页签条让位 ——
+// 手机上（≤560px）这个按钮钉在右下角，页签条还没滚到吸顶位置、恰好落进视口底部那一段时
+// 两者会叠上：窗口 512×800（视口实测 512×702）下按钮在 662–690，压着「全书对比」页签的
+// 682–719，`elementFromPoint` 在页签右上角命中的是按钮——那一下点击就被文本雨吃掉了。
+// 病根是层叠上下文，不是 z-index 大小：.container 带 backdrop-filter（配上 position:relative;
+// z-index:1），整棵子树在根上下文里只算 z-index 1——页签条自己的 z-index:30 根本出不去，
+// 按钮只要在它上面（20 也好 9999 也好）就永远赢。既然比不出高下，就几何让位：
+// 两者矩形相交时把按钮抬到页签条上沿之上，不相交就还原。
+// 桌面档按钮钉在右上角（top:20px），跟页签条不在一条线上；两档靠 CSS 里的
+// --anchored-bottom 分开（只有 ≤560px 那条规则给它赋值）。**不能**拿
+// getComputedStyle(btn).top 来判断：对定位元素浏览器返回的是算好的像素值
+// （实测返回 "662px" 而不是 "auto"），那样永远会走进桌面分支。
+function matrixBtnAnchoredBottom() {
+    const btn = document.getElementById('btn-matrix');
+    if (!btn) return null;
+    const v = parseFloat(getComputedStyle(btn).getPropertyValue('--anchored-bottom'));
+    return isFinite(v) ? v : null;
+}
+
+let matrixBtnDodgeRaf = 0;
+
+function syncMatrixBtnDodge() {
+    matrixBtnDodgeRaf = 0;
+    const btn = document.getElementById('btn-matrix');
+    const nav = document.querySelector('.tab-navigation');
+    if (!btn || !nav) return;
+
+    const rest = matrixBtnAnchoredBottom();
+    if (rest === null) {
+        // 桌面档：内联的 bottom 必须摘干净——top 与 bottom 同时有值、高度又是 auto 时，
+        // 盒子会被拉伸成从上沿到下沿的长条，而不是保持一颗药丸。
+        if (btn.style.bottom) btn.style.bottom = '';
+        return;
+    }
+
+    // 判断只用「页签条的矩形」＋「按钮不躲时该在的位置」，刻意不读按钮当前的矩形：
+    // 否则抬起后不相交 → 还原 → 又相交 → 再抬起，会自激成抖动。
+    const vh = window.innerHeight;
+    const h = btn.offsetHeight;
+    const restBottomEdge = vh - rest;      // 不躲时按钮下沿的 y
+    const restTop = restBottomEdge - h;    // 不躲时按钮上沿的 y
+    const bar = nav.getBoundingClientRect();
+
+    let next = rest;
+    if (bar.bottom > restTop && bar.top < restBottomEdge) {
+        // 抬到页签条上沿之上 12px；视口极矮时再夹一下，别把按钮顶出屏幕。
+        next = Math.min(Math.max(rest, vh - bar.top + 12), Math.max(0, vh - h - 4));
+    }
+
+    const cur = parseFloat(btn.style.bottom);
+    if (!(isFinite(cur) && Math.abs(cur - next) < 0.5)) btn.style.bottom = next + 'px';
+}
+
+// rAF 合并：滚动时一帧里可能来好几个事件，量矩形只做一次。
+function scheduleMatrixBtnDodge() {
+    if (matrixBtnDodgeRaf) return;
+    matrixBtnDodgeRaf = requestAnimationFrame(syncMatrixBtnDodge);
 }
 
 // 系统是否要求「减少动态效果」。原本只用来决定文本雨的默认开关，而页面里真正会动的

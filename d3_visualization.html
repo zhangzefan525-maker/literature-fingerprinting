@@ -54,9 +54,14 @@
                  另：这是全页唯一解释「书存在哪」的地方。书架是按浏览器分的，所以必须说清
                  两件事——只有这个浏览器看得见；清除浏览器数据/换设备就找不回来。
                  不说第二句的话，用户会把它当网盘用。 -->
-            <label class="save-toggle" id="save-toggle" for="save-upload" title="勾选后：这次的分析结果会保留下来，刷新页面后仍在，可随时删除，只有这个浏览器能看到（清除浏览器数据或换台设备就找不回来了）。若「我的图书馆」里已有同名的书，会更新那一本（旧的分析被覆盖）；与内置示例书同名则自动加「（我的）」，示例书永不改动。">
+            <label class="save-toggle" id="save-toggle" for="save-upload" title="勾选后：这次的分析结果会保留下来，刷新页面后仍在，可随时删除，只有这个浏览器能看到（清除浏览器数据或换台设备就找不回来了——书还在服务器上，用「书架编号」可以找回）。若「我的图书馆」里已有同名的书，会更新那一本（旧的分析被覆盖）；与内置示例书同名则自动加「（我的）」，示例书永不改动。">
                 <input type="checkbox" id="save-upload"> 存入「我的图书馆」
             </label>
+            <!-- 书架编号：换设备 / 清了浏览器数据之后的找回入口。编号是 HttpOnly cookie，
+                 页面本来读不到，靠 /api/books 的 shelfCode 现给（见 d3-charts.js）。
+                 必须常驻显示，不能跟着「书架里有没有书」变——新设备上正需要它，
+                 而那时这个书架里一本书都还没有。 -->
+            <button type="button" id="shelf-code-btn" class="shelf-code-btn" onclick="openShelfModal()" title="查看/复制你的书架编号；换台设备或清了浏览器数据后，用它把书架找回来">🔑 书架编号</button>
             <!-- 这句是 JS 没跑起来时的兜底，正常运行下会被 setUploadStatus() 接上
                  DEFAULT_UPLOAD_STATUS + getUploadPrivacyNotice()。
                  原来这里写死了「分析只在本机进行，不上传服务器」——那是本机版的隐私说明，
@@ -86,7 +91,10 @@
              #detailPanel 的占位文案（就在图旁边）。三步删掉之后，这里只负责解释「载入对比
              示例」是干什么的——原来那三步反而没说过。 -->
         <div class="quickstart" id="quickstart">
-            <span class="quickstart-lead">第一次来？可以先用一组差别最明显的书，看看这个工具能做什么。</span>
+            <!-- 第二十批起，首屏已经自动选中「差别最明显的两本」，所以这句不再说
+                 「可以先用一组…」（那件事已经发生了，再读就像按钮没生效），改说它现在
+                 真正的作用：跳到结论页——「一句话解读」「值得一看的片段」都长在那里。 -->
+            <span class="quickstart-lead">第一次来？已经替你选好差别最明显的两本了，点这里直接看结论。</span>
             <button type="button" class="quickstart-demo" onclick="loadComparisonExample()">载入对比示例</button>
             <button type="button" class="quickstart-close" onclick="hideQuickStart()" aria-label="不再自动显示快速开始" title="收起。之后可以在「基础趋势分析」页右上角手动载入对比示例">✕</button>
         </div>
@@ -341,7 +349,42 @@
             </div>
         </div>
     </div>
-    
+
+    <!-- 书架编号弹窗：换设备 / 清了浏览器数据之后的唯一找回入口。
+         样式整套复用 .galaxy-modal-*（含 .show 过渡与 ≤560px 适配），不另写一份 modal CSS。
+         位置同理必须待在 .container 外面（见上面 #galaxy-modal 那段的注释）：.container 的
+         backdrop-filter 会把 fixed 覆盖层的包含块变成容器本身，弹窗会按容器的两千多像素
+         算高度、有一大半跑到屏幕外。 -->
+    <div id="shelf-modal" class="galaxy-modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="shelf-modal-title" aria-hidden="true">
+        <div class="galaxy-modal-content shelf-modal-content">
+            <button type="button" class="galaxy-modal-close" aria-label="关闭书架编号" onclick="closeShelfModal()">&times;</button>
+
+            <h2 id="shelf-modal-title">🔑 书架编号</h2>
+            <p class="shelf-modal-lead">
+                「我的图书馆」里的书存在服务器上，靠下面这个编号认领。清除浏览器数据、换台设备或换一个浏览器之后，
+                填上编号就能把书架接回来——连「删除」的权限一起。
+            </p>
+
+            <div class="shelf-code-row">
+                <code id="shelf-code-value" class="shelf-code-value">（还没拿到，请刷新页面）</code>
+                <button type="button" id="shelf-code-copy" class="copy-block-btn">⧉ 复制编号</button>
+            </div>
+            <p class="shelf-code-warn">
+                注意：拿到这个编号的人，都能看到这个书架里的书。只在自己信得过的设备之间传，别贴到公开场合。
+            </p>
+
+            <div class="shelf-claim">
+                <label for="shelf-code-input">换设备时：填上原来的编号，切过去</label>
+                <div class="shelf-code-row">
+                    <input type="text" id="shelf-code-input" class="shelf-code-input" autocomplete="off" spellcheck="false" placeholder="粘贴或照抄书架编号">
+                    <button type="button" id="shelf-code-claim" class="copy-block-btn">切换到这个书架</button>
+                </div>
+            </div>
+
+            <p id="shelf-modal-status" class="shelf-modal-status" role="status" aria-live="polite"></p>
+        </div>
+    </div>
+
     <script src="static/js/d3-charts.js"></script>
     <script>
         // 挂载综合仪表盘的初始化逻辑 (从原文件底部移入，保持模块化)
@@ -1414,6 +1457,9 @@
                 selectedBooks = new Set(advState.data.map(d => d.name));
                 if (typeof syncBookButtonStates === 'function') syncBookButtonStates();
                 if (typeof updateMetricHint === 'function') updateMetricHint();
+                // 右侧面板那句「图上选中 N 本」跟着 selectedBooks 走，这里刚换过集合，
+                // 不重算的话它会停在重置前的数字上（空的时候也没什么可算的，函数自己会判断）
+                if (typeof renderQuickPreviewIfIdle === 'function') renderQuickPreviewIfIdle();
             }
             // chips 的选中态也来自 selectedBooks，重新走一遍 initAdvancedData 把它重画
             if (typeof refreshAllActiveCharts === 'function') refreshAllActiveCharts();
