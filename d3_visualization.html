@@ -1030,6 +1030,7 @@
             const brush = d3.brushX().extent([[0, 0], [w, h]]).on("end", advBrushed);
             g.select(".brush").call(brush);
             attachBrushKeyboard(g, brush, w);
+            attachLineHoverThroughBrush(g, brush, w, x, y);
 
             // 分享链接里带了框选范围就还原（只取一次）
             if (typeof consumePendingUrlBrush === 'function') {
@@ -1225,6 +1226,94 @@
                     }
                     moveBrushByKeyboard([x0, x1]);
                 });
+        }
+
+        // 「风格走势」图的指针状态。折线自己收不到鼠标事件——d3 的 brush 在上面铺了一层
+        // 透明 overlay（拖动框选就靠它），悬停和点击全被那层吃掉。所以这两件事都从层上
+        // 接过来，再按「离哪条线最近」判断用户指的是哪一本。
+        // 判定用「离哪条线最近」而不是「有没有压在线身上」：折线只有 1.5px 宽，
+        // 按后者来，鼠标和手指基本都点不中。
+        // 每次重画时整份换新。点击那一路在 advBrushed 里（只有它拿得到 d3 的 end 事件，
+        // 见那里的说明）——两边共用这一份状态，所以放在外层。
+        let lineHint = null;
+
+        function attachLineHoverThroughBrush(g, brush, w, x, y) {
+            const overlay = g.select(".brush").select(".overlay");
+            if (overlay.empty()) return;
+            const ctx = { x: x, y: y, overlay: overlay, hoverId: null, rafId: 0, pending: null };
+            lineHint = ctx;
+
+            overlay
+                .on("mousemove.linehint", function (event) {
+                    // 提示框每次都要量一次尺寸（强制重排），按帧节流，别跟着指针跑满
+                    ctx.pending = [event.clientX, event.clientY];
+                    if (ctx.rafId) return;
+                    ctx.rafId = requestAnimationFrame(function () {
+                        ctx.rafId = 0;
+                        // 这一帧还没跑，图已经重画过了（状态换新）：这一份作废
+                        if (ctx !== lineHint || !ctx.pending) return;
+                        const xy = ctx.pending;
+                        ctx.pending = null;
+                        applyLineHover(ctx, xy[0], xy[1]);
+                    });
+                })
+                .on("mouseleave.linehint", function () {
+                    if (ctx.hoverId === null) return;
+                    ctx.hoverId = null;
+                    advUnhighlight();
+                });
+        }
+
+        function applyLineHover(ctx, clientX, clientY) {
+            const near = nearestLineBook(clientX, clientY);
+            if (!near) return;
+            if (ctx.hoverId !== near.book.id) {
+                ctx.hoverId = near.book.id;
+                advHighlight(near.book);
+            }
+            const pct = Math.round(near.pt.xPercent * 100);
+            // 标签用指标本名而不是 advMeanLabel()：那是「区段平均…」的说法，用在这里
+            // 会把一个片段的值说成一段的平均值。
+            const metricLabel = (typeof getMetricLabel === 'function') ? getMetricLabel(currentMetric) : currentMetric;
+            showAdvTooltip({ clientX: clientX, clientY: clientY },
+                `<b>${escapeHtml(near.book.displayName || near.book.name)}</b><br>`
+                + `约全书 ${pct}% 处<br>`
+                + `${escapeHtml(metricLabel)}: ${escapeHtml(fmtMetric(near.pt.value))}`);
+        }
+
+        // 离指针最近的那条线：扫过每本书的每个片段点，取像素距离最小的一个。
+        function nearestLineBook(clientX, clientY) {
+            if (!lineHint) return null;
+            const books = getAdvComputed();
+            if (!books.length) return null;
+            // 指针换算到绘图区坐标：overlay 就铺在 [0,0]–[w,h] 上
+            const box = lineHint.overlay.node().getBoundingClientRect();
+            const px = clientX - box.left;
+            const py = clientY - box.top;
+            let best = null;
+            let bestD = Infinity;
+            books.forEach(function (book) {
+                (book.activeSegment || []).forEach(function (pt) {
+                    const dx = lineHint.x(pt.xPercent) - px;
+                    const dy = lineHint.y(pt.value) - py;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < bestD) { bestD = d2; best = { book: book, pt: pt }; }
+                });
+            });
+            return best;
+        }
+
+        // 点在框选图上时，d3 的 end 事件里带着源事件。鼠标事件有 clientX/Y，
+        // 触摸事件在 changedTouches 里——两处都取一下，取不到就当成不是一次点击
+        // （键盘发出的 brush.move、程序化的还原都没有源事件）。
+        function brushClickPoint(event) {
+            const src = event && event.sourceEvent;
+            if (!src) return null;
+            const touch = src.changedTouches && src.changedTouches[0];
+            const cx = touch ? touch.clientX : src.clientX;
+            const cy = touch ? touch.clientY : src.clientY;
+            if (!isFinite(cx) || !isFinite(cy)) return null;
+            return { x: cx, y: cy };
         }
 
         // 播报一句话给读屏用户（内容区本身不是 live region，见 HTML 里的说明）。
@@ -1480,7 +1569,21 @@
             if (advKeyboardBrush) beginQuietConclusions();
             else endQuietConclusions();
             if (!event.selection) {
-                if (advState.brushRange) { advState.brushRange = null; updateAdvCharts(); }
+                // 点一下空白处：d3 把「没拖出面积」当成一次空选区，于是原先框好的区段会
+                // 被顺手清掉。但「点一下」在这张图上有它自己的含义——打开离指针最近那本书
+                // 的详情卡（说明见 attachLineHoverThroughBrush）。是点击就只做这件事，
+                // 框选区间原样保留：d3 已经清掉了 DOM 里的框，但 advState.brushRange 还在，
+                // 重画时 renderAdvLine 会照着它把框放回去。
+                // 键盘发的 brush.move、advReset 那种程序化还原都没有源事件，不会被误判成点击。
+                const point = brushClickPoint(event);
+                const near = point ? nearestLineBook(point.x, point.y) : null;
+                if (near) {
+                    if (advState.brushRange) updateAdvCharts();
+                    advDrillDown(near.book);
+                } else if (advState.brushRange) {
+                    advState.brushRange = null;
+                    updateAdvCharts();
+                }
             } else {
                 const w = charts['line'].w;
                 const [x0, x1] = event.selection;

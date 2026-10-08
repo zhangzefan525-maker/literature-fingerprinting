@@ -1571,6 +1571,8 @@ function drawMultiLineChart(svg, booksArray) {
                 event.stopPropagation();
                 d3.selectAll(".data-point").attr("r", 3).style("opacity", 0);
                 d3.select(this).style("opacity", 1).attr("r", 8).attr("stroke", "#b5472f");
+                // 同热力图：触屏点一下会留下一个没有 mouseout 的提示框，点开详情时收掉
+                hideTooltip();
                 showDetail(d, bookData.book);
             })
             .on("keydown", function(event, d) {
@@ -1601,6 +1603,15 @@ function drawMultiLineChart(svg, booksArray) {
         g.selectAll(`.point-${safeBookID}`).attr("tabindex", (d, i) => (i === 0 ? 0 : -1));
     });
 
+    // 触屏上没有「悬停」这一步：折线模式下数据点平时是全透明的（悬停才现出来），
+    // 而相邻两点的间距实测只有 1.5px、点直径 5.7px——手指按下去既看不见点在哪，
+    // 按偏了也没有任何反应，等于盲点。这里给触屏补一条容错通路：在绘图区铺一层
+    // 透明接收层，按下去取离手指最近的那个点。只在触屏（pointer: coarse）下挂，
+    // 桌面沿用原来的悬停 + 点击，行为一点不变。
+    if (usesCoarsePointer()) {
+        attachTouchPointPicker(g, chartData, xScale, yScale, width, plotHeight);
+    }
+
     const legend = svg.append("g").attr("transform", `translate(${width + 20}, ${margin.top})`);
     chartData.forEach((d, i) => {
         const row = legend.append("g").attr("transform", `translate(0, ${i * legendRowHeight})`);
@@ -1624,6 +1635,45 @@ function drawMultiLineChart(svg, booksArray) {
         .style("font-weight", "bold")
         .style("fill", "#2f2a23")
         .text(`${getMetricLabel(currentMetric)} - 对比分析`);
+}
+
+// 触屏专用：按一下 = 取离手指最近的那个数据点，容错半径按手指的接触面给
+// （约 9mm ≈ 34px）。桌面不挂这一层——鼠标本来就能精确悬停，多盖一层反而会把
+// 原来的悬停提示挡掉。
+function attachTouchPointPicker(g, chartData, xScale, yScale, width, plotHeight) {
+    const TOLERANCE = 34;
+    g.append("rect")
+        .attr("class", "touch-picker")
+        .attr("x", 0)
+        .attr("y", 0)
+        .attr("width", width)
+        .attr("height", plotHeight)
+        .attr("fill", "none")
+        .style("pointer-events", "all")
+        .style("cursor", "pointer")
+        .on("click", function (event) {
+            const [px, py] = d3.pointer(event, g.node());
+            let best = null;
+            let bestD = Infinity;
+            chartData.forEach(bookData => {
+                bookData.values.forEach((value, i) => {
+                    const dx = xScale(i) - px;
+                    const dy = yScale(value.value) - py;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < bestD) { bestD = d2; best = { point: value, book: bookData.book }; }
+                });
+            });
+            if (!best || bestD > TOLERANCE * TOLERANCE) return;
+            // 和点本身的点击走同一套动作：其余点复位，点亮这一个，再打开它的详情
+            d3.selectAll(".data-point").attr("r", 3).style("opacity", 0);
+            g.selectAll(`.point-${getBookSafeId(best.book)}`)
+                .filter(dd => dd === best.point)
+                .style("opacity", 1)
+                .attr("r", 6)
+                .attr("stroke", "#b5472f");
+            hideTooltip();
+            showDetail(best.point, best.book);
+        });
 }
 
 // 章节分界在热力图网格里的位置：格子按行铺开，分界线画在「该章起始所在那一格」的左边框上
@@ -1687,22 +1737,49 @@ function drawMultiHeatmap(svg, booksArray) {
 
     const chartWidth = (containerWidth - 60 - (chartData.length - 1) * padding) / chartData.length;
 
+    // 手机上常拿两三本书一起对比，并排时每本只分到三分之一宽度，格子会缩到 5–7px：
+    // 深浅分不出来，手指也点不中；几本书的名字还挤在同一行的同一段位置上叠成一团，
+    // 而画布高度是写死的 400，网格只占上面五十来像素，底下一大片空。
+    // 所以窄屏上只要并排算下来最大的格子都不足 MIN_BLOCK，就换成「一本一行、上下排开」：
+    // 一本书独占整幅图的宽度，格子回到 20px 以上，书名各占一行不再打架，画布高度也随
+    // 书的本数自然长起来。
+    // 另外钉一条宽度上限：宽屏（桌面）不论几本书都走并排——那些宽度上并排本来就看得清，
+    // 不该因为「书多、格子小」就把桌面版式换成纵向排列，桌面一个像素不变。
+    const STACK_MAX_WIDTH = 500; // 与 CSS 里 560px 那段断点覆盖的是同一批窄屏设备
+    const MIN_BLOCK = 18;
+    const blockOf = (count, width) => Math.max(1, Math.floor(width / Math.ceil(Math.sqrt(count))));
+    const sideBySideBlock = Math.min(...chartData.map(bookData => blockOf(bookData.values.length, chartWidth)));
+    const stackedLayout = containerWidth <= STACK_MAX_WIDTH
+        && chartData.length > 1
+        && sideBySideBlock < MIN_BLOCK;
+    const bookWidth = stackedLayout ? containerWidth - 60 : chartWidth;
+    const BOOK_ROW_GAP = 52; // 堆叠时两本书之间：留出下一本的书名（画在各自网格上方 20px）
+
     // 每本书的格子边长是各算各的（取决于它自己的 cols），所以画布高度必须按
     // 「每一本自己的 rows × blockSize」取最大值。旧写法拿第一本的 blockSize 去乘
     // 全局最大行数：只要后面某本书的格子比第一本大，它的网格就会伸进下边距，
     // 图例条和「虚线是章节分界」那行说明正好压在最后一排格子上。
     let maxGridHeight = 0;
+    let stackedCursor = 0;
 
-    chartData.forEach(bookData => {
-        const n = bookData.values.length;
-        const cols = Math.ceil(Math.sqrt(n));
-        const rows = Math.ceil(n / cols);
-        const blockSize = Math.max(1, Math.floor(chartWidth / cols));
-
-        maxGridHeight = Math.max(maxGridHeight, rows * blockSize);
+    // 每本书的左上角：并排时都在同一行，堆叠时依次往下排
+    const bookTops = chartData.map(bookData => {
+        const count = bookData.values.length;
+        const cols = Math.ceil(Math.sqrt(count));
+        const gridHeight = Math.ceil(count / cols) * blockOf(count, bookWidth);
+        maxGridHeight = Math.max(maxGridHeight, gridHeight);
+        if (!stackedLayout) return topMargin;
+        const top = topMargin + stackedCursor;
+        stackedCursor += gridHeight + BOOK_ROW_GAP;
+        return top;
     });
 
-    const totalHeight = Math.max(400, topMargin + maxGridHeight + bottomMargin);
+    // stackedCursor 记的是「离 topMargin 还有多远」，不是绝对 y——少加这个 topMargin，
+    // 画布就会比最后一本书的网格还矮，图例条正好压在最后一本书的最后几行格子上。
+    const gridsBottom = stackedLayout
+        ? topMargin + stackedCursor - BOOK_ROW_GAP // 最后一本底下不留空档
+        : topMargin + maxGridHeight;
+    const totalHeight = Math.max(400, gridsBottom + bottomMargin);
 
     svg.attr("viewBox", `0 0 ${containerWidth} ${totalHeight}`)
        .style("height", totalHeight + "px");
@@ -1731,11 +1808,11 @@ function drawMultiHeatmap(svg, booksArray) {
         const data = bookData.values;
 
         const g = svg.append("g")
-            .attr("transform", `translate(${30 + index * (chartWidth + padding)}, ${topMargin})`);
+            .attr("transform", `translate(${stackedLayout ? 30 : 30 + index * (chartWidth + padding)}, ${bookTops[index]})`);
 
         const n = data.length;
         const cols = Math.ceil(Math.sqrt(n));
-        const blockSize = Math.max(1, Math.floor(chartWidth / cols));
+        const blockSize = Math.max(1, Math.floor(bookWidth / cols));
 
         g.selectAll("rect")
             .data(data)
@@ -1757,7 +1834,9 @@ function drawMultiHeatmap(svg, booksArray) {
                 d3.select(this).style("stroke", HEATMAP_STROKE).style("stroke-width", "1px");
                 hideTooltip();
             })
-            .on("click", function(event, d) { showDetail(d, bookId); });
+            // 点开详情的同时把提示框收掉：触屏上点一下会连带触发一次合成的 mouseover
+            // （于是弹出提示框）却没有对应的 mouseout，那个框会一直挂在屏幕上不消失。
+            .on("click", function(event, d) { hideTooltip(); showDetail(d, bookId); });
 
         // 键盘导航：整块热力图只占一个 Tab 停靠点，进来后用方向键逐格移动。
         // 一本书上百个格子如果都能 Tab 到，键盘用户要按上百次才能走出去。
@@ -1816,6 +1895,12 @@ function drawMultiHeatmap(svg, booksArray) {
             });
         }
 
+        // 书名能写多长，取决于这本书的网格有多宽：并排时按老规矩 18 字，堆叠时一本书
+        // 独占整幅图，能多写几个字（写不下时截断，不会压到隔壁那本书的网格上）。
+        const bookLabelMax = stackedLayout
+            ? Math.max(18, Math.floor((cols * blockSize) / 15))
+            : 18;
+
         g.append("text")
             .attr("x", (cols * blockSize) / 2)
             .attr("y", -20)
@@ -1823,17 +1908,35 @@ function drawMultiHeatmap(svg, booksArray) {
             .style("font-size", "14px")
             .style("font-weight", "bold")
             .style("fill", "#5c5346")
-            .text(truncateText(getBookDisplayName(bookId), 18));
+            .text(truncateText(getBookDisplayName(bookId), bookLabelMax));
     });
 
-    svg.append("text")
+    // 标题以前是一行写死的：手机上这幅图比标题窄，两头会被画布直接裁掉（320px 上左右
+    // 各裁掉约 48px，末尾「(统一色标: …」整段看不见）。这里先量宽度，放不下就拆成
+    // 「指标名一行、色标范围一行」——桌面量出来放得下，仍然是一行，像素不变。
+    const titleMain = `${getMetricLabel(currentMetric)} - 指纹对比`;
+    const titleSub = `统一色标: ${formatMetric(globalMin)} ~ ${formatMetric(globalMax)}`;
+    const titleText = `${titleMain} (${titleSub})`;
+    const title = svg.append("text")
         .attr("x", containerWidth / 2)
         .attr("y", 30)
         .attr("text-anchor", "middle")
         .style("font-size", "18px")
         .style("font-weight", "bold")
         .style("fill", "#2f2a23")
-        .text(`${getMetricLabel(currentMetric)} - 指纹对比 (统一色标: ${formatMetric(globalMin)} ~ ${formatMetric(globalMax)})`);
+        .text(titleText);
+
+    // 量的是「按 18px 画出来」的宽度，所以必须先定字号再量
+    if (title.node().getComputedTextLength() > containerWidth - 16) {
+        title.attr("y", 20).style("font-size", "15px").text(titleMain);
+        svg.append("text")
+            .attr("x", containerWidth / 2)
+            .attr("y", 38)
+            .attr("text-anchor", "middle")
+            .style("font-size", "13px")
+            .style("fill", "#5c5346")
+            .text(titleSub);
+    }
 
     // 图例：低（黛蓝）↔ 高（赤），并标注当前指标的具体含义
     const [lowLabel, highLabel] = getHeatmapLegend(currentMetric);
@@ -1899,12 +2002,18 @@ function drawMultiHeatmap(svg, booksArray) {
 
     // 分界线是自动识别出来的，位置只能算近似，这里如实说明
     if (drewChapterDividers) {
-        svg.append("text")
+        const chapterNote = svg.append("text")
             .attr("x", containerWidth / 2).attr("y", totalHeight - 14)
             .attr("text-anchor", "middle")
             .style("font-size", "11px")
             .style("fill", "#6b6254")
             .text("虚线为章节分界（按章节标题自动识别，位置为近似值；章节过多时不显示）");
+
+        // 窄屏放不下就换短说法。宁可少解释一句，也不能让说明被画布裁掉半截——
+        // 导出的 PNG 走的是同一个 viewBox，裁掉的部分会一起被导出。
+        if (chapterNote.node().getComputedTextLength() > containerWidth - 16) {
+            chapterNote.text("虚线为章节分界（自动识别，位置近似）");
+        }
     }
 }
 
@@ -3813,6 +3922,8 @@ function initStyleGalaxy() {
 
     d3.select("#galaxy-container").selectAll("svg").remove();
     setGalaxyLoading(null);
+    // 空闲态文案跟着输入方式走：页面上写死的「将鼠标移到…」在手机上是个做不到的动作
+    setGalaxyIdleHint();
 
     const svg = d3.select("#galaxy-container").append("svg")
         .attr("width", width)
@@ -4027,12 +4138,8 @@ function initStyleGalaxy() {
              .attr("stroke-width", 0.5)
              .attr("stroke-opacity", 0.8);
         
-        const hud = document.getElementById('galaxy-hud');
-        if(hud) {
-            hud.querySelector('.hud-title').innerText = "◎ 悬停查看区域风格";
-            hud.querySelector('.hud-content').innerHTML = '<p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>';
-        }
-        
+        setGalaxyIdleHint();
+
         hideTooltip();
     })
     .on("click", (event, d) => {
@@ -4072,6 +4179,12 @@ function initStyleGalaxy() {
     // 四本书合计两百多个片段点，每个都能 Tab 到的话，键盘用户得按两百多次才走得出星系；
     // 整片星系只留一个 Tab 停靠点（第一个点），其余靠上面的方向键。
     circles.attr("tabindex", (d, i) => (i === 0 ? 0 : -1));
+
+    // 触屏上没有「悬停」这一步，而圆点的直径只有 8–36px：手指按下去十有八九落空，
+    // 按偏了也完全没有反应。这里在圆点底下垫一层透明接收层，按下去取离手指最近的点。
+    if (usesCoarsePointer()) {
+        attachGalaxyTapPicker({ g: g, svg: svg, nodes: allNodes, circles: circles, width: width, height: height });
+    }
 
     // 系统要求「减少动态效果」时，不播这场收敛动画：先把力导向在内存里算完，
     // 停掉，再一次性画出来。注意 tick() 不触发 "tick" 事件，所以算完要手动调一次
@@ -4113,6 +4226,58 @@ function initStyleGalaxy() {
         d.fy = null;
         d3.select(this).style("cursor", "pointer");
     }
+}
+
+// 触屏上按星系圆点要「够得着」：圆点直径 8–36px、均值约 20px，低于项目自定的 44px
+// 触控目标底线，手指按偏了毫无反应，用户只会以为这一页不能点。
+// 做法是在圆点底下垫一层透明接收层，按下去取「离手指最近的那个点」，容差 22px
+// （直径 44px）。直接按在圆点上时走的仍是圆点自己的点击——这一层垫在最下面，抢不走。
+// 只在手指输入下挂这一层：桌面沿用原来的悬停 + 点击，行为一点不变。
+function attachGalaxyTapPicker(opts) {
+    const TOLERANCE = 22; // 半径，单位像素；直径就是 44px 的触控下限
+    const TAP_SLOP = 8;   // 手指挪过这么多像素就算在拖动/平移，不当点按
+    let downX = null;     // null = 没收到 pointerdown，此时不做「是不是在拖」的判断
+    let downY = null;
+
+    const layer = opts.g.insert("rect", ":first-child")
+        .attr("class", "galaxy-tap-layer")
+        .attr("x", 0)
+        .attr("y", 0)
+        .attr("width", opts.width)
+        .attr("height", opts.height)
+        .attr("fill", "none")
+        .style("pointer-events", "all");
+
+    layer.on("pointerdown", function (event) {
+        downX = event.clientX;
+        downY = event.clientY;
+    });
+
+    layer.on("click", function (event) {
+        // 平移星系之后松手也会补一次 click，那不属于「点按」。
+        // 只在真的收到过 pointerdown 时才做这个判断——万一它没来，宁可照点不误。
+        if (downX !== null && Math.hypot(event.clientX - downX, event.clientY - downY) > TAP_SLOP) return;
+
+        // 这一层在 g 里，而 g 带着缩放/平移的变换，所以 d3.pointer 直接给出数据坐标
+        const [px, py] = d3.pointer(event, opts.g.node());
+        let best = null;
+        let bestD2 = Infinity;
+        opts.nodes.forEach(function (d) {
+            const dx = d.x - px;
+            const dy = d.y - py;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < bestD2) { bestD2 = d2; best = d; }
+        });
+
+        // 容差按当前缩放折算：放大 5 倍时，同一个「44px 手指范围」在数据坐标里小得多
+        const k = d3.zoomTransform(opts.svg.node()).k || 1;
+        if (!best || bestD2 > Math.pow(TOLERANCE / k, 2)) return;
+
+        // 关掉弹窗后焦点要回到刚才那个点，所以得找到它对应的圆点元素
+        lastGalaxyTrigger = opts.circles.nodes().find(node => node.__data__ === best) || null;
+        hideTooltip();
+        openGalaxyModal(best);
+    });
 }
 
 // ==========================================
@@ -4421,6 +4586,24 @@ function analyzeCluster(neighbors) {
     };
 }
 
+// 星系右上角那块说明的空闲态文案。触屏上「悬停」这个动作根本不存在，写着「移到圆点上」
+// 等于在教一个做不到的操作，所以文案跟着输入方式来（判断同 d3-style.css 末尾那段）。
+function setGalaxyIdleHint() {
+    const hud = document.getElementById('galaxy-hud');
+    if (!hud) return;
+    const title = hud.querySelector('.hud-title');
+    const content = hud.querySelector('.hud-content');
+    if (!title || !content) return;
+
+    if (usesCoarsePointer()) {
+        title.innerText = "◎ 点按查看区域风格";
+        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">点按任意圆点，查看这一片区域的风格特征。</p>';
+    } else {
+        title.innerText = "◎ 悬停查看区域风格";
+        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>';
+    }
+}
+
 function updateHUD(analysisData, metricLabel) {
     const hud = document.getElementById('galaxy-hud');
     const content = hud.querySelector('.hud-content');
@@ -4432,7 +4615,9 @@ function updateHUD(analysisData, metricLabel) {
         return;
     }
 
-    title.innerHTML = `◎ 选中区域（${analysisData.count} 个片段）`;
+    // 说「附近区域」而不是「选中区域」：这里全程没有任何选择动作，只是把光标附近
+    // 这一小片圆点聚起来看看。写「选中」会让人以为自己点中了什么、还想找「取消选中」。
+    title.innerHTML = `◎ 附近区域（${analysisData.count} 个片段）`;
 
     // 「区域平均」＋「平均句长」会读成「区域平均平均句长」：去掉标签自己的前导「平均」
     const hudMetricLabel = String(metricLabel || '').replace(/^平均/, '');
@@ -4682,6 +4867,16 @@ function scheduleMatrixBtnDodge() {
 // 东西（d3 的过渡、星系的力导向收敛）一条都没走这个判断——用户在系统里关了动效，
 // 打开这里照样满屏飞。下面这个函数给所有 d3 过渡用：要减少动效时把时长压成 0
 // （瞬时到位，不是不动：不动的话柱状图会停在上一次的旧高度上）。
+// 输入是不是手指。和 CSS 里那段 (pointer: coarse) 是同一个判断——用屏幕宽度判断
+// 会误伤平板横屏和带触摸屏的笔记本（见 d3-style.css 末尾的说明）。
+function usesCoarsePointer() {
+    try {
+        return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    } catch (e) {
+        return false;
+    }
+}
+
 function prefersReducedMotion() {
     try {
         return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
