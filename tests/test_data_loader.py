@@ -27,6 +27,8 @@ from src.data_loader import (
     BLOCK_SIZE,
     OVERLAP,
     clean_text,
+    count_blocks,
+    decode_upload,
     detect_language,
     get_blocks,
     get_chapter_spans,
@@ -62,6 +64,81 @@ class TestGetBlocks(unittest.TestCase):
         # 论文参数：块 1 万词、重叠 9 千、步长 1 千。改了要同步改前端文案与文档。
         self.assertEqual(BLOCK_SIZE, 10000)
         self.assertEqual(OVERLAP, 9000)
+
+
+class TestCountBlocks(unittest.TestCase):
+    """
+    count_blocks 是 get_blocks 的算术版：上传路径先用它判长度，判完才真的去切。
+    两者一旦分家，就会出现「判过的片段数」和「真去切的片段数」对不上——
+    要么该拒的没拒（白跑一次分析），要么够长的被误拒。
+    """
+
+    def test_matches_get_blocks_across_sizes(self):
+        for n in (0, 1, 99, 100, 101, 110, 120, 250, 999, 1000, 1001, 2000):
+            with self.subTest(n=n):
+                text = " ".join(f"w{i}" for i in range(n))
+                self.assertEqual(
+                    count_blocks(n, block_size=100, overlap=90),
+                    len(get_blocks(text, block_size=100, overlap=90)),
+                )
+
+    def test_matches_get_blocks_with_default_parameters(self):
+        text = words(BLOCK_SIZE * 3)
+        self.assertEqual(count_blocks(len(text.split())), len(get_blocks(text)))
+
+    def test_below_block_size_gives_zero(self):
+        self.assertEqual(count_blocks(0), 0)
+        self.assertEqual(count_blocks(BLOCK_SIZE - 1), 0)
+
+    def test_exactly_block_size_gives_one(self):
+        self.assertEqual(count_blocks(BLOCK_SIZE), 1)
+
+
+class TestDecodeUpload(unittest.TestCase):
+    """
+    上传的字节 → 文本。
+
+    真实世界里「另存为纯文本」写出来的常常不是 UTF-8：中文 Windows 的 Word/记事本
+    默认写 GBK，西文 Windows 的记事本「另存为 ANSI」写 cp1252。两种都不是合法 UTF-8，
+    而英文小说正文里几乎一定有弯引号——于是「一份完全正常的英文小说」会卡在编码上。
+    """
+
+    TEXT = 'He said “hello.” Then he left, and he didn’t look back. ' * 30
+
+    def test_utf8_passes_through(self):
+        text, encoding = decode_upload(self.TEXT.encode("utf-8"))
+        self.assertEqual(encoding, "utf-8")
+        self.assertEqual(text, self.TEXT)
+
+    def test_utf8_bom_is_stripped(self):
+        # Windows 记事本「UTF-8」另存默认带 BOM，不去掉的话第一个词会粘上 U+FEFF
+        text, encoding = decode_upload(b"\xef\xbb\xbf" + self.TEXT.encode("utf-8"))
+        self.assertEqual(encoding, "utf-8")
+        self.assertEqual(text, self.TEXT)
+
+    def test_cp1252_english_is_read(self):
+        text, encoding = decode_upload(self.TEXT.encode("cp1252"))
+        self.assertEqual(encoding, "cp1252")
+        self.assertEqual(text, self.TEXT)
+
+    def test_gbk_english_is_read(self):
+        text, encoding = decode_upload(self.TEXT.encode("gbk"))
+        self.assertEqual(encoding, "gb18030")
+        self.assertEqual(text, self.TEXT)
+
+    def test_gbk_is_not_mistaken_for_cp1252(self):
+        """
+        GBK 的字节往往也能被 cp1252 解出来，只是满屏乱码（实测 GBK 的
+        「他说：“你好。”」用 cp1252 解出来是「ËûËµ£º¡°ÄãºÃ¡£¡±」），反过来也一样。
+        所以不能「谁先解开用谁」。这里钉住的是解出来的是中文原文，不是乱码。
+        """
+        chinese = "他说：“你好。”然后他离开了房间。" * 20
+        text, _encoding = decode_upload(chinese.encode("gbk"))
+        self.assertEqual(text, chinese)
+
+    def test_bytes_neither_encoding_can_read_report_nothing(self):
+        # 0x81 在 cp1252 里没定义，在 GBK 里是「还需要一个后续字节」的引导字节——单独一个两边都读不了
+        self.assertEqual(decode_upload(b"\x81"), (None, None))
 
 
 class TestChapterSpans(unittest.TestCase):

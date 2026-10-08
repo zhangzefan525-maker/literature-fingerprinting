@@ -18,7 +18,9 @@ function isLocalHost() {
 // 窗口里要折三行、整条 120px 高，而其中「勾选「存入我的图书馆」后……」半句与勾选框自己的
 // title 逐字重复（那个 title 里说得很完整），删掉；剩下的隐私告知必须留在明面上——折进
 // 抽屉反而是想藏起来的样子——所以是压缩措辞，不是折叠。
-const DEFAULT_UPLOAD_STATUS = '支持英文 .txt，建议 1 万词以上；超长篇（几十万词）请分次上传。';
+// 必须与 d3_visualization.html 里 #upload-status 的初始文案逐字一致：这一份是
+// 上传出错后「恢复默认提示」用的，两处写得不一样就会变成前后两句话（第十一批栽过）。
+const DEFAULT_UPLOAD_STATUS = '支持英文纯文本（.txt），建议 1 万词以上；超长篇（几十万词）请分次上传。Word 文档请先「另存为 → 纯文本」。';
 
 // 全局变量
 let realData = null;
@@ -761,8 +763,14 @@ async function handleFileUpload(event) {
     const file = input.files[0];
     if (!file) return;
 
+    // 后缀闸门与后端同一条（api_server.py 的 analyze_upload）。放在这里只是为了不白跑一趟网络。
+    // 提示必须说「怎么办」：用户手上多半就是一份 Word 文档，只说「仅支持 .txt」等于把人堵死。
+    // 编码不在这里判——后端现在会自己认 GBK/ANSI（见 src/data_loader.py 的 decode_upload），
+    // 再让用户「另存为 UTF-8」就是让他做一件没必要做的事。
     if (!file.name.toLowerCase().endsWith('.txt')) {
-        setUploadStatus('仅支持 .txt 文本文件。请重新选择 UTF-8 编码的英文纯文本。', 'error');
+        setUploadStatus('只支持纯文本文件（.txt）。Word 文档请先在 Word 里'
+            + '「文件 → 另存为 → 纯文本 (*.txt)」再上传；'
+            + '如果它本来就是纯文本，把文件名后缀改成 .txt 也能上传。', 'error');
         input.value = '';
         return;
     }

@@ -80,7 +80,12 @@
                  等于彻底退出 Tab 序列，整个「上传文本分析」键盘根本够不到——只能靠鼠标。
                  现在改成视觉隐藏（.visually-hidden），看得见的外观仍由 label 提供。 -->
             <label class="upload-btn" id="upload-btn">
-                <input type="file" id="file-upload" accept=".txt" class="visually-hidden">
+                <!-- 这里刻意**不写** accept=".txt"。写了之后 Windows 的文件选择框默认只列 .txt，
+                     用户那份 Word 文档在选择框里根本看不见——他会以为网站坏了，
+                     而我们准备好的「请先另存为纯文本」那句提示，他一个字也读不到。
+                     不写 accept 就能选中任何文件，选中后由前端与后端把非 .txt 挡下来并说清转法。
+                     （2026-10-09 第三十批） -->
+                <input type="file" id="file-upload" class="visually-hidden">
                 <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-cloud-upload"/></svg> 上传文本分析
             </label>
             <!-- 这句提示原来写的是「重名时会自动改名，不会覆盖」，与服务端 _resolve_final_name
@@ -111,7 +116,7 @@
                  原来这里写死了「分析只在本机进行，不上传服务器」——那是本机版的隐私说明，
                  在线上是反的（线上文件确实要发到服务器）。静态文案没法知道自己在哪种部署里，
                  所以这里只留部署无关的长度提示，隐私那句交给 JS 按环境给。 -->
-            <span id="upload-status" class="upload-status" aria-live="polite">支持英文 .txt，建议 1 万词以上；超长篇（几十万词）请分次上传。</span>
+            <span id="upload-status" class="upload-status" aria-live="polite">支持英文纯文本（.txt），建议 1 万词以上；超长篇（几十万词）请分次上传。Word 文档请先「另存为 → 纯文本」。</span>
             <!-- 等待计时。刻意不写进 #upload-status：那是 aria-live="polite" 区域，
                  每秒整句重写会让读屏一秒念一遍。这里 aria-hidden，纯给眼睛看。 -->
             <span id="upload-elapsed" class="upload-elapsed" aria-hidden="true" hidden></span>

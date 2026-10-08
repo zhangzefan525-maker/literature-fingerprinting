@@ -27,6 +27,7 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import api_server  # noqa: E402
+from api_server import MAX_BLOCKS  # noqa: E402
 
 BUILTIN_NAME = "White Fang"
 
@@ -124,6 +125,18 @@ class TestResolveFinalName(unittest.TestCase):
         self.assertEqual(api_server._resolve_final_name("Moby Dick"), "Moby Dick")
 
 
+def stub_block_count(n_blocks=2):
+    """
+    把上传路径里「这段文本会切出几个片段」这一步打桩。
+
+    片段数现在由 count_blocks 纯算术算出（第三十批：真的去切一份 20 MB 文本要
+    2 秒、峰值 415 MB，而那么大的文本无论切不切都会被上限拒掉），所以只打桩
+    get_blocks 已经不够——不打桩 count_blocks 的话，那些拿一句「content」当正文的
+    用例会先被长度闸门拦下，走不到真正被测的那个分支。
+    """
+    return mock.patch("src.data_loader.count_blocks", return_value=n_blocks)
+
+
 class LibraryApiTestCase(unittest.TestCase):
     """Flask test_client 场景测试（全临时目录）。"""
 
@@ -179,7 +192,8 @@ class LibraryApiTestCase(unittest.TestCase):
 
     def _post_analyze(self, filename, content=b"content", save=True, client=None):
         """带桩地走 /api/analyze：不做真实 NLTK 分析。"""
-        with mock.patch("src.data_loader.get_blocks", return_value=["alpha", "beta"]), \
+        with stub_block_count(2), \
+             mock.patch("src.data_loader.get_blocks", return_value=["alpha", "beta"]), \
              mock.patch("src.pipeline.build_book_data", return_value=FAKE_BOOK):
             data = {"file": (io.BytesIO(content), filename)}
             if save:
@@ -756,7 +770,8 @@ class UploadCleaningTestCase(LibraryApiTestCase):
             seen["build_text"] = kwargs.get("text")
             return FAKE_BOOK
 
-        with mock.patch("src.data_loader.get_blocks", side_effect=fake_blocks), \
+        with stub_block_count(2), \
+             mock.patch("src.data_loader.get_blocks", side_effect=fake_blocks), \
              mock.patch("src.pipeline.build_book_data", side_effect=fake_build):
             data = {"file": (io.BytesIO(self.RAW.encode("utf-8")), "novel.txt")}
             resp = self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
@@ -793,15 +808,45 @@ class ErrorMessageTestCase(LibraryApiTestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("请求中未包含文件", resp.get_json()["message"])
 
-    def test_non_txt_rejected(self):
+    def test_non_txt_rejected_with_a_way_out(self):
+        """
+        只收 .txt 是对的（Word 文档、PDF 是二进制），但提示必须给出「怎么办」。
+        非技术用户手上多半就是一份 Word 文档，只说「只支持 .txt」等于把人堵死。
+        """
         resp = self._post_analyze("novel.pdf")
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("仅支持 .txt", resp.get_json()["message"])
+        message = resp.get_json()["message"]
+        self.assertIn("只支持纯文本文件（.txt）", message)
+        self.assertIn("另存为", message)
 
-    def test_non_utf8_rejected(self):
-        resp = self._post_analyze("novel.txt", content="中文 GBK 文本".encode("gbk"))
+    def test_gbk_chinese_is_read_then_rejected_for_the_real_reason(self):
+        """
+        GBK 编码的中文以前会撞在「文件不是有效的 UTF-8 编码」上：用户照着提示把文件
+        转成 UTF-8，重传一次，才拿到真正的原因（本工具只分析英文）。两趟才走到终点。
+        现在直接读出内容，一次就把话说对。
+        """
+        chinese = "白牙是一本关于狼的小说。" * 40
+        resp = self._post_analyze("novel.txt", content=chinese.encode("gbk"))
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("UTF-8", resp.get_json()["message"])
+        message = resp.get_json()["message"]
+        self.assertIn("不是英文", message)
+        self.assertNotIn("UTF-8", message)
+        self.assertNotIn("编码", message)
+
+    def test_english_saved_by_windows_is_accepted(self):
+        """
+        第三十批最要紧的一条：一份完全正常的英文小说，只要正文里有 Word 生成的弯引号，
+        用记事本「另存为 ANSI」存一次就不是合法 UTF-8 了——以前会卡在编码上。
+        该不该分析由语言闸门说了算，不由编码说了算。
+        """
+        english = 'He said “hello.” Then he left, and he didn’t look back at all. ' * 40
+        for label, content in (
+            ("cp1252（西文 Windows 记事本「另存为 ANSI」）", english.encode("cp1252")),
+            ("gb18030（中文 Windows 的 Word「另存为纯文本」）", english.encode("gbk")),
+        ):
+            with self.subTest(label=label):
+                resp = self._post_analyze("novel.txt", content=content)
+                self.assertEqual(resp.status_code, 200)
 
     def test_empty_file_rejected(self):
         resp = self._post_analyze("novel.txt", content=b"   \n  ")
@@ -809,8 +854,8 @@ class ErrorMessageTestCase(LibraryApiTestCase):
         self.assertIn("内容为空", resp.get_json()["message"])
 
     def test_too_short_text_rejected(self):
-        # get_blocks 返回空 → 文本太短
-        with mock.patch("src.data_loader.get_blocks", return_value=[]):
+        # 片段数算出来是 0 → 文本太短（这一步现在不切块，纯算术，见 count_blocks）
+        with stub_block_count(0):
             data = {"file": (io.BytesIO(b"short"), "novel.txt")}
             resp = self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
         self.assertEqual(resp.status_code, 400)
@@ -820,14 +865,25 @@ class ErrorMessageTestCase(LibraryApiTestCase):
         self.assertIn("英文单词", message)
         self.assertIn("这份文本约 1 个", message)
 
+    def test_too_long_text_names_the_numbers_and_the_way_out(self):
+        """超过上限必须说清「这份多少、上限多少、怎么办」，不然用户只会以为服务器坏了。"""
+        with stub_block_count(MAX_BLOCKS + 1):
+            data = {"file": (io.BytesIO(b"content"), "novel.txt")}
+            resp = self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
+        self.assertEqual(resp.status_code, 400)
+        message = resp.get_json()["message"]
+        self.assertIn("文本太长", message)
+        self.assertIn(str(MAX_BLOCKS + 1), message)
+        self.assertIn("拆分文件", message)
+
     def test_non_english_text_is_told_why_not_too_short(self):
         """
         中文没有空格，整本书会被当成 1 个「单词」→ 切不出块。
-        语言闸门必须排在切块之前，否则用户永远只看到「文本太短」
-        （这里故意把 get_blocks 打成返回空数组：消息仍是语言原因，才算顺序对了）。
+        语言闸门必须排在长度闸门之前，否则用户永远只看到「文本太短」
+        （这里故意把片段数打成 0：消息仍是语言原因，才算顺序对了）。
         """
         chinese = "白牙是一本关于狼的小说。" * 40
-        with mock.patch("src.data_loader.get_blocks", return_value=[]):
+        with stub_block_count(0):
             data = {"file": (io.BytesIO(chinese.encode("utf-8")), "novel.txt")}
             resp = self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
         self.assertEqual(resp.status_code, 400)
@@ -850,7 +906,8 @@ class ErrorMessageTestCase(LibraryApiTestCase):
 
     def test_analysis_failure_returns_chinese_message(self):
         """分析内部报错时给固定中文文案，不把异常字符串回显给用户。"""
-        with mock.patch("src.data_loader.get_blocks", return_value=["alpha", "beta"]), \
+        with stub_block_count(2), \
+             mock.patch("src.data_loader.get_blocks", return_value=["alpha", "beta"]), \
              mock.patch("src.pipeline.build_book_data", side_effect=RuntimeError("boom in tokenizer")):
             data = {"file": (io.BytesIO(b"content"), "novel.txt")}
             resp = self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
@@ -907,7 +964,8 @@ class UploadProjectionTestCase(unittest.TestCase):
         return model
 
     def _post(self, recorder):
-        with mock.patch("src.data_loader.get_blocks", return_value=["alpha", "beta"]), \
+        with stub_block_count(2), \
+             mock.patch("src.data_loader.get_blocks", return_value=["alpha", "beta"]), \
              mock.patch("src.pipeline.build_book_data", side_effect=recorder):
             data = {"file": (io.BytesIO(b"content"), "novel.txt")}
             return self.client.post("/api/analyze", data=data, content_type="multipart/form-data")
