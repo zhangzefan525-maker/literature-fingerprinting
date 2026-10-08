@@ -1644,35 +1644,110 @@ button:hover {
 
 /* —— 手机 —— */
 @media (max-width: 560px) {
-    body { padding: 14px 10px 24px; }
+    body { padding: 10px 10px 24px; }
 
+    /* —— 第二十二批：手机首屏重排（目标：打开就能看见图表）——
+       两件事：
+       ① .container 变 flex 列，用 order 把「一次性全局动作」挪到图表之后——上传栏、
+          导出条、快速开始；会影响图表的控件（选书、观察角度、页签、排序筛选）留在图表前面。
+          DOM 顺序一个字节没动：读屏与 Tab 顺序仍是源码顺序，只是视觉顺序变了。
+       ② 逐块压缩留白与字号，三处超长说明文字收成两行（句子在 DOM 里一个字没少，
+          读屏/复制/搜索照旧）。
+       坑（实现时踩过就知道）：flex 下相邻 margin 不再合并（块布局下会合并），所以子元素的
+       下边距必须显式清零、统一交给 gap——不清零间距会凭空变大。 */
     .container {
         padding: 18px 14px 18px;
         border-radius: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
     }
+    /* 默认 order:20 = 兜底：将来 .container 里多出没列到的元素时它落在末尾，
+       不会因为默认 order:0 跳到页首。 */
+    .container > * { margin-bottom: 0; order: 20; }
+    .header { order: 1; }
+    #bookSelector { order: 2; }
+    .metric-bar { order: 3; }
+    .tab-navigation { order: 4; }
+    #global-status { order: 5; }
+    #view-main, #view-galaxy, #view-dashboard { order: 6; }
+    .global-toolbar { order: 7; }
+    .upload-bar { order: 8; }
+    #quickstart { order: 9; }
+    .footer { order: 30; }
+
+    /* 对比状态条（「已选 2 本书进行对比」）也挪到图表之后：它一出现会顶动图表，
+       挪下去之后图表位置不再跳。其余子元素保持源码顺序（默认 order:0）。 */
+    #view-main.active {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    #view-main.active > * { margin-bottom: 0; }
+    #view-main.active > .comparison-mode { order: 9; }
+
     .container::before { right: 26px; height: 40px; }
     .container::after { top: 22px; bottom: 22px; left: 10px; }
 
-    .header { margin-bottom: 18px; padding-bottom: 18px; }
+    .header { padding-bottom: 12px; }
     .header::before { font-size: 130px; }
     .header::after { width: 130px; }
-    .header h1 { font-size: 1.6rem; letter-spacing: 2px; }
+    .header h1 { font-size: 1.6rem; letter-spacing: 2px; margin-bottom: 6px; }
     .header-subtitle {
         white-space: normal;
         font-size: 0.85rem;
         line-height: 1.7;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        overflow: hidden;
     }
     /* 印章不再需要在这里改尺寸：它已经是桌面同款 44×44 / 14px（见 .seal），
        只在更窄的 420px 以下整块隐藏，那条在下面单独写。 */
 
-    .tab-navigation { gap: 6px; }
-    .tab-btn { padding: 8px 13px; font-size: 13px; }
+    /* 选书那排：字号与内边距缩小后 4 本书名能排成一行（触控下限 44px 由文件末尾的
+       @media (pointer:coarse) 段保底）。书多了仍会折行——那是动态内容，不硬压。 */
+    .book-selector { gap: 8px; }
+    .book-btn { padding: 8px 12px; font-size: 13px; }
 
-    .controls { padding: 12px; gap: 10px; }
+    /* 三个页签排成一行：字号 12.5px + 内边距 8/11 后合计约 316px < 360px。
+       图标保留（去掉图标在 320px 下更宽松，但那是另一档，不值得为它丢识别度）。 */
+    .tab-navigation { gap: 6px; padding-bottom: 8px; }
+    .tab-btn { padding: 8px 11px; font-size: 12.5px; gap: 6px; }
+
+    .controls { padding: 10px 12px; gap: 10px; }
     .control-group { flex-wrap: wrap; }
 
-    .visualization-container { gap: 12px; }
-    #chart-container { padding: 10px; }
+    /* 观察角度：说明文字是手机上最大的一块文字（实测 108px），收成两行。
+       注意 .metric-hint 里还有一行 .metric-context（参考区间/框选口径），
+       截断会把它一起盖住——完整句子仍在 DOM 里（读屏/复制/搜索照旧）。 */
+    .metric-bar { gap: 8px; padding: 8px 12px; }
+    .metric-hint {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        overflow: hidden;
+    }
+
+    /* 图表标题条：读图说明（实测 67px）也收成两行。
+       选择器限定 #view-main：本批的截断目标只有首屏这一条。风格星系页的同款说明
+       更长，且结尾是「点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或
+       水平相似」这句口径提醒——手机上保持完整（它不在首屏预算里）。 */
+    .adv-header { padding: 10px 12px; }
+    #view-main .adv-header small {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        overflow: hidden;
+    }
+
+    .comparison-mode { padding: 8px; }
+
+    .visualization-container { gap: 8px; }
+    #chart-container { padding: 6px 8px; }
     .detail-panel { padding: 12px; max-height: 360px; }
 
     .dashboard-grid { gap: 12px; }
@@ -1711,10 +1786,21 @@ button:hover {
        （实测返回 "662px" 而不是 "auto"），拿它分档会永远走进桌面分支。 */
     .cyber-btn-float { --anchored-bottom: 12px; top: auto; bottom: var(--anchored-bottom); right: 12px; padding: 5px 11px; font-size: 11px; z-index: 20; }
 
-    .upload-bar { gap: 8px; padding: 10px 12px; }
+    /* 导出条原本靠负上边距贴住页签条（-8px），现在它被挪到图表后面，负边距没有意义了 */
+    .global-toolbar { margin: 0; }
+
+    .upload-bar { gap: 8px; padding: 8px 12px; }
     .upload-btn { padding: 9px 15px; }
 
     .footer { font-size: 11px; letter-spacing: 1px; }
+}
+
+/* 380px 及以下：三个页签去掉装饰图标，换页签条一行。
+   实测 360 宽（常见安卓档）下三个页签带图标合计 316px、可用宽 310px，差 6px 折成两行、
+   图表被顶下 50px；去掉图标（它们本来就 aria-hidden，页签靠中文名自解释）后合计 259px，
+   320px 宽也排得下。44px 触控下限不受影响（由文件末尾 pointer:coarse 段保底）。 */
+@media (max-width: 380px) {
+    .tab-btn .icon { display: none; }
 }
 
 /* 印章（.seal）绝对定位在标题区左上角，而 .header 是 text-align:center。
