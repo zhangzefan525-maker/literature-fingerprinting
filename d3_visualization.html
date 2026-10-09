@@ -192,13 +192,21 @@
                  旋转（见 .export-caret）——可见状态与无障碍状态同源，JS 一个字都不用在文字上动手。 -->
             <div class="control-group export-group" role="group" aria-label="导出与分享">
                 <button id="exportBtn" type="button" title="PNG 图片，适合放进汇报">导出图像</button>
-                <button id="copyLinkBtn" type="button" title="把当前指标、选书、视图一起复制成链接，发给同事即可复现">🔗 复制此链接</button>
+                <!-- 这条 title 会被 d3-charts.js 的 syncShareLinkTitle() 在启动时按当前地址改写
+                     （线上说「可发给同事」，本机说「只有这台电脑能打开」）。这里写的是线上那一句；
+                     原来写死的「发给同事即可复现」在本机是假话，而点下去的回执偏偏说「只有本机能打开」
+                     ——同一个控件前后自相矛盾（第四十二批）。 -->
+                <button id="copyLinkBtn" type="button" title="把当前指标、选书、视图复制成链接，发给同事即可复现（你自己上传的文本不在链接里）">🔗 复制此链接</button>
                 <span class="export-divider" aria-hidden="true"></span>
                 <button id="exportMoreBtn" type="button" class="export-more-toggle" aria-expanded="false" aria-controls="export-more" title="矢量图、数据表、文字摘要与引用条目（BibTeX），低频使用，收在这里">更多导出 <span class="export-caret" aria-hidden="true">▾</span></button>
                 <span id="export-more" class="export-more" hidden>
                     <button id="exportSvgBtn" type="button" title="矢量图（SVG），放进论文放大不失真">导出矢量图</button>
                     <button id="exportDataBtn" type="button" title="每个片段的数值、章节与起始位置（CSV），可用 Excel 打开">导出数据表</button>
-                    <button id="exportSummaryBtn" type="button" title="纯文字摘要（.txt），含一句话解读、值得一看的片段、每本书的明细与方法参数">导出摘要</button>
+                    <!-- 摘要里「一句话解读」「值得一看的片段」两节，取决于有没有进过「全书对比」页
+                         （那两节是由那页渲染时顺手存下来的），**与当前标签页无关**——所以原来写死的
+                         「含一句话解读、值得一看的片段」并不总成立（第四十二批）。改成一句永远成立的话：
+                         明细与方法参数一定有，那两节是「若已看过…就有」。 -->
+                    <button id="exportSummaryBtn" type="button" title="纯文字摘要（.txt）：每本书的明细与方法参数；若已看过「全书对比」页，还含一句话解读与值得一看的片段">导出摘要</button>
                     <button id="exportCiteBtn" type="button" title="引用条目（BibTeX），可导入 Zotero / EndNote 等文献管理软件">导出引用</button>
                 </span>
             </div>
@@ -737,7 +745,16 @@
             const books = Array.isArray(lastAnomalyBooks) ? lastAnomalyBooks : [];
             if (books.length === 0) { panel.innerHTML = ''; return; }
             const reports = Array.isArray(lastAnomalyReports) ? lastAnomalyReports : [];
-            panel.innerHTML = books.map((entry, i) => anomalyBlock(reports[i], entry)).join('');
+            const blocks = books.map((entry, i) => anomalyBlock(reports[i], entry)).join('');
+            // 整份只说一次的那句口径（第四十二批）。原来它挂在每本书的脚注里，两本书就是
+            // 两遍几乎逐字重复的免责话；现在与导出物末尾那句共用同一个常量
+            // （ANOMALY_GLOBAL_NOTE，在 d3-charts.js 里），屏幕与导出不可能各说一套。
+            // 只在真有片段列表时才加：全都「没有特别偏离的片段」时，这句解释不指向任何东西。
+            const hasItems = reports.some(r => r && !r.failed && Array.isArray(r.items) && r.items.length > 0);
+            const globalNote = (hasItems && typeof ANOMALY_GLOBAL_NOTE === 'string')
+                ? `<div class="anomaly-muted">${escapeHtml(ANOMALY_GLOBAL_NOTE)}</div>`
+                : '';
+            panel.innerHTML = blocks + globalNote;
         }
 
         // 一本书的那一块。report 还是 null = 这本书的请求还没回来。
@@ -783,9 +800,10 @@
                                 ${keywords}
                             </div>`;
             }).join('');
-            // 脚注的三句话与导出共用同一个函数（anomalyNotes 在 d3-charts.js 里），
-            // 屏幕与导出物不可能各说一套。脚注按书各写一份——「本书共几个片段」这种话
-            // 一张嘴只能对着一个统计对象说。
+            // 脚注与导出共用同一个函数（anomalyNotes 在 d3-charts.js 里），屏幕与导出物不可能
+            // 各说一套。脚注按书各写一份——「本书共几个片段」这种话一张嘴只能对着一个统计对象说。
+            // 所有书共有的那层免责话（重叠滑窗不是独立样本、不做显著性判断）已经从脚注里
+            // 挪到整块末尾只写一次（第四十二批，见 renderAnomalyPanel）。
             const foot = `<div class="anomaly-muted">${escapeHtml(anomalyNotes(report).join(''))}点开左侧曲线可以查看它前后的变化。</div>`;
             return head + cards + foot;
         }
@@ -902,6 +920,31 @@
                 .map(d => d.value);
         }
 
+        // 「这个差距算大算小」给一个好抓的尺度（第四十二批）。用户拍板的口径是：
+        // 只说差距的大小，不说谁好谁坏——所以这里给的是一个**百分比**，不是一个评价词。
+        // 判据用「当前已加载的全部书」在同一个指标上的均值范围，和「参考区间」同一个来源
+        // （d3-charts.js 的 getMetricMeanRange），两边不会各算一套。
+        //
+        // 有框选时返回空串：左边那两个数是**框选区段**的均值，而这里是**全书**的均值范围，
+        // 两把尺子量出来的东西不能相减（本文件在单书参照那里已经为同一个坑写过一段注释）。
+        // 宁可只说「相差多少」，也不要给一个口径不一致的倍率。
+        function describeGapScale(gap, metric, brushScope) {
+            if (brushScope) return '';
+            if (typeof getMetricMeanRange !== 'function' || !realData) return '';
+            const names = Object.keys(realData);
+            if (names.length < 2) return '';
+            const range = getMetricMeanRange(names, metric);
+            if (!range) return '';
+            const extent = range.max - range.min;
+            if (!(extent > 0)) return '';
+            const ratio = gap / extent;
+            // 九成以上就说到底：默认那两本正是这批书里差得最远的一对，写「十成」拗口又像夸张。
+            if (ratio >= 0.9) return '这两本差不多就是这批书里差得最远的两本。';
+            const tenths = Math.round(ratio * 10);
+            if (tenths < 1) return '这个差距不到这批书里最大差距的一成。';
+            return `约是这批书里最大差距的 ${tenths} 成。`;
+        }
+
         function renderInsight(data) {
             const panel = document.getElementById('insight-content');
             if (!panel) return;
@@ -929,17 +972,33 @@
             if (data.length >= 2 && cfg.high) {
                 const highest = [...data].sort((a, b) => b.currentMean - a.currentMean)[0];
                 const lowest  = [...data].sort((a, b) => a.currentMean - b.currentMean)[0];
-                // 「最长 / 最短」是在用户勾的这几本里排出来的。不加限定，读者会写成
-                // 「A 是所有作家里句子最长的」——而它只是这次选中的两本里那个。
-                lines.push(`在所选 ${data.length} 本中，《${highest.displayName || highest.name}》${scopeWord}${cfg.high}（${fmtMetric(highest.currentMean)}），《${lowest.displayName || lowest.name}》${scopeWord}${cfg.low}（${fmtMetric(lowest.currentMean)}）。`);
-                // 光给两个平均数，读者会把差值的「有无」当成「大小」（第四十批）。
-                // 把每本自己的起伏幅度摆出来，让那个差值有个对照。
-                const spread = data
-                    .filter(b => isFiniteNumber(b.currentStd))
-                    .map(b => `《${b.displayName || b.name}》${fmtMetric(b.currentStd)}`)
-                    .join('、');
-                if (spread) {
-                    lines.push(`每本各自的起伏幅度（同一本书内各片段之间的标准差）：${spread}。差值和它比一比，再决定这个差距值不值得写进结论。`);
+                if (data.length === 2) {
+                    // 只有两本时，「最长 / 最短」是同一件事的正反两面：一长一短必然成立，
+                    // 排出来读着像凑话（第四十二批，小明A、小明B 都点到了这一点）。
+                    // 改成说「差多少」，并给这个差一个好抓的尺度——它是这批书里最大差距的几成。
+                    // 尺度这一句由 describeGapScale 算，只在能同口径比较时给（见那里）。
+                    // 「仅描述差距大小，不作好坏判断」是用户拍板的口径：把话说成人话，
+                    // 但不替读者下「像不像 / 好不好」的判断。
+                    const gap = Math.abs(highest.currentMean - lowest.currentMean);
+                    lines.push(`两本的「${mLabel}」相差 ${fmtMetric(gap)}：`
+                        + `《${highest.displayName || highest.name}》${fmtMetric(highest.currentMean)}，`
+                        + `《${lowest.displayName || lowest.name}》${fmtMetric(lowest.currentMean)}。`
+                        + '（仅描述差距大小，不作好坏判断）');
+                    const scale = describeGapScale(gap, currentMetric, brushScope);
+                    if (scale) lines.push(scale);
+                } else {
+                    // 「最长 / 最短」是在用户勾的这几本里排出来的。不加限定，读者会写成
+                    // 「A 是所有作家里句子最长的」——而它只是这次选中的几本里那个。
+                    lines.push(`在所选 ${data.length} 本中，《${highest.displayName || highest.name}》${scopeWord}${cfg.high}（${fmtMetric(highest.currentMean)}），《${lowest.displayName || lowest.name}》${scopeWord}${cfg.low}（${fmtMetric(lowest.currentMean)}）。`);
+                    // 光给两个平均数，读者会把差值的「有无」当成「大小」（第四十批）。
+                    // 把每本自己的起伏幅度摆出来，让那个差值有个对照。
+                    const spread = data
+                        .filter(b => isFiniteNumber(b.currentStd))
+                        .map(b => `《${b.displayName || b.name}》${fmtMetric(b.currentStd)}`)
+                        .join('、');
+                    if (spread) {
+                        lines.push(`每本各自的起伏幅度（同一本书内各片段之间的标准差）：${spread}。差值和它比一比，再决定这个差距值不值得写进结论。`);
+                    }
                 }
             } else if (data.length === 1) {
                 lines.push(`《${data[0].displayName || data[0].name}》的「${mLabel}」${brushScope ? '在框选区段内平均' : '整体水平'}为 ${fmtMetric(data[0].currentMean)}。`);
@@ -983,11 +1042,13 @@
                     + `（前后半段均值相差 ${fmtMetric(Math.abs(trendBook.trend))}，不代表全书单调变化）。`);
             }
 
-            if (data.length >= 2) {
-                // 两处收窄：
+            if (data.length >= 3) {
+                // 三处收窄：
                 // 1) currentStd 只是**这一个指标**的起伏，撑不起「风格」二字，所以不再说「风格最平稳」；
                 // 2) d3.deviation 对单元素数组返回 undefined、这里用 `|| 0` 兜底，于是一本只有 1 个
-                //    片段的书标准差恒为 0、必然夺冠——不是它稳，是它没数据。加样本门槛把它挡在外面。
+                //    片段的书标准差恒为 0、必然夺冠——不是它稳，是它没数据。加样本门槛把它挡在外面；
+                // 3) 只选两本时这句必然为真（总有一本更小），是句凑话的话（第四十二批）——
+                //    两本那条已经改成只说「差多少」，这一句留到三本以上才有信息量。
                 const enough = data.filter(b => (b.activeSegment || []).length >= 5);
                 const stable = enough.length ? [...enough].sort((a, b) => a.currentStd - b.currentStd)[0] : null;
                 if (stable && stable.currentStd > 0) {

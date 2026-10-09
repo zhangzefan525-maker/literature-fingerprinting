@@ -83,6 +83,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setUploadStatus(`${DEFAULT_UPLOAD_STATUS} ${getUploadPrivacyNotice()}`);
     syncSaveToggleDefault();
     updateMetricHint();
+    syncShareLinkTitle();
     trackDashboardCharts();
     loadBooksList();
 
@@ -278,13 +279,26 @@ function buildShareCaveats() {
     return notes;
 }
 
+// 「复制此链接」按钮的说明必须与它真能做的事一致（第四十二批）。
+// 第四十批把 HTML 里写死的「发给同事即可复现」留着没动，理由是线上（公网地址）那句是真的、
+// 只有本机是假的，不想为了本机把线上的话改少。可问题是同一个控件点下去的回执偏偏写着
+// 「本机地址，只有本机能打开」——一个按钮前后两句互相打脸，而拿它做判断的正是第一次来的老师。
+// 所以既不删掉线上的承诺、也不留本机那句假话：按当前地址给对应的那一句。
+// 判断口径与点击后的回执同源（都用 isLocalHost），说明和回执不会再各说一套。
+function syncShareLinkTitle() {
+    const btn = document.getElementById('copyLinkBtn');
+    if (!btn) return;
+    btn.title = isLocalHost()
+        ? '把当前指标、选书、视图复制成链接；本机地址只有这台电脑能打开，要发给别人请改用「更多导出 → 导出摘要」'
+        : '把当前指标、选书、视图复制成链接，发给同事即可复现（你自己上传的文本不在链接里）';
+}
+
 // 「复制此链接」：把当前视图（指标/选书/标签页/图形/框选）发给同事
 function copyShareLink(button) {
     syncUrlState();
     const uploaded = getUnsharedUploadedBooks();
     // 本机打开时复制出来的是 localhost 链接（buildStateUrl 用的是浏览器当前地址）。
-    // 按钮上的说明「发给同事即可复现」在线上是真的、在本机是假的——线上地址是公网地址。
-    // 不改那句话（对着线上说过头的话去改，会让线上变成说少），改的是本机这一条提示（第四十批）。
+    // 按钮说明由 syncShareLinkTitle 按地址给，这里只管点下去之后的回执。
     const localPart = isLocalHost() ? '（本机地址，只有本机能打开）' : '';
     const okText = uploaded.length
         ? `✓ 链接已复制${localPart}（不含你上传的 ${uploaded.length} 本）`
@@ -926,7 +940,7 @@ function loadComparisonExample() {
         'success'
     );
     // 上面那句写在上传区里，而这时候页面已经滚到「全书对比」页、上传区在屏幕外。
-    showSelectionNotice('已切到「全书对比」页，这一页的几条结论是自动生成的。');
+    announceOrNotice('已切到「全书对比」页，这一页的几条结论是自动生成的。');
 }
 
 // 快速开始条：点 ✕ 收起，之后不再自动出现（记在本机浏览器里）
@@ -1665,6 +1679,21 @@ function showSelectionNotice(text, options) {
     selectionNoticeTimer = setTimeout(() => el.classList.remove('show'), (options && options.duration) || 3400);
 }
 
+// 「自动替用户做了什么，说一句」的统一出口（第四十二批）。
+// 原来的写法一律走 showSelectionNotice——一条贴底、浮在内容上的瞬态层：实测压在热力图和
+// 右侧数据详情上（pointer-events:none，挡眼不挡鼠标），3.4 秒自己消失；而它说的往往正是
+// 「为什么要替你选这两本」这种需要看清的话。换成首选页内的顶部状态条（不遮挡、不是浮层、
+// 6 秒后自己收起、本身就是 aria-live 区域）；只有状态条确实在屏幕外时（它长在页面最上面，
+// 切页签之后可能已经滚上去），才退回贴底浮层，并且 announce:false——同一句话已经由状态条
+// 那个 live region 念过，别让读屏连读两遍。错误提示（showError）早就是这个写法，
+// 这里只是把同一套用到「自动切换 / 自动选书」说的话上。
+function announceOrNotice(text, options) {
+    setGlobalStatus('success', text);
+    if (statusBarOffscreen()) {
+        showSelectionNotice(text, Object.assign({ announce: false, duration: 7000 }, options || {}));
+    }
+}
+
 function selectBook(bookId) {
     const btn = getBookButtonById(bookId);
 
@@ -1782,10 +1811,9 @@ async function loadRealData() {
                 // 选中两本必须是「说明过的」：不说一句，用户打开就看到两张并排的图，
                 // 不知道这两本是谁挑的、凭什么。只在自动挑书这一次说（带书籍链接进来、
                 // 或者自己选过书之后都不会走到这个分支）。
-                showSelectionNotice(
+                announceOrNotice(
                     `已替你选中差别最大的两本：《${picks.map(getBookDisplayName).join('》《')}》——`
-                    + `它们的「${getMetricLabel(currentMetric)}」差得最远。`,
-                    { duration: 6000 }
+                    + `它们的「${getMetricLabel(currentMetric)}」差得最远。想比别的组合，换下方选书即可。`
                 );
             } else {
                 selectBook(availableBooks[0]); // 兜底：连一对都挑不出来时，照旧选第一本
@@ -2620,7 +2648,8 @@ function renderQuickPreviewIfIdle() {
     detailPanel.innerHTML = `
         <h3>▤ 数据详情</h3>
         <p>已加载 ${loaded} 本书${selectedCount > 1 ? `，图上选中 ${selectedCount} 本` : ''}。
-           先看《${escapeHtml(getBookDisplayName(book))}》里「${escapeHtml(getMetricLabel(currentMetric))}」最突出的 3 段：</p>
+           先看《${escapeHtml(getBookDisplayName(book))}》里「${escapeHtml(getMetricLabel(currentMetric))}」最突出的 3 段
+           （每一行是一个片段的数值，不是全书平均）：</p>
         <div class="quick-preview" data-book-id="${escapeHtml(book)}">
             ${rows}
         </div>
@@ -2708,7 +2737,11 @@ function updateMetricHint() {
         hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出。它通常不是 0–1 的比例，也不是百分比——数值越大，一般说明用词越丰富、越不单调。这个数对篇幅的依赖很弱（公式里篇幅取的是对数），字数相差不大的书可以直接比；字数差到好几倍时，光篇幅本身就会把这个数推高一点。',
         // 原句是「点越靠近只说明这些词的用法越像」——主语是「点」，谓语说的是「词的用法」，
         // 读起来像句子缺了半截（第三十八批）。补上主语与宾语：谁靠近、什么像、像到什么程度为止。
-        functionWords: `不看内容，而看高频小词${getAxisWordsHint()}的使用习惯。两个点靠得越近，只说明这两个片段的用词习惯越像，不等于整本书本身相似。`
+        // 「风格走向」这个名字从字面读不出量的是什么（第四十二批，小明A 卡在这里）：
+        // 另三个指标名（平均句长 / 用词重复度 / 独特词丰富度）都能从字面猜到，只有这一个不能。
+        // 不改名——名字出现在读数、图例、导出、示例文案好几处，改一次要同步的地方太多；
+        // 改成在这里先把「它量的是什么」说清楚，再讲原来那句「靠得近 ≠ 整本书相似」。
+        functionWords: `「风格走向」量的是这本书习惯用哪一类高频小词${getAxisWordsHint()}，把这套习惯画成图上的一个方向——不看内容，只看措辞习惯。两个点靠得越近，只说明这两个片段的用词习惯越像，不等于整本书本身相似。`
     };
     const ctxText = getMetricContextLine(currentMetric);
     el.innerHTML = `<span class="metric-hint-label">${escapeHtml(getMetricLabel(currentMetric))}：</span>${escapeHtml(hints[currentMetric] || '')}`;
@@ -2953,6 +2986,17 @@ function flashCopyButton(button, ok, okText) {
     }, ok ? 1600 : 4000);
 }
 
+// 导出成功也要有回执（第四十二批）。五个导出功能原来只有失败提示（showError），
+// 点下去页面一动不动——文件到底下没下、下到哪儿去了，只能自己去「下载」文件夹里翻。
+// 而同一块控件条里的「复制链接」「复制结论」都是有回执的（走上面的 flashCopyButton），
+// 一个区域两套规矩，用户会以为导出没生效、再点一次（于是多出好几个同名文件）。
+// 回执分两层：按钮文字当场换成「✓ 已导出」（眼睛看得见，与复制类按钮观感一致），
+// 顶部状态条同时说一句完整的话——按钮换字不会被读屏播报，而状态条是 aria-live 区域。
+function flashExportReceipt(button, message) {
+    flashCopyButton(button, true, '✓ 已导出');
+    if (message) setGlobalStatus('success', message);
+}
+
 function copyTextToClipboard(text, button, okText = '✓ 已复制') {
     if (navigator.clipboard && window.isSecureContext) {
         return navigator.clipboard.writeText(text)
@@ -3179,7 +3223,10 @@ function getMetricContextLine(metric) {
             // 就是这样（一批书里句子最短、最长的那两本），于是屏幕上出现「参考区间 …在 14.48 –
             // 18.81…。你选中的 2 本在 14.48 – 18.81 之间。」——第二句一个字都没多给，
             // 读者只会以为这个功能坏了。改成说清为什么一样（判据同 C4，见 sizeExtentIsFlat）。
-            parts.push('你选中的这几本，正好涵盖了这批书的最高与最低水平——所以上面的数字看起来和参照区间一样。');
+            // 这句话会跟着「导出摘要 / 复制结论」离开屏幕（第四十二批），所以不能再用
+            // 「上面的数字」「参照区间」这类指代——文件里没有「上面」，也没有那块界面。
+            // 把因果说全：为什么两段范围一模一样，以及这不是数据出问题。
+            parts.push('你选中的这几本，正好是这批书里该指标最高和最低的那几本；所以它们自己的范围，和作为参照的那几本的范围是同一个——这是选书的必然结果，不是数据有问题。');
         } else {
             parts.push(`你选中的 ${selected.count} 本在 ${formatMetric(selected.min)} – ${formatMetric(selected.max)} 之间。`);
         }
@@ -3464,12 +3511,14 @@ function getHeatmapLegend(metric) {
         hapaxLegomena: ['用词较单调', '用词较丰富']
     };
     if (metric === 'functionWords') {
-        // 功能词 PCA 的横轴＝一批高频小词在整段里的占比：靠左占比低、靠右占比高。
-        // 前缀用真实模型里载荷最高的那个词（取不到就只说「小词」）。
-        // 原来的「一端 / 另一端」等于什么都没说。
+        // 色标上的数是功能词 PCA 的横轴坐标，一个有正负号的**加权分数**（内置书实测 -0.06 ~ +0.07），
+        // 不是某一个词的占比。原来写成「the 占比低 / 占比高」，等于把一个综合分数说成了一个词的多少
+        // （第四十二批）。方向不变，只把话说准：拿真实模型里载荷最高的那个词当代表，
+        // 说「这类小词用得多还是少」。取不到轴词时不点名——宁可不具体，也不要指一个模型里没有的词。
         const words = getSelectedAxisWords();
-        const lead = words.length ? `${words[0]} ` : '小词';
-        return [`${lead}占比低`, `${lead}占比高`];
+        return words.length
+            ? [`少用 ${words[0]} 这类小词`, `多用 ${words[0]} 这类小词`]
+            : ['小词用法偏这一侧', '小词用法偏另一侧'];
     }
     return legend[metric] || ['低值', '高值'];
 }
@@ -3916,9 +3965,13 @@ function exportChart() {
         link.download = `文印_${exportFileLabel()}_${target.label}_${exportTimestamp()}.png`;
         link.href = canvas.toDataURL('image/png');
         
-        document.body.appendChild(link); 
+        document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+
+        // 回执必须放在 onload 里（第四十二批）：放到函数末尾会在这张图还没转成 PNG、
+        // 下载还没开始时就说「已导出」，失败时反而什么都没提示。
+        flashExportReceipt(document.getElementById('exportBtn'), '图片已导出（PNG），在浏览器的「下载」列表里。');
     };
 
     img.onerror = function(e) {
@@ -3929,6 +3982,16 @@ function exportChart() {
     };
 
     img.src = imageSrc;
+}
+
+// 「用词重复度」与「独特词丰富度」是一枚硬币的两面（第四十批写在指标说明里）。
+// 它必须跟着结论走（第四十二批）：读者多半一次只导一个角度，拿两份文件当成两条独立证据，
+// 而这两份说的本来就是同一件事。指标说明在屏幕上那一格里，导出文件的人看不到它；
+// 「复制结论」的尾注与导出摘要原来也都没有这一句。只在这两个角度下说——其余角度下它是噪音。
+function crossMetricNote(metric = currentMetric) {
+    if (metric !== 'simpsonIndex' && metric !== 'hapaxLegomena') return '';
+    return '「用词重复度」与「独特词丰富度」是一枚硬币的两面：量的是同一件事（用词多样不多样），'
+        + '一个高另一个就低，两份结果不要当成两条独立的证据。';
 }
 
 function exportSummary() {
@@ -3953,6 +4016,7 @@ function exportSummary() {
         functionWords: `由高频小词${getAxisWordsHint()}的使用习惯得出，仅作参照。`
     }[currentMetric] || '';
     const contextLine = getMetricContextLine(currentMetric);
+    const crossNote = crossMetricNote(currentMetric);
     // 纯文本（.txt）而不是 Markdown：这份摘要的读者是文科研究者，打开它的是记事本、
     // Word 或 Word 里的「插入文件」；满屏 # 和 > 在那些地方是噪音，不是格式。
     // 分隔用一条等长横线，小标题用【】，两者在任何纯文本编辑器里都读得通。
@@ -3966,6 +4030,7 @@ function exportSummary() {
         `- 怎么理解：${metricHint}`,
         `- 统计范围：${describeExportScope()}`,
         ...(contextLine ? [`- 解读参考：${contextLine}`] : []),
+        ...(crossNote ? [`- 指标关系：${crossNote}`] : []),
         `- 选择书籍：${books.map(getBookDisplayName).join('、')}`,
         `- 在线视图（打开即还原本次选择）：${buildStateUrl()}`,
         // 这条链接有两件事必须跟着一起说，否则收件人打开会看到另一份分析而摘要里
@@ -4048,6 +4113,7 @@ function exportSummary() {
     lines.push('说明：本摘要用于记录当前页面的选择。图中的数值与位置只是风格方面的数据，请结合作品原文与具体片段理解，不宜单独当作文学质量高低的评判。');
 
     downloadBlob(lines.join('\n'), `文印_分析摘要_${exportTimestamp()}.txt`, 'text/plain;charset=utf-8');
+    flashExportReceipt(document.getElementById('exportSummaryBtn'), '摘要已导出（.txt），在浏览器的「下载」列表里。');
 }
 
 // 「一句话解读」的纯文字版本。内容是页面内那段脚本渲染时存进 lastInsightLines 的，
@@ -4069,14 +4135,24 @@ function anomalyNotes(report) {
     }
     // 片段是 blockSize/overlap 的滑窗切出来的，相邻两条共享九成原文。
     // 在近重复的序列上算 ±2σ，那个「2 个标准差」就不再是它字面上给人的「罕见」了。
+    // 这一段只留「本书有几个片段、重叠多少词」这两个逐本不同的数（第四十二批）。
+    // 原来后半截「所以它只适合用来挑原文，不构成显著性结论」也在这一句里，
+    // 两本书就是两遍几乎逐字重复的免责话——现在提升成整份输出末尾的一句（见 ANOMALY_GLOBAL_NOTE）。
     if (report && report.blockCount > 0) {
         const overlapPart = isFiniteNumber(report.overlap) && report.overlap > 0
-            ? `，相邻片段之间重叠约 ${report.overlap} 词、并不是互相独立的样本`
-            : '，相邻片段之间有大段重叠、并不是互相独立的样本';
-        notes.push(`这次统计基于本书的 ${report.blockCount} 个片段${overlapPart}，所以它只适合用来挑原文，不构成显著性结论。`);
+            ? `，相邻片段之间重叠约 ${report.overlap} 词`
+            : '，相邻片段之间有大段重叠';
+        notes.push(`本书共 ${report.blockCount} 个片段${overlapPart}。`);
     }
     return notes;
 }
+
+// 「值得一看的片段」整份输出末尾的那一句（第四十二批）。
+// 它说的是所有书共有的一件事——片段是重叠滑窗切出来的、本工具不做显著性判断——
+// 所以整份只说一次，不再逐本重复（两本书时原来会说两遍）。
+// 屏幕上的异常面板与导出物（buildAnomalyText）用的是同一个常量，两处不可能各说一套。
+const ANOMALY_GLOBAL_NOTE = '上面这些片段是相邻重叠的滑窗切出来的，不能当成互相独立的样本；'
+    + '本工具不做显著性判断，它们只用来帮你挑原文，不构成「显著偏离」的结论。';
 
 // 「值得一看的片段」的纯文字版本，同样取自屏幕上那一份（lastAnomalyReports）。
 // 还没加载出来（没进「全书对比」页）时返回空串，调用方据此跳过这一节——
@@ -4087,7 +4163,12 @@ function anomalyNotes(report) {
 function buildAnomalyText() {
     const reports = Array.isArray(lastAnomalyReports) ? lastAnomalyReports.filter(Boolean) : [];
     if (reports.length === 0) return '';
-    return reports.map(anomalyTextForReport).filter(Boolean).join('\n\n');
+    const body = reports.map(anomalyTextForReport).filter(Boolean).join('\n\n');
+    if (!body) return '';
+    // 整份只说一次的那句口径（第四十二批），和屏幕上那块面板用的是同一个常量。
+    // 只在真有片段列表时才加：全都「没有特别偏离的片段」时，这句解释不指向任何东西。
+    const hasItems = reports.some(r => !r.failed && Array.isArray(r.items) && r.items.length > 0);
+    return hasItems ? `${body}\n\n  说明：${ANOMALY_GLOBAL_NOTE}` : body;
 }
 
 function anomalyTextForReport(report) {
@@ -4141,6 +4222,9 @@ function copyConclusion(button) {
         `生成时间：${new Date().toLocaleString('zh-CN')}`,
         `选书与数据版本：${describeCorpusVersion(books)}`,
         buildComparabilitySentence(books),
+        // 跨指标提醒（第四十二批）：结论会被复制走、单独立档，这一句必须跟着走，
+        // 否则同一件事的两个角度会被当成两条独立证据（与导出摘要里那句同源）。
+        crossMetricNote(),
         `统计范围：${describeExportScope()}`,
         `在线视图：${buildStateUrl()}${localUrlNote()}`
     ].filter(Boolean).join('\n');
@@ -4337,11 +4421,21 @@ function buildMethodsParagraph(books) {
     // 原来那句话读起来像「每本书都清理过 Gutenberg 页眉」，对上传的其它来源文本是假话。
     parts.push(`文本统一空白、还原常见缩写；若来自 Project Gutenberg，另清理其页眉页脚（其它来源的文本原样保留，没有这层清理）。按每片段 ${blockSizes.join('/')} 词、相邻片段重叠 ${blockSizes.map((size, i) => size - steps[i]).join('/')} 词的滑动窗口切分。`);
     // 缩写还原到底还原了哪些（第四十批）。这句话原来只说「还原常见缩写」，而它直接改平均句长：
-    // it's 算一个词，展开成 it is 就是两个词，一句话的词数随之变大。规则是固定有限的 30 条
-    // （见 src/data_loader.py 的 CONTRACTIONS），把范围写出来，别人才能照着复现这一步。
-    parts.push('其中「还原常见缩写」指把固定的 30 条英语缩写展开成完整形式（如 isn\'t → is not、'
-        + 'can\'t → cannot、it\'s → it is、let\'s → let us），完整清单见 data_loader.py 的 CONTRACTIONS；'
+    // it's 算一个词，展开成 it is 就是两个词，一句话的词数随之变大。规则是固定有限的一批
+    // （源码里是 30 条，见 src/data_loader.py 的 CONTRACTIONS），把范围写出来，别人才能照着复现这一步。
+    // 这一条原来把源码文件名写进了读者看到的那句话里（「完整清单见 data_loader.py 的 CONTRACTIONS」），
+    // 而读它的是文学老师（第四十二批）——改成说清条数，不再给读者递文件名。
+    parts.push('其中「还原常见缩写」指把固定的一批英语缩写展开成完整形式（如 isn\'t → is not、'
+        + 'can\'t → cannot、it\'s → it is、let\'s → let us），共 30 条；'
         + '这一步会让每句话的词数变多、平均句长随之变大，是它与其他工具结果对不上的常见原因之一。');
+    // 断句规则（第四十二批）。上面把空白处理、缩写还原、滑窗切分都交代了，唯独没写句子是怎么切的，
+    // 而「平均句长 = 词数 ÷ 句数」里的分母完全由这一步决定——不写，读者拿同一个文本也复现不出同一个数。
+    // 括号里的句数取自 src/data_loader.py 的实测注释（_normalize_quotes），照实写给读者。
+    parts.push('句子按英语标点切分（用 NLTK 的 Punkt 断句模型，Mr. 这类缩写不会被误当成句末）。'
+        + '从 Word、PDF、网页里复制出来的英文，引号大多是弯引号（’ “ ”），会先统一成直引号再切句——'
+        + '不归一的话，引号挡在句末标点前面，一整段对话会被算成一句话：'
+        + '《汤姆·索亚历险记》修好之前只切出 3666 句，修好后是 4912 句，少了约三分之一，'
+        + '平均句长随之虚高，而它正是本工具默认的观察角度。');
     parts.push('计算指标包括平均句长、用词重复度（Simpson\'s D）、独特词丰富度（Honoré R）与功能词二维投影。');
     parts.push(buildComparabilitySentence(books));
     // 三个标量能不能跨书比（第四十批）：原来的可比较性说明只讲了功能词投影。
@@ -4437,6 +4531,7 @@ function exportTableData() {
     // 带 BOM：Excel 打开中文 CSV 默认按本地编码解析，没有 BOM 会乱码
     const csv = `${comments.join('\r\n')}\r\n${body}`;
     downloadBlob('﻿' + csv, `文印_数据表_${exportTimestamp()}.csv`, 'text/csv;charset=utf-8');
+    flashExportReceipt(document.getElementById('exportDataBtn'), '数据表已导出（.csv），可用 Excel 打开。');
 }
 
 // 内置示例书的原著信息。取自 data/raw/ 下各 txt 开头那段 Project Gutenberg 头部
@@ -4556,6 +4651,7 @@ function exportCitation() {
     ].join('\n'));
 
     downloadBlob(chunks.join('\n'), `文印_引用_${exportTimestamp()}.bib`, 'application/x-bibtex;charset=utf-8');
+    flashExportReceipt(document.getElementById('exportCiteBtn'), '引用条目已导出（.bib），可导入 Zotero / EndNote。');
 }
 
 // 导出矢量图（SVG）：论文排版放大不糊
@@ -4569,6 +4665,7 @@ function exportVectorChart() {
 
     const source = serializeExportSvg(buildExportSvg(svg));
     downloadBlob(source, `文印_${exportFileLabel()}_${target.label}_${exportTimestamp()}.svg`, 'image/svg+xml;charset=utf-8');
+    flashExportReceipt(document.getElementById('exportSvgBtn'), '矢量图已导出（.svg），放进论文放大不失真。');
 }
 
 // 顶部全局状态条：三个标签页都能看到。
@@ -5893,10 +5990,25 @@ function initMatrixRain() {
     window.addEventListener('resize', matrixResizeHandler);
 }
 
+// 手机上（≤560px）不做文本雨（第四十二批）。断点与 d3-style.css 里
+// #matrix-canvas / #btn-matrix 那条 display:none 必须一致，两边同进同退：
+// 只靠 CSS 隐藏的话，那层动画还在画一张看不见的画布。
+function matrixRainUnsupported() {
+    try {
+        return !!(window.matchMedia && window.matchMedia('(max-width: 560px)').matches);
+    } catch (e) {
+        return false;
+    }
+}
+
 function setMatrixRain(on) {
     const canvas = document.getElementById('matrix-canvas');
     const btn = document.getElementById('btn-matrix');
     if (!canvas || !btn) return;
+    // 窄屏上这块整个不显示，所以一律拒绝**启动**：否则会留一颗看不见的按钮挂着
+    // aria-pressed 在无障碍树里，读屏用户还会遍历到它，而且动画在画一张没人看得见的画布。
+    // 「关」（on 为假）必须照常走完——从宽屏缩到手机宽之后，得有人把那层动画停掉。
+    if (on && matrixRainUnsupported()) return;
 
     isMatrixOn = !!on;
 
