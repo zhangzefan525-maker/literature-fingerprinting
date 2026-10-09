@@ -741,9 +741,13 @@ def get_block_excerpt(book_name):
         all_data, _message = _load_corpus()
         book_data = (all_data or {}).get(book_name)
         if not isinstance(book_data, dict):
+            # 原来的话是「请刷新页面后重试」——刷新恰恰是最没用的一步：这本书本来就不在
+            # 服务器这份语料里（语料 = 内置示例书 + 你保存过的书），刷新一遍还是不在。
+            # 真正的原因是上传时没勾选「存入我的图书馆」，真正的出路是重传一遍并勾上它。
             return jsonify({
                 "status": "error",
-                "message": "这本书不在当前数据里，请刷新页面后重试。"
+                "message": "这本书不在服务器的语料里——多半是你上传时没有勾选「存入我的图书馆」，"
+                           "刷新页面拿不回来。请重新上传一次、上传时勾上「存入我的图书馆」，再回来看这一页。"
             }), 404
         excerpt, extended = _find_excerpt(book_data, block)
         if not excerpt:
@@ -788,9 +792,11 @@ def analyze_book(book_name):
         all_data, _message = _load_corpus()
         book_data = (all_data or {}).get(book_name)
         if not book_data:
+            # 与上面取摘录那处同一个原因、同一句话（见那里关于「刷新帮不上忙」的说明）。
             return jsonify({
                 "status": "error",
-                "message": "这本书不在当前数据里，请刷新页面后重试。"
+                "message": "这本书不在服务器的语料里——多半是你上传时没有勾选「存入我的图书馆」，"
+                           "刷新页面拿不回来。请重新上传一次、上传时勾上「存入我的图书馆」，再回来看这一页。"
             }), 404
 
         series = book_data.get(metric)
