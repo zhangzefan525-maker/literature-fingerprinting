@@ -5241,3 +5241,34 @@ A1（引导条位置，已拍板不翻案）、A4（选项名白话化）、A5�
 **一条既有噪声**：日志里那行 `fatal: unable to access 'https://github.com/…': Empty reply from server` 照旧偶发出现（本次推送前后的日志里也有），是服务器访问 GitHub 的偶发抖动，两分钟后自己会好；因为它自带重试、自己会恢复，脚本不动（用户已拍板）。判据仍是看紧跟着有没有 `[ok]`。
 
 **这次核校验值翻出一件小事，记在这里**：直接取 `/d3_visualization.html` 会 404——这一页在**根路径 `/`** 上（返回头里带 `Content-Disposition: inline; filename=d3_visualization.html`，也是 117297 字节，和磁盘一致）。前一两次核验要是按文件名去取，会拿到一个 404 页面、误判成「线上没更新」。**核对线上时，取错地址得到的「不一致」，和真的不一致长得一模一样。**
+
+
+**补记（同日晚）：这条记录本身是靠打包送上去的，不是 cron 拉的。**
+
+上面那次 `[ok]` 之后大约三分钟（21:45 起），这台机器**又够不着 github.com 了**——而且这次
+分得很清楚：`https://api.github.com/` 返回 200（网络本身通、DNS 正常解析到 `20.205.243.166`），
+唯独 `https://github.com/` 那一个域名连 20 秒都建不起连接（`curl` 退出码 124）。手工跑脚本里
+那条一模一样的 `timeout 90 git -c http.version=HTTP/1.1 fetch`，**把 90 秒用满也没拉下来**。
+所以第二笔提交（本部署记录）等到 21:59 仍停在上一笔上。
+
+于是改用仓库里早就写过的那条出路——**从本地打包送过去，不依赖服务器出网**：
+
+```bash
+git bundle create /c/tmp/lit-deploy.bundle 173e617..master
+scp /c/tmp/lit-deploy.bundle root@39.96.194.197:/tmp/
+ssh root@39.96.194.197 'cd /opt/literature-fingerprinting \
+  && git fetch /tmp/lit-deploy.bundle master:refs/remotes/origin/master \
+  && git merge --ff-only origin/master && rm -f /tmp/lit-deploy.bundle \
+  && systemctl restart literature-fingerprinting'
+```
+
+送完核对：服务器 `HEAD=969b4c7`，与 GitHub 上的 `master` 同一个提交号（内容一致，下次
+`git pull` 不受影响）；`grep -c 部署记录：第三十九批 README.md` = 1；服务 active，
+`curl http://127.0.0.1:8000/visualization` 返回 200；首页与图表脚本的校验值仍与磁盘完全一致
+（`3bb68ad8…` / `94126e2d…`）；`git status` 里只有那个既有的、**不要删**的未跟踪文件
+`requirements.server.txt`。
+
+**记这条的目的**：`github.com` 可达与否，和「这台机器能不能上网」是两回事；也和
+「HTTP/1.1 开关管不管用」是两回事——开关能治的是 HTTP/2 那一类报错，
+治不了域名本身就建不起连接。**看到 `fatal: unable to access …` 先分辨是哪一种**，
+别一律当成「再等等就好」。
