@@ -130,7 +130,10 @@
         <!-- 全局指标选择器（三个标签页共用同一指标，切换后对所有视图生效） -->
         <div class="metric-bar">
             <div class="control-group">
-                <label>观察角度：</label>
+                <!-- for= 不能省，和下面「曲线平滑：」同一个理由（见那一处的注释）。下拉框自己
+                     有 aria-label，两者文字一样，补上 for= 不会让读屏念两遍；对鼠标用户则是
+                     点「观察角度」这四个字也能展开下拉框。 -->
+                <label for="metricSelect">观察角度：</label>
                 <select id="metricSelect" aria-label="观察角度">
                     <option value="sentenceLength">平均句长</option>
                     <option value="simpsonIndex">用词重复度</option>
@@ -436,7 +439,9 @@
             <!-- 这一节原来叫「原文深度阅读」、按钮叫「复制全文」，但一个片段有 1 万个
                  英文单词（约 5.5 万字符），这里给的始终是开头的 1200 字——约 2%。把摘录
                  当全文引用出去，是读者看不出、作者会吃亏的那种错。所以标题改叫「原文片段」，
-                 并在正文上方写明「本片段共约多少词、这里显示多少字」。 -->
+                 并在正文上方写明「这里显示的只是开头的一段、不是全文」。第四十四批起，
+                 那行小字只留「约占全片段多大比例」——片段多少词在徽章上、摘录多少字在复制
+                 按钮上，同一个弹窗里同一件事不再写两遍。 -->
             <div class="modal-section">
                 <h4>📜 原文片段</h4>
                 <div class="modal-text-note" id="modal-text-note"></div>
