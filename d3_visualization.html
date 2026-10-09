@@ -273,7 +273,7 @@
                         <small style="color:#6b6254">每个点的位置，根据书中高频小词<span id="galaxy-axis-words"></span>的使用习惯计算。点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或水平相似。</small>
                     </div>
                     <div>
-                        <button id="restartGalaxyBtn" type="button" onclick="restartGalaxy()" style="padding:5px 15px;">↻ 重新布局</button>
+                        <button id="restartGalaxyBtn" type="button" onclick="restartGalaxy()" title="把被推开的点按原始坐标重新摆一遍（力导向会为了不重叠把点挪开一点）" style="padding:5px 15px;">↻ 重新布局</button>
                     </div>
                 </div>
                 <div class="galaxy-guide">
@@ -287,15 +287,21 @@
                     <span class="pointer-hint-touch">双指缩放 · 拖动探索 · 点按看原文</span>
                 </div>
                 <div class="galaxy-legend" id="galaxy-legend"></div>
+                <!-- 尺寸图例：气泡图必须给出「多大算大」的刻度，否则圆点大小这个编码
+                     读不出来。三个圆用与图中同一个比例尺画，指标一换就重建（第三十六批）。 -->
+                <div class="galaxy-size-legend" id="galaxy-size-legend" hidden></div>
                 <div class="galaxy-note" id="galaxy-axis-note" hidden></div>
 
                 <!-- 星系图容器 -->
                 <div id="galaxy-container" style="width: 100%; height: 600px; background: #f2e7cd; border-radius: 10px; position: relative; overflow: hidden; cursor: grab;">
-                    <!-- HUD 风格分析面板 -->
+                    <!-- HUD 附近点分析面板。这段空闲态文案是给读屏和首屏兜底用的，
+                         真正的文案由 setGalaxyIdleHint() 按输入方式重设（触屏上「悬停」
+                         是个做不到的动作）。措辞说「附近的点」不说「区域」：那几十个点是
+                         按屏幕距离挑的，放大缩小会变（第三十六批）。 -->
                     <div id="galaxy-hud" class="galaxy-hud">
-                        <div class="hud-title">◎ 悬停查看区域风格</div>
+                        <div class="hud-title">◎ 悬停查看附近点</div>
                         <div class="hud-content">
-                            <p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>
+                            <p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，看看它附近的点有什么共同特征。</p>
                         </div>
                     </div>
                     <div id="galaxy-loading" style="color:#2f2a23; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">正在加载...</div>

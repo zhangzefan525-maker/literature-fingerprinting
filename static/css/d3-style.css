@@ -975,6 +975,45 @@ button:hover {
     box-shadow: 0 0 0 1px rgba(47, 42, 35, 0.2);
 }
 
+/* ---------- 风格星系：圆点大小的图例（第三十六批） ---------- */
+/* 气泡/散点图的「大小」是个编码，没有刻度就读不出来。三个圆用与图中同一个
+   radiusScale 画，所以它们的大小关系与图上完全一致。
+   [hidden] 那条不能省：下面 .galaxy-size-legend 是 display:flex，会把 hidden
+   自带的 display:none 顶掉（同一优先级时后写的赢），值域退化时那一行就藏不住了。 */
+.galaxy-size-legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: var(--card);
+    border-radius: 8px;
+    font-size: 0.82rem;
+    color: var(--ink-70);
+}
+.galaxy-size-legend[hidden] {
+    display: none;
+}
+.galaxy-size-legend-caption {
+    color: var(--ink-50);
+}
+.galaxy-size-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.galaxy-size-legend-dot {
+    display: inline-block;
+    border-radius: 50%;
+    /* 图例只讲大小，不重复讲颜色，所以统一用墨色；描边与色块图例同一套
+       （图上圆点那圈是纸色细缝，是为了在米色画布上互相分开，这里底是浅卡片，
+       纸色描边等于没有，所以用深色细环，小圆也还看得见） */
+    background: var(--ink-70);
+    box-shadow: 0 0 0 1px rgba(47, 42, 35, 0.2);
+    flex: 0 0 auto;
+}
+
 /* ---------- 热力图 ---------- */
 /* 描边：色阶中段的米色和卡片底仍然接近（1.25:1），靠这条线把网格画出来。
    与 d3-charts.js 里的 HEATMAP_STROKE 必须一致（悬停结束时 JS 会把它写回来）。
@@ -1007,7 +1046,8 @@ button:hover {
     outline-offset: 2px;
 }
 
-/* 星系的圆点更小（半径 2–5px），同样给一圈外描边 */
+/* 星系的圆点同样给一圈外描边。半径见 d3-charts.js 的 radiusScale：
+   第三十六批从 4–18 收成 4–14（原来这里写「2–5px」，与代码对不上，已改）。 */
 #galaxy-container circle:focus {
     outline: 2px solid var(--vermilion);
     outline-offset: 2px;
@@ -1235,6 +1275,12 @@ button:hover {
     fill: none;
     stroke: var(--ink-50);
     shape-rendering: crispEdges;
+}
+
+/* 网格线只是参考线，不该接走鼠标事件——否则悬停/点按落在网格上，
+   判定不到底下的圆点。指针事件在 SVG 里是可继承的，写在组上往下全管。 */
+.grid {
+    pointer-events: none;
 }
 
 .axis-label {
@@ -1524,11 +1570,13 @@ button:hover {
 }
 
 /* ---------- 星系 HUD ---------- */
+/* 靠右上角：点云集中在左半边（实测包围盒 x 63–689 / 画布宽 1150），原来钉在左上角
+   正好压在数据最密的地方。宽度 260→240 一并收一点，进一步让开绘图区（第三十六批）。 */
 .galaxy-hud {
     position: absolute;
     top: 20px;
-    left: 20px;
-    width: 260px;
+    right: 20px;
+    width: 240px;
     background: rgba(253, 250, 243, 0.92) !important;
     -webkit-backdrop-filter: blur(10px);backdrop-filter: blur(10px);
     border: 1px solid var(--border);
@@ -2316,6 +2364,10 @@ button.copy-failed:hover {
                                四个字——纸面上反而比改之前更说不清选的是哪几本。 */
     #demo-entry,            /* 「载入对比示例」 */
     #restartGalaxyBtn,      /* 「↻ 重新布局」 */
+    .galaxy-hud,            /* 星系右上角那块面板：纯悬停交互，纸上既压住圆点又印一句
+                               「将鼠标移到圆点上」——一个纸面上做不到的动作。补上坐标轴
+                               之后它还会压在网格和轴题上（第三十六批）。 */
+    #galaxy-loading,        /* 「正在加载…」：纸上不该出现一句没兑现的等待 */
     .insight-copy,          /* 「复制结论」 */
     .copy-block-btn,        /* 「⧉ 复制更长的摘录」 */
     .drill-remove-btn       /* 「✕ 收起」 */
