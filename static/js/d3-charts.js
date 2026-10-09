@@ -2679,8 +2679,12 @@ function showDetail(data, bookName) {
         : '';
     const locationText = formatBlockLocation(bookName, data.block) + formatWordCount(data.wordCount);
     const chapter = getBlockChapter(bookName, data.block);
-    const chapterHtml = chapter
-        ? `<p class="chapter-location" title="${escapeHtml(CHAPTER_LABEL_HINT)}">🔖 所在章节：${escapeHtml(chapterTitle(chapter))} · ${escapeHtml(chapterLabel(chapter))}<span class="chapter-location-hint">（标的是窗口正中间落在的那一章）</span></p>`
+    // 这一行只补「章标题」（第四十四批）：章号（第 4 章（按标题自动识别））上一行的 📍 已经
+    // 给了，同一次 getBlockChapter 查出来的必然是同一章——同一张卡片上并排写两遍。没有章标题
+    // 时退回章号，因为这一行还有另一半信息（窗口正中间落在哪一章）得留着。
+    const chapterHeading = chapter ? (chapterTitle(chapter) || chapterLabel(chapter)) : '';
+    const chapterHtml = chapterHeading
+        ? `<p class="chapter-location" title="${escapeHtml(CHAPTER_LABEL_HINT)}">🔖 所在章节：${escapeHtml(chapterHeading)}<span class="chapter-location-hint">（标的是窗口正中间落在的那一章）</span></p>`
         : '';
     const overviewText = formatBookOverview(bookName);
     const overviewHtml = overviewText
@@ -2701,7 +2705,9 @@ function showDetail(data, bookName) {
 
     detailPanel.innerHTML = `
         <h3>▤ 数据详情</h3>
-        <p>当前选择：${escapeHtml(displayName)} - ${escapeHtml(getMetricLabel(currentMetric))}</p>
+        <!-- 这里原来还有一行「当前选择：书名 - 指标」（第四十四批删掉）：同一块面板里的
+             「📖 书名」和数值下面那个「平均句长」各已经说了一遍，这一行说的是同一件事、
+             连字都一样，而它就贴在旁边。删掉之后面板仍然是「书名 → 位置 → 数值 → 指标」。 -->
         <div class="detail-card">
             <h3>📖 ${escapeHtml(displayName)}</h3>
             <p class="block-location">📍 ${escapeHtml(locationText)}</p>
@@ -3220,7 +3226,10 @@ function getMetricContextLine(metric) {
         // 「这只是个参照」三个字不够（第四十批）：读者照样会把它读成常模。
         // 内置书只有 4 本，把「样本有多小」直接说出来，比只说「不是好坏标准」有用。
         const caveat = `只有这 ${baseline.count} 本，够不上常模——`;
-        parts.push(`参考区间：${label}（${baseline.count} 本）的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}。${caveat}它只用来判断你的书落在哪一头，不是好坏标准。`);
+        // 括号里不再重复本数（第四十四批）：「参考区间：内置示例书（4 本）的…。只有这 4 本…」
+        // 一句话里出现了两次。本数留在 caveat 里——那是第四十批有意加的强调（把样本有多小
+        // 直接说出来），括号里那个只是顺带一记。
+        parts.push(`参考区间：${label}的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}。${caveat}它只用来判断你的书落在哪一头，不是好坏标准。`);
     }
     if (selected && !sameAsBaseline) {
         // 只选了一本时，「在 X – X 之间」是句废话（最小值等于最大值），改说平均水平
@@ -4034,7 +4043,11 @@ function exportSummary() {
         `- 观察角度：${metricLabel}`,
         `- 怎么理解：${metricHint}`,
         `- 统计范围：${describeExportScope()}`,
-        ...(contextLine ? [`- 解读参考：${contextLine}`] : []),
+        // 这句话自己的小标题就是「参考区间：…」，而这一行的字段名又叫「解读参考」，
+        // 于是导出里出现「解读参考：参考区间：…」两个「参考」叠在一起（第四十四批）。
+        // 屏幕上只有这句话、没有字段名，所以不能去改那句共享的串——只在导出这一行把句内
+        // 小标题去掉，让字段名当标题。
+        ...(contextLine ? [`- 解读参考：${contextLine.replace(/^参考区间：/, '')}`] : []),
         ...(crossNote ? [`- 指标关系：${crossNote}`] : []),
         `- 选择书籍：${books.map(getBookDisplayName).join('、')}`,
         `- 在线视图（打开即还原本次选择）：${buildStateUrl()}`,
@@ -5501,19 +5514,21 @@ function attachGalaxyTapPicker(opts) {
 // 📜 悬浮页控制函数
 // ==========================================
 
-// 弹窗里那句「这是摘录，不是全文」的说明。字数按真正显示出来的字符算（_preview 会补
+// 弹窗里那句「这是摘录，不是全文」的说明。百分比按真正显示出来的字符算（_preview 会补
 // 省略号，那三个点不是原文），不写死 1200——短摘录（150 字符）走到这里时，写死 1200
 // 就会变成另一句假话。取长摘录成功/失败两条路径都用它，保证口径一致。
+//
+// 这里不再写绝对字数（第四十四批）：本片段多少词，上面那个徽章（formatWordCount）已经写了；
+// 这段摘录多少字符，下面那个复制按钮也写了。同一个弹窗、同一屏、同一个数，本来写了两遍。
+// 这一行只留徽章和按钮都给不出的那一件事——占全片段多大比例。
 function modalExcerptNote(excerpt, wordCount) {
-    const shown = excerptCharCount(excerpt);
     const wc = Number(wordCount);
     if (Number.isFinite(wc) && wc > 0) {
         // 英文平均一个词连同后随空格约 6 个字符，只用来给一个数量级感受
-        const pct = Math.max(1, Math.round(shown / (wc * 6) * 100));
-        return `本片段共约 ${wc.toLocaleString('en-US')} 个英文单词，`
-            + `此处显示开头 ${shown} 个字符（约占 ${pct}%），不是全文。`;
+        const pct = Math.max(1, Math.round(excerptCharCount(excerpt) / (wc * 6) * 100));
+        return `这里显示的是片段开头的一段（约占 ${pct}%），不是全文。`;
     }
-    return `此处显示片段开头的 ${shown} 个字符，不是全文。`;
+    return '这里显示的是片段开头的一段，不是全文。';
 }
 
 function openGalaxyModal(d) {
@@ -5571,7 +5586,14 @@ function openGalaxyModal(d) {
     }
 
     const noteEl = document.getElementById('modal-text-note');
-    if (noteEl) noteEl.textContent = '正在取本片段更长的摘录…';
+    // 这时正文里放的是页面上已有的那段短摘录，说明就先按它写；长摘录取回来会在下面改写一次。
+    // 不在这里写「正在取更长的摘录…」——按钮上已经写着同一句话（第四十四批）。只有连短摘录
+    // 都没有时（那时复制按钮是隐藏的，不会重复）才由这行小字顶替那句加载提示。
+    if (noteEl) {
+        noteEl.textContent = shortExcerpt
+            ? modalExcerptNote(shortExcerpt, d.wordCount)
+            : '正在取本片段更长的摘录…';
+    }
 
     const modalCopyBtn = document.getElementById('modal-copy-btn');
     if (modalCopyBtn) {
