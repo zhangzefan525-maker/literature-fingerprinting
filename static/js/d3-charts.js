@@ -486,6 +486,9 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
         // 一本书的轮廓说不了「重叠」这件事，讲了反而让人去找一块并不存在的叠加区。
         if (comparability.plotBooks.length >= 2) {
             lines.push('（同一本书的点被一块同色的浅色区域圈住；两块区域叠在一起，说明这两本书的风格区间有重叠。）');
+            // 记号只画在球心，不解释就没人认得（第三十八批）。只在两本以上时说：
+            // 一本书不需要靠记号分辨，讲了反而多一句读者用不上的话。
+            lines.push('（球心上那道纸色记号 — ｜ ＋ 也是用来分书的：分不清颜色时，靠它对着上面的图例认书。）');
         }
         if (comparability.independentBooks.length > 0) {
             warn = true;
@@ -2524,7 +2527,9 @@ function updateMetricHint() {
         sentenceLength: '一句话平均几个词。句子长，读起来更书面、更正式；句子短，更口语、更利落。',
         simpsonIndex: '这本书是不是翻来覆去用同一批词。数值越高越重复（词有点单调）；越低，用词越多样。',
         hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出。它通常不是 0–1 的比例，也不是百分比——数值越大，一般说明用词越丰富、越不单调。这个数对篇幅的依赖很弱（公式里篇幅取的是对数），字数相差不大的书可以直接比；字数差到好几倍时，光篇幅本身就会把这个数推高一点。',
-        functionWords: `不看内容，而看高频小词${getAxisWordsHint()}的使用习惯。点越靠近只说明这些词的用法越像，不等于两本书本身相似。`
+        // 原句是「点越靠近只说明这些词的用法越像」——主语是「点」，谓语说的是「词的用法」，
+        // 读起来像句子缺了半截（第三十八批）。补上主语与宾语：谁靠近、什么像、像到什么程度为止。
+        functionWords: `不看内容，而看高频小词${getAxisWordsHint()}的使用习惯。两个点靠得越近，只说明这两个片段的用词习惯越像，不等于整本书本身相似。`
     };
     const ctxText = getMetricContextLine(currentMetric);
     el.innerHTML = `<span class="metric-hint-label">${escapeHtml(getMetricLabel(currentMetric))}：</span>${escapeHtml(hints[currentMetric] || '')}`;
@@ -3079,6 +3084,39 @@ function dashForBook(name) {
     return BOOK_DASH_RANGE[bookSlot(name) % BOOK_DASH_RANGE.length];
 }
 
+// 星系的圆点也要有第二个编码通道，理由和上面那条线型一模一样，而且这边更急：
+// 这套色板里的 #6b8f5a（绿）与 #a67c3d（金）转成灰度只差 2/255（按 sRGB 相对亮度
+// 算是 131.5 对 128.4），在绿色盲模拟下更是几乎同色——而这两本（野性的呼唤、白牙）
+// 恰恰就是地盘叠在一起、最需要分辨的那两本。所以给球心压一道纸色的小记号：
+// 形状与颜色共用 bookSlot()，同一本书的色和形永远绑在一起。
+// 形式取 slot % 4，所以 0 号槽不记号——只选一本书（默认首屏就是这一种）时，
+// 外观与改动前完全一样，这一点和 BOOK_DASH_RANGE 的 0 号槽同理。
+//
+// 为什么是「球心的记号」而不是「把圆点换成方点三角点」：<circle> 这个元素同时被
+// 悬停、点按、拖动、键盘导航和触屏取点五处引用（circles / allCircles / circles.nodes()），
+// 换成 <path> 等于把这五条路一起改写。记号是另加的一层，那些路一行都不用动。
+const BOOK_GLYPH_RANGE = ['none', 'bar', 'stem', 'cross'];
+
+function glyphForBook(name) {
+    return BOOK_GLYPH_RANGE[bookSlot(name) % BOOK_GLYPH_RANGE.length];
+}
+
+// 记号画在以 (0,0) 为球心的坐标系里，尺度按球半径走（球越大记号越粗）：
+// 半长 0.62r、线宽 0.16r，是照「半径 4 时要看得见、半径 14 时不喧宾夺主」定的。
+function galaxyGlyphPath(kind, r) {
+    if (kind === 'none') return null;
+    const a = r * 0.62;
+    const seg = (x1, y1, x2, y2) => `M${x1.toFixed(2)} ${y1.toFixed(2)}L${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    if (kind === 'bar') return seg(-a, 0, a, 0);
+    if (kind === 'stem') return seg(0, -a, 0, a);
+    // cross
+    return seg(-a, 0, a, 0) + seg(0, -a, 0, a);
+}
+
+function galaxyGlyphWidth(r) {
+    return Math.max(1, r * 0.16);
+}
+
 // ==========================================
 // ✧ 风格星系的轴词：只说实话
 // ==========================================
@@ -3351,6 +3389,17 @@ function collectExportAxisNote() {
         const rangeText = scopeText.replace(/^（|）$/g, '').replace(/^框选区段\s*/, '');
         return `图中各书的数值取的是框选区段 ${rangeText} 内的分段平均，不是全书平均`;
     }
+    // 主图页（指纹热力图）：色标那句说明写在 SVG 外面的 #heatmap-scale-note 里，
+    // 而导出只序列化 SVG，于是导出的热力图上「同一个颜色」到底是多大，一个字都没有——
+    // 偏偏这张图最常被截下来并排摆（两次选择各截一张），而那正是色标不可比的时候。
+    // 与上面 adv-mean-scope、下面 galaxy-guide-size 同一条规矩：屏幕上说了的话，
+    // 跟着图走。折线图不需要这句（它纵轴自带数字），所以只在热力图下加。
+    if (currentTab === 'view-main') {
+        if (chartType !== 'heatmap') return '';
+        const scaleNote = document.getElementById('heatmap-scale-note');
+        if (!scaleNote || scaleNote.hidden) return '';
+        return (scaleNote.textContent || '').trim().replace(/\s+/g, ' ');
+    }
     if (currentTab !== 'view-galaxy') return '';
     // 「大小 = …」那行在 #galaxy-guide 里，不在 SVG 里，导出只序列化 SVG，
     // 于是导出的星系图上有「颜色 ↔ 书名」的图例，却没有任何一句解释圆点大小。
@@ -3368,7 +3417,17 @@ function collectExportAxisNote() {
             : [(note.textContent || '').trim()];
         noteParts.forEach(text => { if (text) parts.push(text); });
     }
-    return parts.join('；').replace(/\s+/g, ' ');
+    // 拼的时候别在原句的句号后面再生一个分号：noteParts 里每句都自带标点，
+    // 直接 join('；') 会让导出的图上出现「…平均水平。；（空出来的部分是…」——
+    // 两句之间本来就有句号，多出来的那个分号读起来像打错了字。
+    // 上一句已经收尾（句号/问号/叹号，或右括号结尾）时就不再加分隔符。
+    // 顺带一个必须留意的地方：wrapAxisNote 是靠「；」分段找折行点的，
+    // 少几个「；」只会让某一段变长、由它自己按 46 字硬折，不会漏字。
+    return parts.reduce((acc, text) => {
+        if (!acc) return text;
+        const closed = /[。！？）”』」]$/.test(acc);
+        return acc + (closed ? '' : '；') + text;
+    }, '').replace(/\s+/g, ' ');
 }
 
 function exportLegendLineHeight() { return 18; }
@@ -3434,10 +3493,19 @@ function wrapProvenance(text, maxChars) {
 // 固定 46 字在窄画布上会横穿出去。默认 46 保持轴说明原来的行为不变。
 function wrapAxisNote(axisNote, maxChars) {
     const MAX = maxChars || 46;
-    // 上限从 6 提到 7：星系的说明多了「大小 = …」一行（大小那行 + 两条轴说明 +
-    // 范围说明 实测正好折到 6 行），刚好顶到上限就没有余量了，再多一条告警就会
-    // 从尾部吃掉一整段。高度和画字都走这个函数，改了不会失配。
-    const MAX_LINES = 7;
+    // 上限 6 → 7（第三十六批）→ 12（第三十八批）。
+    //
+    // 第三十八批把上限一次提到 12，是因为「7」早就已经在悄悄吃内容了：实测星系的
+    // 那段说明拼起来是 359 字，按 46 字折行要 10 行，而 7 行是从尾部切掉再补「…」——
+    // 也就是说，导出的那张图上，「点为了不互相压住会被推开一点，位置是近似的」
+    // 「同色的浅色区域是地盘」「球心的记号是对图例用的」这三句**一句都没印出来**。
+    // 屏幕上看得见、导出的图上看不见，而导出的图才是要贴进论文的那一份。
+    // 7 这个数是按当时 6 行的内容定的，内容长了两轮，数没跟着长。
+    //
+    // 12 是「10 行 + 两行余量」。余量的意思不是可以随便加，而是：下一次再加内容时，
+    // 会先在 12 行处出现「…」——那是个看得见的信号，比静默少印三句好得多。
+    // 高度和画字都走这个函数，改了不会失配（exportLegendBandHeight 也是调它算的）。
+    const MAX_LINES = 12;
     const lines = [];
     String(axisNote).split('；').forEach((seg, idx) => {
         // 分号被 split 吃掉了，除第一段外都要补回来
@@ -3677,16 +3745,34 @@ function exportSummary() {
 
     // 结论区。屏幕上「一句话解读」「值得一看的片段」是用户最想带走的东西，
     // 之前摘要里一个字都没有，只能手抄。放在每本书的明细**前面**——它是结论，不是附录。
+    // 这两块由「全书对比」页的渲染函数顺手存下来（d3-charts.js 顶上的
+    // lastInsightLines / lastAnomalyReports），没进过那个页签时是空的。原来空着就
+    // 整节跳过，导出的摘要于是**静默地**少掉两节最值钱的内容，读的人只会以为
+    // 这次分析没结论。屏幕上的「复制结论」按钮遇到同样的情况会说一句话
+    // （见 copyConclusion），导出物里也得说，而且要说清怎么办。
+    //
+    // 为什么不在导出时顺手算一遍：算这两节要先把「全书对比」的数据拉下来并渲染，
+    // 那是一次用户没要求的加载和一次对他当前页签的界面写入。既有设计已经选定了
+    // 这条路——copyConclusion 也是让用户自己切过去，不是替他切。跟着它走。
+    const NOT_GENERATED = '这一节这次没有生成。请先切到「全书对比」页（会自动挑选对比书并算出结论），再回来导出，摘要里就会带上它。';
     const insightText = buildInsightText();
     if (insightText) {
         lines.push('【一句话解读】');
         lines.push(insightText);
+        lines.push('');
+    } else {
+        lines.push('【一句话解读】');
+        lines.push(NOT_GENERATED);
         lines.push('');
     }
     const anomalyText = buildAnomalyText();
     if (anomalyText) {
         lines.push('【值得一看的片段】');
         lines.push(anomalyText);
+        lines.push('');
+    } else {
+        lines.push('【值得一看的片段】');
+        lines.push(NOT_GENERATED);
         lines.push('');
     }
 
@@ -4413,6 +4499,24 @@ function initStyleGalaxy() {
             const swatch = document.createElement('span');
             swatch.className = 'galaxy-legend-swatch';
             swatch.style.background = colorForBook(book);
+            // 图例里也要带上球心那道记号：颜色分不出来的人，正是靠图例把「记号 → 书名」
+            // 对上的。图例上不画，记号就成了图上没人能查的暗号（第三十八批）。
+            const markKind = glyphForBook(book);
+            if (markKind !== 'none') {
+                const mark = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                mark.setAttribute('class', 'galaxy-legend-mark');
+                mark.setAttribute('viewBox', '-6 -6 12 12');
+                mark.setAttribute('aria-hidden', 'true');
+                mark.setAttribute('focusable', 'false');
+                const markPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                markPath.setAttribute('d', galaxyGlyphPath(markKind, 6));
+                markPath.setAttribute('fill', 'none');
+                markPath.setAttribute('stroke', '#f2e7cd');
+                markPath.setAttribute('stroke-width', '2');
+                markPath.setAttribute('stroke-linecap', 'round');
+                mark.appendChild(markPath);
+                swatch.appendChild(mark);
+            }
             item.appendChild(swatch);
             item.appendChild(document.createTextNode(getBookDisplayName(book)));
             if (skippedBooks.has(book)) {
@@ -4741,6 +4845,28 @@ function initStyleGalaxy() {
             .on("drag", dragged)
             .on("end", dragended));
 
+    // ---- 球心上那道纸色记号（第三十八批，第二个编码通道）----
+    // 画在圆点**之上**：球是不透明的渐变，压在下面等于没画。这一层不接任何指针事件，
+    // 悬停、点按、拖动照旧全部归圆点（与 .galaxy-territory 同一个理由，写在 CSS 里）。
+    const glyphLayer = g.append("g").attr("class", "galaxy-glyph-layer");
+    const glyphs = glyphLayer.selectAll("path")
+        .data(allNodes)
+        .enter().append("path")
+        .attr("class", "galaxy-glyph")
+        .attr("fill", "none")
+        .attr("stroke", PAPER_RIM)
+        .attr("stroke-linecap", "round")
+        .attr("stroke-width", d => galaxyGlyphWidth(d.r))
+        .attr("d", d => galaxyGlyphPath(glyphForBook(d.book), d.r));
+
+    // 悬停时圆点放大到 1.5 倍，记号得跟着放大，否则球胀起来的一瞬间球心那道记号
+    // 会突然显得偏小，像画错了。倍数存在节点上、由 ticked() 统一写 transform：
+    // 力导向每帧都在重写 transform，用 d3.transition 做这个缩放会被下一帧直接抹掉。
+    function updateGlyphs() {
+        glyphs.attr("transform", d => `translate(${d.x},${d.y}) scale(${d.glyphScale || 1})`);
+    }
+    updateGlyphs();
+
     circles.on("mouseover", function(event, d) {
         d3.select(this)
             .transition().duration(motionDuration(100))
@@ -4748,6 +4874,8 @@ function initStyleGalaxy() {
             .style("filter", "url(#glow)")
             .attr("stroke", "#2f2a23")
             .attr("stroke-width", 2);
+        d.glyphScale = 1.5;
+        updateGlyphs();
         
         const allCircles = g.selectAll("circle");
         const allNodeData = allCircles.data();
@@ -4790,6 +4918,8 @@ function initStyleGalaxy() {
             .style("filter", null)
             .attr("stroke", PAPER_RIM)
             .attr("stroke-width", 1);
+        d.glyphScale = 1;
+        updateGlyphs();
 
         g.selectAll("circle")
              .transition().duration(motionDuration(200))
@@ -4858,6 +4988,7 @@ function initStyleGalaxy() {
         circles
             .attr("cx", d => d.x)
             .attr("cy", d => d.y);
+        updateGlyphs();
         drawTerritories();
         // 顺手记下落点，供下次进入时接着算（用户拖动后的位置也在这里被记下来）。
         // 复用同一个对象，不然 200 多个点乘以上百次迭代会白白造两万多个临时对象。
