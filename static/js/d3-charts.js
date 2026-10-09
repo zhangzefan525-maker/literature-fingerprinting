@@ -268,13 +268,13 @@ function getUnsharedUploadedBooks() {
 function buildShareCaveats() {
     const notes = [];
     if (isLocalHost()) {
-        notes.push('- 上面这个链接指向本机地址，只有本机能打开；要发给别人，请连同本摘要一起发。');
+        notes.push('- 上面的链接指向本机地址，仅本机可以打开；如需发送给他人，请连同本摘要一起发送。');
     }
     const uploaded = getUnsharedUploadedBooks();
     if (uploaded.length > 0) {
         const names = uploaded.map(getBookDisplayName).join('、');
         notes.push(`- 链接里没有《${names}》（共 ${uploaded.length} 本）：这是你自己上传的文本，`
-            + '别人打开链接时看不到这几本，他们看到的会是少掉这几本的另一份分析。');
+            + '他人打开链接时看不到这几本，看到的会是少掉这几本的另一份分析。');
     }
     return notes;
 }
@@ -289,8 +289,8 @@ function syncShareLinkTitle() {
     const btn = document.getElementById('copyLinkBtn');
     if (!btn) return;
     btn.title = isLocalHost()
-        ? '把当前指标、选书、视图复制成链接；本机地址只有这台电脑能打开，要发给别人请改用「更多导出 → 导出摘要」'
-        : '把当前指标、选书、视图复制成链接，发给同事即可复现（你自己上传的文本不在链接里）';
+        ? '把当前指标、选书、视图复制成链接；本机地址只有这台电脑能打开，如需发送给他人，请改用「更多导出 → 导出摘要」'
+        : '把当前指标、选书、视图复制成链接，他人打开即可复现（你自己上传的文本不在链接里）';
 }
 
 // 「复制此链接」：把当前视图（指标/选书/标签页/图形/框选）发给同事
@@ -313,10 +313,10 @@ function copyShareLink(button) {
     if (uploaded.length > 0) {
         const names = uploaded.map(getBookDisplayName).join('、');
         const where = isLocalHost() ? '这台电脑' : '这个服务器';
-        notices.push(`链接里没有《${names}》：这是你自己上传的文本，只存在${where}上，别人打开链接时看不到。`);
+        notices.push(`链接里没有《${names}》：这是你自己上传的文本，只存在${where}上，他人打开链接时看不到。`);
     }
     if (notices.length > 0) {
-        notices.push('想把完整结果分享出去，请用「更多导出 → 导出摘要」。');
+        notices.push('如需分享完整结果，请用「更多导出 → 导出摘要」。');
         setGlobalStatus('notice', notices.join(''));
     }
 }
@@ -434,7 +434,7 @@ function escapeHtml(value) {
 
 function truncateText(value, length = 18) {
     const text = String(value ?? '');
-    return text.length > length ? text.substring(0, length - 3) + '...' : text;
+    return text.length > length ? text.substring(0, length - 3) + '…' : text;
 }
 
 // 每个指标的显示精度（唯一来源，别在各处另写 toFixed）。
@@ -611,11 +611,11 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
         // 而且会和同一个面板上的「各书各自计算」告警直接打架；outOfRange 时范围已经
         // 被扩展过去容纳超界的数据，点也不再挤在一角，说了反而误导。
         if (extent && !extent.outOfRange) {
-            lines.push('（空出来的部分是「与内置示例书共用坐标范围」的结果，不是没画出来。想看得更细可以滚轮放大，坐标轴会跟着重新标注。）');
+            lines.push('（空出的部分来自「与内置示例书共用坐标范围」，并非漏画。需要更细时可滚轮放大，坐标轴会随之重新标注。）');
         }
 
         // 力导向的碰撞力会把点从真实坐标上推开一点才不重叠，读者有权知道位置是近似值
-        lines.push('（点为了不互相压住会被轻轻推开一点，所以位置是近似的。）');
+        lines.push('（为避免点互相遮挡，点的位置做过轻微推开，因此图上位置是近似值。）');
 
         // 同色浅色区域的说明（第三十七批）。画面上多了一层编码，就得有一句话说它是什么，
         // 否则读者只会看到几块「不知道哪来的底色」。只在真的画了两本以上时才说：
@@ -624,7 +624,7 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
             lines.push('（同一本书的点被一块同色的浅色区域圈住；两块区域叠在一起，说明这两本书的风格区间有重叠。）');
             // 记号只画在球心，不解释就没人认得（第三十八批）。只在两本以上时说：
             // 一本书不需要靠记号分辨，讲了反而多一句读者用不上的话。
-            lines.push('（球心上那道纸色记号 — ｜ ＋ 也是用来分书的：分不清颜色时，靠它对着上面的图例认书。）');
+            lines.push('（球心上的纸色记号 — ｜ ＋ 也用于区分书籍：颜色不易分辨时，可对照上方图例辨认。）');
         }
         if (comparability.independentBooks.length > 0) {
             warn = true;
@@ -924,7 +924,7 @@ function buildScalarComparabilityNote(books) {
 // （帮第一次来的用户一键看到「对比」长什么样，而不是自己盲选）
 function loadComparisonExample() {
     if (!realData) {
-        setUploadStatus('数据还在加载中，请稍等一下再试。', 'error');
+        setUploadStatus('数据仍在加载中，请稍候重试。', 'error');
         return;
     }
 
@@ -945,7 +945,7 @@ function loadComparisonExample() {
     // 等于什么都没发生——所以直接把页签切过去（switchTab 自己会重画目标页，不必先白画一遍当前页）。
     window.switchTab('view-dashboard');
     setUploadStatus(
-        `已选中《${picks.map(getBookDisplayName).join('》《')}》：它们的「${getMetricLabel(currentMetric)}」差别最大，适合先看差异。换「观察角度」可以再挑别的组合。`,
+        `已选中《${picks.map(getBookDisplayName).join('》《')}》：它们的「${getMetricLabel(currentMetric)}」差异最大，适合先看差别。更换「观察角度」可另选一组。`,
         'success'
     );
     // 上面那句写在上传区里，而这时候页面已经滚到「全书对比」页、上传区在屏幕外。
@@ -1042,7 +1042,7 @@ async function handleFileUpload(event) {
 async function proceedUpload(file) {
     const input = document.getElementById('file-upload');
     setUploadBusy(true);
-    setUploadStatus(`正在分析「${file.name}」（长文本可能需要一会儿），请勿关闭页面...`, 'loading');
+    setUploadStatus(`正在分析「${file.name}」（长文本可能需要一些时间），请勿关闭页面…`, 'loading');
     startUploadTicker();
 
     const formData = new FormData();
@@ -1407,7 +1407,7 @@ function openShelfModal() {
     const modal = document.getElementById('shelf-modal');
     if (!modal) return;
     const valueEl = document.getElementById('shelf-code-value');
-    if (valueEl) valueEl.textContent = currentShelfCode || '（还没拿到，请刷新页面）';
+    if (valueEl) valueEl.textContent = currentShelfCode || '（尚未获取，请刷新页面）';
     const status = document.getElementById('shelf-modal-status');
     if (status) {
         status.textContent = '';
@@ -1710,7 +1710,7 @@ function selectBook(bookId) {
         if (selectedBooks.size <= 1) {
             // 至少要留一本书，否则三个页签都没有东西可画。原来这里直接静默返回，
             // 用户点了没反应、只能以为坏了；现在把原因说出来。
-            showSelectionNotice('至少要留一本书在图上。想换书，先选另一本，再取消这一本。');
+            showSelectionNotice('至少要保留一本书。如需换书，请先选中另一本，再取消这一本。');
             return;
         }
         selectedBooks.delete(bookId);
@@ -1758,7 +1758,7 @@ function syncBookButtonStates() {
 
 async function loadRealData() {
     try {
-        showLoading('正在加载数据...');
+        showLoading('正在加载数据…');
 
         const response = await fetch(API_ENDPOINTS.fingerprintData);
         // 服务端把「这份语料是什么」压成一个指纹放在 ETag 头上，供缓存判断用；
@@ -1821,8 +1821,8 @@ async function loadRealData() {
                 // 不知道这两本是谁挑的、凭什么。只在自动挑书这一次说（带书籍链接进来、
                 // 或者自己选过书之后都不会走到这个分支）。
                 announceOrNotice(
-                    `已替你选中差别最大的两本：《${picks.map(getBookDisplayName).join('》《')}》——`
-                    + `它们的「${getMetricLabel(currentMetric)}」差得最远。想比别的组合，换下方选书即可。`
+                    `已替你选中差异最大的两本：《${picks.map(getBookDisplayName).join('》《')}》——`
+                    + `它们的「${getMetricLabel(currentMetric)}」差距最大。如需比较其他组合，更换下方选书即可。`
                 );
             } else {
                 selectBook(availableBooks[0]); // 兜底：连一对都挑不出来时，照旧选第一本
@@ -2641,7 +2641,7 @@ function renderQuickPreviewIfIdle() {
         // （比如 URL 带了 ?metric= 而选中的书没有这个指标）。
         // 只收拾自己写过的两块（3 行清单 / 加载卡），用户点开的详情卡上面已经放行过了。
         if (detailPanel.querySelector('.state-card.loading') || detailPanel.querySelector('.quick-preview')) {
-            showNoDataMessage('选中的书在当前「观察角度」下没有可展示的片段，换一个观察角度或再选一本书试试。');
+            showNoDataMessage('选中的书在当前「观察角度」下没有可展示的片段，请更换「观察角度」或另选一本书。');
         }
         return;
     }
@@ -2662,7 +2662,7 @@ function renderQuickPreviewIfIdle() {
         <div class="quick-preview" data-book-id="${escapeHtml(book)}">
             ${rows}
         </div>
-        <p class="excerpt-note">点上面任意一行，和点图上那个格子是一回事。</p>
+        <p class="excerpt-note">点击上面任意一行，等同于点击图中对应的位置。</p>
     `;
     detailPanel.querySelectorAll('.quick-preview-row').forEach((btn, i) => {
         btn.addEventListener('click', () => showDetail(top[i], book));
@@ -2745,18 +2745,18 @@ function updateMetricHint() {
         // 原句是「句子长，读起来更书面、更正式；句子短，更口语、更利落」（第四十批删）。
         // 「长句＝书面／正式」是一种常见的印象，不是这个工具量出来的东西——量出来的是词数，
         // 「正式」与否要另立一套语体判据；写在指标说明里等于借工具的口说了一句没根据的话。
-        sentenceLength: '一句话平均几个词。句子长，一句话装的信息多、读得慢；句子短，读起来更利落。长短本身不代表写得好坏，也不等同于文体的正式程度。',
+        sentenceLength: '一句话平均包含几个词。句子长，一句话承载的信息更多，阅读速度较慢；句子短，读起来更简洁明快。长短本身不代表写得好坏，也不等同于文体的正式程度。',
         // 补上它与「独特词丰富度」的镜像关系（第四十批）：两个指标算的是同一件事的两面，
         // 读者常把它们当成两个独立证据，于是把同一件事数了两遍（两个指标不合并，只加这一句）。
-        simpsonIndex: '这本书是不是翻来覆去用同一批词。数值越高越重复（词有点单调）；越低，用词越多样。它和「独特词丰富度」是一枚硬币的两面：一件事量了两次，一个高另一个就低，不要当成两条独立的证据。',
-        hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出。它通常不是 0–1 的比例，也不是百分比——数值越大，一般说明用词越丰富、越不单调。这个数对篇幅的依赖很弱（公式里篇幅取的是对数），字数相差不大的书可以直接比；字数差到好几倍时，光篇幅本身就会把这个数推高一点。',
+        simpsonIndex: '衡量这本书是否反复使用同一批词。数值越高越重复（用词较为集中）；越低，用词越多样。它与「独特词丰富度」是同一件事的两面：一件事量了两次，一个高另一个就低，不宜当作两条独立的证据。',
+        hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出。它通常不是 0–1 的比例，也不是百分比——数值越大，一般说明用词越丰富、越不单调。这个数对篇幅的依赖很弱（公式里篇幅取的是对数），字数相差不大的书可以直接比；字数差到好几倍时，仅篇幅本身就会把这个数抬高一些。',
         // 原句是「点越靠近只说明这些词的用法越像」——主语是「点」，谓语说的是「词的用法」，
         // 读起来像句子缺了半截（第三十八批）。补上主语与宾语：谁靠近、什么像、像到什么程度为止。
         // 「风格走向」这个名字从字面读不出量的是什么（第四十二批，小明A 卡在这里）：
         // 另三个指标名（平均句长 / 用词重复度 / 独特词丰富度）都能从字面猜到，只有这一个不能。
         // 不改名——名字出现在读数、图例、导出、示例文案好几处，改一次要同步的地方太多；
         // 改成在这里先把「它量的是什么」说清楚，再讲原来那句「靠得近 ≠ 整本书相似」。
-        functionWords: `「风格走向」量的是这本书习惯用哪一类高频小词${getAxisWordsHint()}，把这套习惯画成图上的一个方向——不看内容，只看措辞习惯。两个点靠得越近，只说明这两个片段的用词习惯越像，不等于整本书本身相似。`
+        functionWords: `「风格走向」量的是这本书惯用哪一类高频小词${getAxisWordsHint()}，并将这种习惯表示为图上的一个方向——不看内容，只看措辞习惯。两个点越接近，只说明这两个片段的用词习惯越相似，不等于整本书本身相似。`
     };
     const ctxText = getMetricContextLine(currentMetric);
     el.innerHTML = `<span class="metric-hint-label">${escapeHtml(getMetricLabel(currentMetric))}：</span>${escapeHtml(hints[currentMetric] || '')}`;
@@ -3225,11 +3225,11 @@ function getMetricContextLine(metric) {
         const label = builtinLoaded.length > 0 ? '内置示例书' : '当前已加载的书';
         // 「这只是个参照」三个字不够（第四十批）：读者照样会把它读成常模。
         // 内置书只有 4 本，把「样本有多小」直接说出来，比只说「不是好坏标准」有用。
-        const caveat = `只有这 ${baseline.count} 本，够不上常模——`;
+        const caveat = `只有这 ${baseline.count} 本，不足以构成常模——`;
         // 括号里不再重复本数（第四十四批）：「参考区间：内置示例书（4 本）的…。只有这 4 本…」
         // 一句话里出现了两次。本数留在 caveat 里——那是第四十批有意加的强调（把样本有多小
         // 直接说出来），括号里那个只是顺带一记。
-        parts.push(`参考区间：${label}的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}。${caveat}它只用来判断你的书落在哪一头，不是好坏标准。`);
+        parts.push(`参考区间：${label}的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}。${caveat}它只用于判断你的书落在参考区间的哪一端，不是好坏标准。`);
     }
     if (selected && !sameAsBaseline) {
         // 只选了一本时，「在 X – X 之间」是句废话（最小值等于最大值），改说平均水平
@@ -3594,7 +3594,7 @@ function exportFileLabel() {
 function getNoChartMessage() {
     const where = currentTab === 'view-galaxy' ? '风格星系' : (currentTab === 'view-dashboard' ? '全书对比' : '基础趋势分析');
     return `「${where}」这张图还没画出来，暂时没有可导出的内容。`
-        + '请先在有数据的书上点一下，或稍等图渲染完成再试。';
+        + '请先点击有数据的书，或稍等图表渲染完成后再试。';
 }
 
 // ── 导出用的内联样式 ──────────────────────────────────────────────
@@ -4004,8 +4004,8 @@ function exportChart() {
 // 「复制结论」的尾注与导出摘要原来也都没有这一句。只在这两个角度下说——其余角度下它是噪音。
 function crossMetricNote(metric = currentMetric) {
     if (metric !== 'simpsonIndex' && metric !== 'hapaxLegomena') return '';
-    return '「用词重复度」与「独特词丰富度」是一枚硬币的两面：量的是同一件事（用词多样不多样），'
-        + '一个高另一个就低，两份结果不要当成两条独立的证据。';
+    return '「用词重复度」与「独特词丰富度」是同一件事的两面：量的是用词多样不多样，'
+        + '一个高另一个就低，两份结果不宜当成两条独立的证据。';
 }
 
 function exportSummary() {
@@ -4017,7 +4017,7 @@ function exportSummary() {
         if (!realData || !pool || pool.size === 0) {
             showError('当前没有可导出的分析数据。请先选择书籍或上传文本。');
         } else {
-            showError('当前选择的书籍暂时没有可用于这个观察角度的数据，请换一个角度，或换一本书再试。');
+            showError('当前选择的书籍暂时没有可用于这个「观察角度」的数据，请更换「观察角度」，或更换书籍后重试。');
         }
         return;
     }
@@ -4072,8 +4072,8 @@ function exportSummary() {
     // 第四十三批改成两节都缺时合成一处说（标题照旧两行，说明只说一次）。
     // 只有一节缺时那份说明与原来逐字节相同。
     const notGeneratedNotice = (both) => both
-        ? '这两节这次都没有生成。请先切到「全书对比」页（会自动挑选对比书并算出结论），再回来导出，摘要里就会带上它们。'
-        : '这一节这次没有生成。请先切到「全书对比」页（会自动挑选对比书并算出结论），再回来导出，摘要里就会带上它。';
+        ? '这两节本次都没有生成。请先切到「全书对比」页（会自动挑选对比书并算出结论），返回后再导出，摘要即会包含这两节。'
+        : '这一节本次没有生成。请先切到「全书对比」页（会自动挑选对比书并算出结论），返回后再导出，摘要即会包含这一节。';
     const insightText = buildInsightText();
     const anomalyText = buildAnomalyText();
     if (!insightText && !anomalyText) {
@@ -4185,7 +4185,7 @@ function anomalyNotes(report) {
 const ANOMALY_GLOBAL_NOTE = '上面这些片段的「偏离」只是统计意义上离整体较远'
     + '（离均值超过 2 个标准差，或超出四分位距范围），不代表写得好或不好。'
     + '它们是相邻重叠的滑窗切出来的，不能当成互相独立的样本；'
-    + '本工具不做显著性判断，只用来帮你挑原文，不构成「显著偏离」的结论。';
+    + '本工具不做显著性判断，只用于辅助定位原文片段，不构成「显著偏离」的结论。';
 
 // 「值得一看的片段」的纯文字版本，同样取自屏幕上那一份（lastAnomalyReports）。
 // 还没加载出来（没进「全书对比」页）时返回空串，调用方据此跳过这一节——
@@ -4637,7 +4637,7 @@ function exportCitation() {
 
     const chunks = [
         '文印 · 引用条目',
-        '本文件有两类条目，别混用：',
+        '本文件有两类条目，请勿混用：',
         '  1. @book —— 本次分析用到的内置示例书，引用文学作品本身时用这一条。',
         '     year 是作品首次出版的年份；电子版的来源与发布日期写在 note 里。',
         '  2. @misc —— 本次在线分析记录本身（哪一次、什么参数、跑了哪几本书），不是出版物。',
@@ -4751,7 +4751,7 @@ function showGalaxyError(message) {
 // 而这两个接口的第一次都可能很慢——api_server.py 里 /api/books 和 /api/fingerprint-data
 // 都会走 _ensure_demo_data()，首次要现场生成示例数据（那儿的注释写着重算要跑 1~3 分钟），
 // 光一句「正在加载数据...」在那三分钟里和没有提示是一样的。
-const LOADING_WAIT_HINT = '如果这台服务刚启动，需要先生成示例数据，可能要等 1–3 分钟，页面没有卡死。';
+const LOADING_WAIT_HINT = '如果这台服务刚启动，需要先生成示例数据，可能要等 1–3 分钟，页面并未卡住。';
 
 // 「加载中」「出错」这两张状态卡**不参与读屏播报**（aria-hidden），因为同一句话已经由
 // 顶部状态条那个 live region 念过一遍了——两块同时可见时，读屏会把整句话连读两遍。
@@ -4821,7 +4821,7 @@ function resetDetailPanelIfStale(reason) {
     if (!detailPanel || !detailPanel.querySelector('.block-location')) return;
     detailPanel.innerHTML = `
         <h3>▤ 数据详情</h3>
-        <p>${escapeHtml(reason)}后，之前选中的那个点已经取消，重新点一下即可查看。</p>
+        <p>${escapeHtml(reason)}后，之前选中的那个点已经取消，重新点击即可查看。</p>
     `;
 }
 
@@ -4887,7 +4887,7 @@ function initStyleGalaxy() {
             container.dataset.galaxyRetry = String(tries + 1);
             requestAnimationFrame(() => initStyleGalaxy());
         } else {
-            setGalaxyLoading('图没能画出来：容器尺寸为 0。请切到别的页签再切回来试试。');
+            setGalaxyLoading('图未能绘制：容器尺寸为 0。请切换到其他页签后再返回。');
         }
         return;
     }
@@ -5024,7 +5024,7 @@ function initStyleGalaxy() {
         // 画布已经清空，用户看到的是空白一片且没有任何说明；异常还会冒泡到
         // handleFileUpload 的 catch，把一次成功的上传误报成「上传失败」。
         // setGalaxyLoading 本来就是这个状态该用的函数。
-        setGalaxyLoading('这几本书暂时缺少生成风格星系所需的高频小词数据。请换几本书再试。');
+        setGalaxyLoading('这几本书暂时缺少生成风格星系所需的高频小词数据。请更换书籍后重试。');
         return;
     }
 
@@ -5577,7 +5577,7 @@ function openGalaxyModal(d) {
     // 先显示页面上已有的短摘录（页面响应不再带长摘录），长的那段取到后再替换。
     const shortExcerpt = d.preview || '';
     if (textContainer) {
-        textContainer.textContent = shortExcerpt || "暂无详细文本内容...";
+        textContainer.textContent = shortExcerpt || "暂无详细文本内容…";
         // 有摘录时这段是英文原文，要标 lang 让读屏换英文音库；没有摘录时容器里放的是
         // 中文兜底文案，那就得把 lang 摘掉——元素是复用的，上一本书留下的 lang="en"
         // 会让这句中文也被按英文念。
@@ -5855,10 +5855,10 @@ function setGalaxyIdleHint() {
     // 划出来的地界，而它其实是跟着镜头走的（第三十六批）。
     if (usesCoarsePointer()) {
         title.innerText = "◎ 点按查看附近点";
-        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">点按任意圆点，看看它附近的点有什么共同特征。</p>';
+        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">点按任意圆点，查看附近各点的共同特征。</p>';
     } else {
         title.innerText = "◎ 悬停查看附近点";
-        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，看看它附近的点有什么共同特征。</p>';
+        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看附近各点的共同特征。</p>';
     }
 }
 
@@ -5868,8 +5868,8 @@ function updateHUD(analysisData, metricLabel, totalCount) {
     const title = hud.querySelector('.hud-title');
 
     if (!analysisData) {
-        title.innerText = "◎ 正在分析...";
-        content.innerHTML = `<p style="color:#6b6254; font-size:12px;">正在分析附近的点...</p>`;
+        title.innerText = "◎ 正在分析…";
+        content.innerHTML = `<p style="color:#6b6254; font-size:12px;">正在分析附近的点…</p>`;
         return;
     }
 
@@ -5911,7 +5911,7 @@ function updateHUD(analysisData, metricLabel, totalCount) {
             ${analysisData.topKeywords.map(k => `<span class="hud-tag" lang="en">${k}</span>`).join('')}
         </div>
         <div style="margin-top:10px; padding-top:5px; border-top:1px dashed rgba(46, 42, 36, 0.12); font-size:10px; color:#6b6254;">
-            * 挨得近只说明高频小词的用法相近，不代表内容或水平相似。
+            * 位置接近只说明高频小词的用法相近，不代表内容或水平相似。
         </div>
     `;
 

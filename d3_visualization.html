@@ -108,7 +108,7 @@
                  位置紧跟在勾选框之后（上传栏是 flex-wrap，.upload-hint 自带 flex-basis:100%，
                  独占一行）。手机上整条上传栏被排到图表之后（第二十二批），所以这一行
                  不占首屏；≥561px 时它在图表上方，加一行的高度是这个代价的代价。 -->
-            <span class="upload-hint" id="save-note">勾选后：分析结果存到本服务器，只有这个浏览器能看到，一直留到你点 ✕ 删除为止。其中含每片段最多 1200 字的原文摘录，但你上传的那个文件本身不留存。与书架上同名的一本会整份替换，上传前会再问你一次。</span>
+            <span class="upload-hint" id="save-note">勾选后：分析结果存到本服务器，只有这个浏览器能看到，一直留到你点 ✕ 删除为止。其中含每片段最多 1200 字的原文摘录，但你上传的那个文件本身不留存。与书架上同名的一本会整份替换，上传前会再次确认。</span>
             <!-- 书架编号：换设备 / 清了浏览器数据之后的找回入口。编号是 HttpOnly cookie，
                  页面本来读不到，靠 /api/books 的 shelfCode 现给（见 d3-charts.js）。
                  必须常驻显示，不能跟着「书架里有没有书」变——新设备上正需要它，
@@ -157,7 +157,7 @@
                  第四十三批又去掉了「已经替你选好差别最明显的两本了」这半句：同一屏里
                  顶部状态条（d3-charts.js 里 announceOrNotice 那处）正在说同一件事，而且
                  说得更全（哪两本、凭什么、想换怎么办）。这句只留「点这里看什么」。 -->
-            <span class="quickstart-lead">第一次来？点这里跳到「全书对比」，看写好的结论。</span>
+            <span class="quickstart-lead">第一次使用？点击此处前往「全书对比」，查看现成的结论。</span>
             <button type="button" class="quickstart-demo" onclick="loadComparisonExample()">载入对比示例</button>
             <button type="button" class="quickstart-close" onclick="hideQuickStart()" aria-label="不再自动显示快速开始" title="收起。之后可以在「基础趋势分析」页右上角手动载入对比示例">✕</button>
         </div>
@@ -173,7 +173,7 @@
             <button id="tab-view-galaxy" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-galaxy" tabindex="-1" onclick="switchTab('view-galaxy')" title="把每个片段画成圆点，看几本书的用词习惯离得近不近">
                 <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-atom"/></svg> 风格星系
             </button>
-            <button id="tab-view-dashboard" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-dashboard" tabindex="-1" onclick="switchTab('view-dashboard')" title="把几本书摆在一起比：整体水平、逐段走势，以及值得一看的片段">
+            <button id="tab-view-dashboard" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-dashboard" tabindex="-1" onclick="switchTab('view-dashboard')" title="将几本书并列对比：整体水平、逐段走势，以及值得一看的片段">
                 <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-bar"/></svg> 全书对比
             </button>
         </div>
@@ -202,7 +202,7 @@
                      （线上说「可发给同事」，本机说「只有这台电脑能打开」）。这里写的是线上那一句；
                      原来写死的「发给同事即可复现」在本机是假话，而点下去的回执偏偏说「只有本机能打开」
                      ——同一个控件前后自相矛盾（第四十二批）。 -->
-                <button id="copyLinkBtn" type="button" title="把当前指标、选书、视图复制成链接，发给同事即可复现（你自己上传的文本不在链接里）">🔗 复制此链接</button>
+                <button id="copyLinkBtn" type="button" title="把当前指标、选书、视图复制成链接，他人打开即可复现（你自己上传的文本不在链接里）">🔗 复制此链接</button>
                 <span class="export-divider" aria-hidden="true"></span>
                 <button id="exportMoreBtn" type="button" class="export-more-toggle" aria-expanded="false" aria-controls="export-more" title="矢量图、数据表、文字摘要与引用条目（BibTeX），低频使用，收在这里">更多导出 <span class="export-caret" aria-hidden="true">▾</span></button>
                 <span id="export-more" class="export-more" hidden>
@@ -231,10 +231,10 @@
             <div class="adv-header">
                 <div>
                     <h2 style="margin:0; color:#2f2a23; font-size: 18px;"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-line"/></svg> 基础趋势分析</h2>
-                    <small style="color:#6b6254">横轴是全书进度，纵轴是「观察角度」里选的这个指标；一格（一个点）约对应 1 万词。点一下图里的位置，就能看到那一段的详情。想直接看写好的结论，切到上面的「全书对比」。</small>
+                    <small style="color:#6b6254">横轴是全书进度，纵轴是「观察角度」里选的这个指标；一格（一个点）约对应 1 万词。点击图中位置即可查看该片段详情。如需直接查看结论，可切换到上方的「全书对比」。</small>
                 </div>
                 <div>
-                    <button type="button" id="demo-entry" class="demo-entry" hidden onclick="loadComparisonExample()" title="自动挑出当前观察角度下差别最大的一对书，并切到「全书对比」页看结论">载入对比示例</button>
+                    <button type="button" id="demo-entry" class="demo-entry" hidden onclick="loadComparisonExample()" title="自动挑出当前观察角度下差异最大的一对书，并切换到「全书对比」查看结论">载入对比示例</button>
                 </div>
             </div>
             <div class="controls">
@@ -273,7 +273,7 @@
                     <!-- 第四十三批删掉了括号里的「（一格约 1 万词）」：这一页标题下面那句
                          「一格（一个点）约对应 1 万词」就在同一屏的正上方，两个数字挨着印两遍。
                          前面「错开 1 千词、重叠 9 千词」已经把一格多长交代完了。 -->
-                    <p id="heatmap-scale-note" class="chart-scale-note" hidden>色标范围由当前选中的这几本书决定（图上「统一色标」那一行就是它）：换一批书，同一个数值的颜色会跟着变。所以不同次选择下截的图，颜色不能直接对比。另外两件事也一并说清：相邻两格是错开约 1 千词、重叠约 9 千词的滑动窗口，同一段原文会在好几格里重复出现，所以连续一片偏高的格子说的是「这一段整体偏高」，不等于这里有十几个各自独立的高值；每本书的格子大小不一样（格子多的那本书格子小），两本书横着对齐着看同一行没有意义，能横着比的只有颜色。</p>
+                    <p id="heatmap-scale-note" class="chart-scale-note" hidden>色标范围由当前选中的这几本书决定（图上「统一色标」那一行就是它）：换一批书，同一个数值的颜色会跟着变。所以不同次选择下截的图，颜色不能直接对比。另有两点需要说明：相邻两格是错开约 1 千词、重叠约 9 千词的滑动窗口，同一段原文会在好几格里重复出现，所以连续一片偏高的格子说的是「这一段整体偏高」，不等于这里有十几个各自独立的高值；每本书的格子大小不一样（格子多的那本书格子小），两本书横向对齐看同一行没有意义，可以横向比较的只有颜色。</p>
                 </div>
                 <div class="detail-panel" id="detailPanel" role="status" aria-live="polite">
                     <h3>▤ 数据详情</h3>
@@ -293,7 +293,7 @@
                         <small style="color:#6b6254">每个点的位置，根据书中高频小词<span id="galaxy-axis-words"></span>的使用习惯计算。点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或水平相似。</small>
                     </div>
                     <div>
-                        <button id="restartGalaxyBtn" type="button" onclick="restartGalaxy()" title="把被推开的点按原始坐标重新摆一遍（力导向会为了不重叠把点挪开一点）" style="padding:5px 15px;">↻ 重新布局</button>
+                        <button id="restartGalaxyBtn" type="button" onclick="restartGalaxy()" title="把被推开的点按原始坐标重新排布（力导向为避免重叠会略微移动点的位置）" style="padding:5px 15px;">↻ 重新布局</button>
                     </div>
                 </div>
                 <div class="galaxy-guide">
@@ -326,10 +326,10 @@
                     <div id="galaxy-hud" class="galaxy-hud">
                         <div class="hud-title">◎ 悬停查看附近点</div>
                         <div class="hud-content">
-                            <p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，看看它附近的点有什么共同特征。</p>
+                            <p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看附近各点的共同特征。</p>
                         </div>
                     </div>
-                    <div id="galaxy-loading" style="color:#2f2a23; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">正在加载...</div>
+                    <div id="galaxy-loading" style="color:#2f2a23; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">正在加载…</div>
                 </div>
             </div>
         </div>
@@ -354,7 +354,7 @@
                              （renderFilters 的注释里自己写着「和顶部的书名按钮是同一个动作」）。
                              两排相隔不到一屏，删掉本页这排、只留页顶那条（第四十三批，用户拍板）。
                              本页标题行因此只剩「重置视图」这一个本页独有的动作。 -->
-                        <button type="button" id="advResetBtn" class="adv-reset" onclick="advReset()" title="清空走势图上的框选，并让所有已加载的书都参与对比（刚打开时默认只选差别最大的一对，所以点这里书会变多，不是变回原样）">重置视图</button>
+                        <button type="button" id="advResetBtn" class="adv-reset" onclick="advReset()" title="清空走势图上的框选，并让所有已加载的书都参与对比（刚打开时默认只选差异最大的一对，所以点击后书会变多，并非回到初始状态）">重置视图</button>
                     </div>
                 </div>
 
@@ -362,7 +362,7 @@
                     <!-- 「复制结论」放在标题行、两块 live region 之外：正文都是 aria-live，
                          按钮若长在里面，每换一次书或指标都会把「复制 按钮」重念一遍。 -->
                     <h4>✦ 一句话解读<span class="insight-actions"><button id="copyConclusionBtn" type="button" class="insight-copy" title="把「一句话解读」和「值得一看的片段」一起复制成纯文字，可直接粘进笔记">复制结论</button></span></h4>
-                    <div id="insight-content" aria-live="polite"><span class="insight-muted">选择书籍后，这里会自动生成大白话解读。</span></div>
+                    <div id="insight-content" aria-live="polite"><span class="insight-muted">选择书籍后，这里会自动生成通俗解读。</span></div>
                     <div id="anomaly-content" class="anomaly-content" aria-live="polite"></div>
                 </div>
 
@@ -446,7 +446,7 @@
                 <h4>📜 原文片段</h4>
                 <div class="modal-text-note" id="modal-text-note"></div>
                 <div class="text-scroll-area">
-                    <p id="modal-long-text">正在加载文本...</p>
+                    <p id="modal-long-text">正在加载文本…</p>
                 </div>
                 <div class="modal-copy-row">
                     <button type="button" id="modal-copy-btn" class="copy-block-btn" hidden>⧉ 复制这段摘录</button>
@@ -467,21 +467,21 @@
             <h2 id="shelf-modal-title">🔑 书架编号</h2>
             <p class="shelf-modal-lead">
                 「我的图书馆」里的书存在服务器上，靠下面这个编号认领。清除浏览器数据、换台设备或换一个浏览器之后，
-                填上编号就能把书架接回来——连「删除」的权限一起。
+                填上编号即可恢复这个书架，包括「删除」的权限。
             </p>
 
             <div class="shelf-code-row">
-                <code id="shelf-code-value" class="shelf-code-value">（还没拿到，请刷新页面）</code>
+                <code id="shelf-code-value" class="shelf-code-value">（尚未获取，请刷新页面）</code>
                 <button type="button" id="shelf-code-copy" class="copy-block-btn">⧉ 复制编号</button>
             </div>
             <p class="shelf-code-warn">
-                注意：拿到这个编号的人，都能看到这个书架里的书。只在自己信得过的设备之间传，别贴到公开场合。
+                注意：拿到这个编号的人，都能看到这个书架里的书。请只在自己信得过的设备之间传递，不要发布到公开场合。
             </p>
 
             <div class="shelf-claim">
                 <label for="shelf-code-input">换设备时：填上原来的编号，切过去</label>
                 <div class="shelf-code-row">
-                    <input type="text" id="shelf-code-input" class="shelf-code-input" autocomplete="off" spellcheck="false" placeholder="粘贴或照抄书架编号">
+                    <input type="text" id="shelf-code-input" class="shelf-code-input" autocomplete="off" spellcheck="false" placeholder="粘贴或手动输入书架编号">
                     <button type="button" id="shelf-code-claim" class="copy-block-btn">切换到这个书架</button>
                 </div>
             </div>
@@ -504,11 +504,11 @@
             <h2 id="overwrite-modal-title">书架上已经有同名的书</h2>
             <p class="shelf-modal-lead" id="overwrite-modal-lead"></p>
             <p class="shelf-code-warn">
-                选「替换」之后，原来那一份的分析结果就找不回来了（服务器上没有回收站，也留不下旧版本）。
+                选「替换」之后，原来那一份的分析结果将无法找回（服务器上没有回收站，也留不下旧版本）。
             </p>
 
             <div class="shelf-code-row">
-                <button type="button" id="overwrite-cancel" class="copy-block-btn" onclick="cancelOverwriteUpload()">取消，什么也不改</button>
+                <button type="button" id="overwrite-cancel" class="copy-block-btn" onclick="cancelOverwriteUpload()">取消，不做任何改动</button>
                 <button type="button" id="overwrite-confirm" class="copy-block-btn" onclick="confirmOverwriteUpload()">替换它，继续上传</button>
             </div>
         </div>
@@ -979,7 +979,7 @@
             // ——那时没有「自动挑的」那句，说了才不丢信息。
             if (ratio >= 0.9) {
                 if (typeof isAutoPickedPair === 'function' && isAutoPickedPair()) return '';
-                return '这两本差不多就是这批书里差得最远的两本。';
+                return '这两本基本就是这批书里差距最大的两本。';
             }
             const tenths = Math.round(ratio * 10);
             if (tenths < 1) return '这个差距不到这批书里最大差距的一成。';
@@ -1038,7 +1038,7 @@
                         .map(b => `《${b.displayName || b.name}》${fmtMetric(b.currentStd)}`)
                         .join('、');
                     if (spread) {
-                        lines.push(`每本各自的起伏幅度（同一本书内各片段之间的标准差）：${spread}。差值和它比一比，再决定这个差距值不值得写进结论。`);
+                        lines.push(`每本各自的起伏幅度（同一本书内各片段之间的标准差）：${spread}。可与该差值对照，再决定这个差距是否值得写入结论。`);
                     }
                 }
             } else if (data.length === 1) {
@@ -1066,7 +1066,7 @@
                             ? `这本书比它们高出约 ${fmtMetric(diff)}`
                             : (diff < 0
                                 ? `这本书比它们低了约 ${fmtMetric(-diff)}`
-                                : '这本书与它们的水平差不多');
+                                : '这本书与它们的水平基本持平');
                         const scopeWord = brushScope ? `在框选的 ${brushScope} 区段内平均` : '平均水平';
                         lines.push(`作为参照，其它 ${otherMeans.length} 本已加载的书（含你自己上传的）${scopeWord}约为 ${fmtMetric(benchmark)}，${cmp}。`);
                     }
@@ -1101,7 +1101,7 @@
             // 差别最大的一对。这件事原来只在加载时弹一句提示，而结论会被复制、被导出，
             // 读结论的人看不到那句提示——所以结论本身也要留一笔。
             if (typeof isAutoPickedPair === 'function' && isAutoPickedPair()) {
-                lines.push('这两本是按「差距最大」自动挑出来的，不是你挑的——想比别的组合，换下方选书即可。');
+                lines.push('这两本是按「差距最大」自动挑出的，并非你手动选择——如需比较其他组合，更换下方选书即可。');
             }
 
             // 「整体」这个平均数的口径（第四十批）：重叠滑窗不是独立样本，本工具不做显著性判断。
@@ -1148,7 +1148,7 @@
                 .attr("dy", ".15em")
                 .attr("transform", "rotate(-30)")
                 .style("font-size", "10px")
-                .text(d => d.length > 18 ? d.substring(0, 16) + "..." : d);
+                .text(d => d.length > 18 ? d.substring(0, 16) + "…" : d);
 
             g.select(".y-axis").transition().duration(animMs(500)).call(d3.axisLeft(y).ticks(5));
 
