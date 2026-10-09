@@ -4346,3 +4346,59 @@ NRestarts=0     主动重启，不是崩溃后被拉起来的
 8. 「第一次来？」那条引导落在页面靠后（1400×900 实测顶部在 1519px），新手不会翻到。这是第二十七批有意排的，不是 bug，但作为「新手入口」它确实藏起来了——要不要动，需要产品决策。
 
 本批不 commit、不 push、不部署。
+
+### 7. 部署记录（2026-10-09，线上实测）
+
+推送 `7890ea1..708063e`。
+
+**这一次 cron 没接上。** 照例等了两分半再去看，服务器还停在上一批：
+
+```
+HEAD=7890ea1   origin=7890ea1
+2026-10-09 03:20:36 [ok] restarted, HEAD=7890ea1, serving
+fatal: unable to access 'https://github.com/zhangzefan525-maker/literature-fingerprinting.git/': Empty reply from server
+```
+
+自动部署日志的最后一行是 `Empty reply from server`——这台机器拉 github.com 又会时不时地拉不动（第三十四批那天是通的，所以这不是「一直坏」，是**时好时坏**）。手工补拉，**前两次都超时（`rc=124`），第三次才成功**：
+
+```
+try 1 rc=124
+try 2 rc=124
+try 3 rc=0    7890ea1..708063e  master     -> origin/master
+```
+
+随后 `git merge --ff-only origin/master` → `7890ea1..708063e` 快进，`systemctl restart literature-fingerprinting`。
+
+**线上状态核对：**
+
+| 核对项 | 结果 |
+|---|---|
+| `git rev-parse HEAD` | `708063e`——与本机 `master` 同一个 sha |
+| `git status --porcelain` | 只有未跟踪的 `requirements.server.txt`，原样保留 |
+| `systemctl is-active` / MainPID | `active` / `586923`（上一批是 `581315`，**确实重启了**） |
+| 工作进程 | 2 个（`586925`、`586926`） |
+| 重启时刻 | `Fri 2026-10-09 11:09:22 CST` |
+| `static/js/d3-charts.js` 字节数 | 266,282 |
+| 从 nginx 取回的同一份文件，sha256 | `ef143dbe60ff1a71…`——**与服务器磁盘上那份完全相同** |
+| `data/library/` | 空（0 项） |
+| `/visualization` / `/thesis/` | **200**（114,267 B）/ **200**，未受影响 |
+
+**线上真浏览器验收**（公网 `39.96.194.197`，头部 Chrome，只读，不改动任何数据）：
+
+| 验的是哪一处 | 线上量到的结果 |
+|---|---|
+| 整页可见文字 | `python` / `data/raw` / `控制台` / `部署` / `HTTP 数字` **五个模式全部 0 命中** |
+| 4 的状态码（错误兜底） | `getErrorMessage({status:500})` 返回「服务器暂时无法完成分析，请稍后重试。」；413 的专用文案原样保留；服务端自己写的 message 仍然透传 |
+| 4 的 console.warn | 线上同样收到 `[分析服务] HTTP 500` 与 `[分析服务] HTTP 404` |
+| 6/7 的空状态 | `updateBookSelector([])` 后显示「书架上还没有书。上传一个 .txt 文本就能开始分析。」 |
+| 控制台 | **零错误、零 404** |
+
+线上首页仍是 4 本内置示例书、默认观察角度仍是 `heatmap`——**这正是 §6.5 那条「页签叫基础趋势分析、默认却是热力图」的现场证据**，本批没动它。
+
+**一个要提醒后来人的地方：这台服务器的时钟在本批期间跳过一次。**
+
+上一批部署时，服务器自报的时刻是 `03:16:03 CST`，而当时本机（北京，UTC+8）是 11:16 左右；本批再看，服务器 `date` 是 `11:12 CST`，`timedatectl` 报 `Time zone: Asia/Shanghai (CST, +0800)`，与本机一致。
+
+差的是**整整 8 小时**，所以最像的解释是**当时那台机器按 UTC 走、时区标签却是 CST**，后来被改对了——不是时钟慢慢漂移（`uptime` 显示已开机 35 天，中途没重启过）。这只是根据「差值正好是 8 小时」倒推的猜测，**没有找到改动的记录，所以标成猜测而不是结论**。
+
+**实际影响**：`/var/log/literature-autodeploy.log` 与 `journalctl` 里、今天 11:00 之前落下的那些时间戳，都比真实时刻小约 8 小时。上面的日志片段是原样抄的，不要拿它去对这里的挂钟。这件事本身与本批改动无关，但如果哪天要靠日志排「到底几点部署的」，得先知道这个坑。
