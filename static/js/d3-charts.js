@@ -480,6 +480,13 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
 
         // 力导向的碰撞力会把点从真实坐标上推开一点才不重叠，读者有权知道位置是近似值
         lines.push('（点为了不互相压住会被轻轻推开一点，所以位置是近似的。）');
+
+        // 同色浅色区域的说明（第三十七批）。画面上多了一层编码，就得有一句话说它是什么，
+        // 否则读者只会看到几块「不知道哪来的底色」。只在真的画了两本以上时才说：
+        // 一本书的轮廓说不了「重叠」这件事，讲了反而让人去找一块并不存在的叠加区。
+        if (comparability.plotBooks.length >= 2) {
+            lines.push('（同一本书的点被一块同色的浅色区域圈住；两块区域叠在一起，说明这两本书的风格区间有重叠。）');
+        }
         if (comparability.independentBooks.length > 0) {
             warn = true;
             const names = comparability.independentBooks.map(getBookDisplayName).join('、');
@@ -1657,7 +1664,9 @@ function describeChartForScreenReader({ kind, booksArray }) {
             : '';
         return `风格星系图：${booksText}的每个片段各画成一个圆点，按高频小词用法排布，`
              + axisText
-             + `圆点越大表示「${getMetricLabel(currentMetric)}」越高，靠得近说明用词习惯接近。`
+             + `圆点越大表示「${getMetricLabel(currentMetric)}」越高，`
+             + `每本书的点外面还圈着一块同色的浅色区域，就是这本书大致占据的范围，`
+             + `靠得近说明用词习惯接近。`
              + `按 Tab 键可逐个片段查看，回车打开该片段的详情。`;
     }
 
@@ -4541,6 +4550,79 @@ function initStyleGalaxy() {
     const zeroY = back.append("line").attr("class", "zero-line").attr("display", "none");
 
     const g = svg.append("g");
+
+    // ---- 每本书的「地盘」（第三十七批）----
+    // 第三十六批把圆点收小、给每个点加了一圈纸色细缝之后，相邻的点各自留住轮廓，
+    // 「几本书挤在同一片区域」这件事就从「糊成一片」变成了「看不太出来」——实测
+    // 贴在一起的小团从 35 块涨到 48 块，用户当场问「以前小球是会有交融的，怎么没了」。
+    // 但把球改回去是错的：靠小球互相压住来表达「区域重叠」，本来就不该是这张图的
+    // 编码方式（点被压住的时候，个数和大小都读不出来了）。通行的做法是**另外画一层
+    // 区域**——把同一本书的点圈成一块半透明的色块，几块色块叠在一起，就说明这几本书
+    // 的风格区间有重叠（factoextra 的 addEllipses、dittoSeq 的 do.contour 都是这个
+    // 路子）。这样「一片」是有意画出来的，而且不必牺牲任何一个点自己的清晰度。
+    //
+    // 形状用凸包（d3.polygonHull）而不是密度等高线：实测四本书一起看时，每个凸包内部
+    // **不含任何别的书的点**（foreignInside 全空），所以凸包不会把别人的点圈进自家地盘；
+    // 等高线要另调带宽，布局一抖还可能分裂成好几块。凸包的顶点再交给 Catmull-Rom
+    // 闭合曲线抹圆，读起来是一块有边界的墨渍，不是一个数学多边形。
+    const territoryLayer = g.append("g").attr("class", "galaxy-territory");
+    // 色块要留在绘图格里。凸包本身就在点的范围内，但抹圆的曲线会往角上鼓出去一点，
+    // 放大之后鼓得更多——不裁的话它会漫过坐标轴压到刻度上（坐标轴在 g 之外，
+    // 不跟着缩放，玩家放大到 5 倍时色块早已越过画框）。圆点没有被裁，因为它们
+    // 本来就落在绘图格里，只是半径那么大；被裁掉的是凸包的“边角外溢”。
+    const territoryClip = defs.append("clipPath").attr("id", "galaxy-territory-clip");
+    territoryClip.append("rect")
+        .attr("x", margin.left)
+        .attr("y", margin.top)
+        .attr("width", plotW)
+        .attr("height", plotH);
+    territoryLayer.attr("clip-path", "url(#galaxy-territory-clip)");
+
+    // alpha(0.5) 是 Catmull-Rom 的常规取值：太大在折角处鼓得厉害，太小又退回折线
+    const territoryCurve = d3.line()
+        .curve(d3.curveCatmullRomClosed.alpha(0.5))
+        .x(p => p[0])
+        .y(p => p[1]);
+
+    const territoryPaths = new Map();
+    plotBooks.forEach(book => {
+        const colour = colorForBook(book);
+        // 只描边、不填充深色：4 本书的色块互相叠在一起时，两层 10% 的色叠出来会变成
+        // 第三种颜色（读屏会把「红+蓝=紫」当成还有第五本书）。所以填充压到 0.10 这一档，
+        // 身份主要靠那圈同色的细边来交代，叠色区就只是一块更深的纸色。
+        territoryPaths.set(book, territoryLayer.append("path")
+            .attr("class", "galaxy-territory-path")
+            .attr("fill", colour)
+            .attr("fill-opacity", 0.10)
+            .attr("stroke", colour)
+            .attr("stroke-opacity", 0.38)
+            .attr("stroke-width", 1.5)
+            .attr("stroke-linejoin", "round")
+            .attr("display", "none"));
+    });
+
+    // 力导向每帧都在动，地盘必须跟着重画，否则色块会停在上一帧的位置上。代价实测
+    // 可以忽略：每帧 4 次凸包，合计不超过 251 个点。
+    function drawTerritories() {
+        plotBooks.forEach(book => {
+            const path = territoryPaths.get(book);
+            const points = [];
+            for (let i = 0; i < allNodes.length; i++) {
+                const node = allNodes[i];
+                if (node.book === book) points.push([node.x, node.y]);
+            }
+            // 3 个点以下凸包就退化了（d3.polygonHull 对共线点会返回 2 个点甚至 null），
+            // 画出来是一条线，不如不画
+            const hull = points.length >= 3 ? d3.polygonHull(points) : null;
+            if (!hull || hull.length < 3) {
+                path.attr("display", "none");
+                return;
+            }
+            path.attr("display", null).attr("d", territoryCurve(hull));
+        });
+    }
+    drawTerritories();
+
     // 坐标轴刻度画在圆点之上，但落在绘图区之外，不会被圆点盖住
     const axisX = svg.append("g").attr("class", "galaxy-axis-x");
     const axisY = svg.append("g").attr("class", "galaxy-axis-y");
@@ -4776,6 +4858,7 @@ function initStyleGalaxy() {
         circles
             .attr("cx", d => d.x)
             .attr("cy", d => d.y);
+        drawTerritories();
         // 顺手记下落点，供下次进入时接着算（用户拖动后的位置也在这里被记下来）。
         // 复用同一个对象，不然 200 多个点乘以上百次迭代会白白造两万多个临时对象。
         allNodes.forEach(d => {
