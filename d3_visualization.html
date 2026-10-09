@@ -932,6 +932,15 @@
                 // 「最长 / 最短」是在用户勾的这几本里排出来的。不加限定，读者会写成
                 // 「A 是所有作家里句子最长的」——而它只是这次选中的两本里那个。
                 lines.push(`在所选 ${data.length} 本中，《${highest.displayName || highest.name}》${scopeWord}${cfg.high}（${fmtMetric(highest.currentMean)}），《${lowest.displayName || lowest.name}》${scopeWord}${cfg.low}（${fmtMetric(lowest.currentMean)}）。`);
+                // 光给两个平均数，读者会把差值的「有无」当成「大小」（第四十批）。
+                // 把每本自己的起伏幅度摆出来，让那个差值有个对照。
+                const spread = data
+                    .filter(b => isFiniteNumber(b.currentStd))
+                    .map(b => `《${b.displayName || b.name}》${fmtMetric(b.currentStd)}`)
+                    .join('、');
+                if (spread) {
+                    lines.push(`每本各自的起伏幅度（同一本书内各片段之间的标准差）：${spread}。差值和它比一比，再决定这个差距值不值得写进结论。`);
+                }
             } else if (data.length === 1) {
                 lines.push(`《${data[0].displayName || data[0].name}》的「${mLabel}」${brushScope ? '在框选区段内平均' : '整体水平'}为 ${fmtMetric(data[0].currentMean)}。`);
                 // 单书时给出基准参照：与其他已加载书籍的平均水平对比，让裸数字有意义。
@@ -984,6 +993,19 @@
                 if (stable && stable.currentStd > 0) {
                     lines.push(`在所选的书里，《${stable.displayName || stable.name}》的「${mLabel}」起伏最小（只就这一个指标而言）。`);
                 }
+            }
+
+            // 这两本不是读者挑的（第四十批）：首屏默认与「载入对比示例」都会替读者选出
+            // 差别最大的一对。这件事原来只在加载时弹一句提示，而结论会被复制、被导出，
+            // 读结论的人看不到那句提示——所以结论本身也要留一笔。
+            if (typeof isAutoPickedPair === 'function' && isAutoPickedPair()) {
+                lines.push('这两本是按「差距最大」自动挑出来的，不是你挑的——想比别的组合，换下方选书即可。');
+            }
+
+            // 「整体」这个平均数的口径（第四十批）：重叠滑窗不是独立样本，本工具不做显著性判断。
+            if (typeof buildAveragingNote === 'function') {
+                const avgNote = buildAveragingNote(data.map(d => d.name));
+                if (avgNote) lines.push(avgNote);
             }
 
             // 存一份给导出/「复制结论」用（d3-charts.js 里声明的 lastInsightLines）。

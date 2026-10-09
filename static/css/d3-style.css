@@ -2083,6 +2083,13 @@ button:hover {
     margin: 4px 0;
 }
 
+/* 章号口径补充（第四十批）：跟在同一行的后面，字号再小一档。
+   它说的是「这个标签是怎么来的」，不是新的结论，所以压得比正文轻。 */
+.chapter-location-hint {
+    font-size: 0.76rem;
+    color: var(--ink-50);
+}
+
 .book-overview {
     margin-top: 10px;
     padding-top: 8px;

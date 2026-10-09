@@ -14,6 +14,13 @@ function isLocalHost() {
     return LOCAL_HOSTNAMES.has(hostname);
 }
 
+// 导出物里跟在「在线视图」后面的本机说明（第四十批）。屏幕上、本机打开时链接是
+// localhost，发给别人打不开；导出物离开这台机器之后没人能补上这句话，所以凡是要写
+// 「在线视图」的地方都带上它。线上部署时地址是公网地址，返回空串。
+function localUrlNote() {
+    return isLocalHost() ? '；在线视图指向本机地址，只有本机可以打开' : '';
+}
+
 // 这行和下面那句隐私说明一起，构成首屏那条常驻提示。原来两句加起来约 130 字，1000px 宽的
 // 窗口里要折三行、整条 120px 高，而其中「勾选「存入我的图书馆」后……」半句与勾选框自己的
 // title 逐字重复（那个 title 里说得很完整），删掉；剩下的隐私告知必须留在明面上——折进
@@ -30,6 +37,12 @@ let smoothness = 3;
 let chartType = 'heatmap';
 let currentTab = 'view-main'; // 记录当前标签页
 let builtinBookNames = [];    // 服务器上常驻的示例书（用作解读参照基准，不含用户自己上传的）
+
+// 本次会话吃到的这份语料的内容指纹（服务端在 /api/fingerprint-data 的 ETag 头上给，
+// 内容一变它就变）。导出的摘要和数据表会写上它（第四十批）：导出物离开这个页面之后，
+// 读的人（导师说「重算一遍」）需要知道当时算的是哪一份数据。它是**整份语料一个指纹**，
+// 不是每本书一个；上传/删除一本书，所有书的这一行都会一起变。
+let corpusFingerprint = null;
 
 // 「全书对比」页那两块结论的最近一次渲染结果，由页面内另一段脚本在渲染时写入
 // （本文件先于那段脚本加载，所以在这里声明不会撞上暂时性死区）。导出摘要与
@@ -269,13 +282,28 @@ function buildShareCaveats() {
 function copyShareLink(button) {
     syncUrlState();
     const uploaded = getUnsharedUploadedBooks();
-    const okText = uploaded.length ? `✓ 链接已复制（不含你上传的 ${uploaded.length} 本）` : '✓ 链接已复制';
+    // 本机打开时复制出来的是 localhost 链接（buildStateUrl 用的是浏览器当前地址）。
+    // 按钮上的说明「发给同事即可复现」在线上是真的、在本机是假的——线上地址是公网地址。
+    // 不改那句话（对着线上说过头的话去改，会让线上变成说少），改的是本机这一条提示（第四十批）。
+    const localPart = isLocalHost() ? '（本机地址，只有本机能打开）' : '';
+    const okText = uploaded.length
+        ? `✓ 链接已复制${localPart}（不含你上传的 ${uploaded.length} 本）`
+        : `✓ 链接已复制${localPart}`;
     copyTextToClipboard(buildStateUrl(), button, okText);
+    // 两条提醒都往同一条状态栏写，所以合成一句再发一次——分两次调用的话后一条会把
+    // 前一条顶掉（两条同时成立时用户只看得到后半句，本机地址那句就白说了）。
+    const notices = [];
+    if (isLocalHost()) {
+        notices.push('这条链接指向本机地址，只有这台电脑能打开。');
+    }
     if (uploaded.length > 0) {
         const names = uploaded.map(getBookDisplayName).join('、');
         const where = isLocalHost() ? '这台电脑' : '这个服务器';
-        setGlobalStatus('notice', `链接里没有《${names}》：这是你自己上传的文本，只存在${where}上，别人打开链接时看不到。`
-            + '想把完整结果分享出去，请用「更多导出 → 导出摘要」。');
+        notices.push(`链接里没有《${names}》：这是你自己上传的文本，只存在${where}上，别人打开链接时看不到。`);
+    }
+    if (notices.length > 0) {
+        notices.push('想把完整结果分享出去，请用「更多导出 → 导出摘要」。');
+        setGlobalStatus('notice', notices.join(''));
     }
 }
 
@@ -419,6 +447,19 @@ function formatMetric(value, metric = currentMetric) {
     if (!isFiniteNumber(value)) return '暂无';
     const digits = getMetricDigits(metric);
     return digits === 0 ? String(Math.round(value)) : value.toFixed(digits);
+}
+
+// 导出数据表里的数字格式（第四十批）。表格原先直接把原始浮点数写进去，于是出现
+// 0.009052769287855193 这种 18 位小数——屏幕上是 2–4 位，两边对不上；而 18 位里
+// 没有任何一位是真实的（分词规则和窗口大小决定不了小数点后第 18 位）。
+// 规则取「4 位有效数字」，不是「4 位小数」：坐标量级只有 ±0.009，取 4 位小数只剩
+// 2 位有效数字（0.0091），等于把值抹掉。极小的数退化成科学计数法时按原值输出，别
+// 让表格里出现「1.2e-7」这种在 Excel/R 里要靠猜的写法。
+function formatExportNumber(value) {
+    if (!isFiniteNumber(value)) return '';
+    if (value === 0) return '0';
+    const text = Number(value).toPrecision(4);
+    return text.includes('e') ? String(Number(value)) : text;
 }
 
 function getMetricValues(bookName, metric) {
@@ -812,6 +853,48 @@ function pickMostDifferentPair() {
         .filter(item => isFiniteNumber(item.mean))
         .sort((a, b) => a.mean - b.mean);
     return ranked.length > 1 ? [ranked[0].name, ranked[ranked.length - 1].name] : candidates.slice(0, 2);
+}
+
+// 当前选中的，是不是「工具替你挑的那一对」（首屏默认，或点过「载入对比示例」）。
+// 默认选书是替读者做了一次主：挑的是当前指标下差别最大的两本，而不是随便两本。
+// 这件事原来只在加载时弹一句提示，滚过去就没了——而它会跟着「复制结论」「导出摘要」
+// 一起离开这个页面，读的人（导师、同门）看不到那句提示（第四十批）。
+function isAutoPickedPair() {
+    if (!selectedBooks || selectedBooks.size !== 2) return false;
+    const picks = pickMostDifferentPair();
+    if (picks.length !== 2) return false;
+    return picks.every(name => selectedBooks.has(name));
+}
+
+// 「整体」这类数字的口径提醒（第四十批）。它回答读者拿到一个平均数后一定会问的两件事：
+// 这个平均数背后有没有起伏、以及能不能拿去做检验。
+// 片段是重叠滑窗切出来的（默认相邻重叠 9000 词），把它们当成互相独立的样本会高估样本量，
+// 在近重复的序列上算出来的「标准差」也就不是它字面上给人的那个意思。所以这里明说
+// 本工具不做显著性判断——不写这一句，0.009 和 0.011 很容易被顺手写成「显著不同」。
+function buildAveragingNote(books) {
+    const metas = (books || []).map(name => normalizeBookMeta(name)).filter(Boolean);
+    if (metas.length === 0) return '';
+    const overlaps = Array.from(new Set(metas.map(m => m.overlap).filter(isFiniteNumber)));
+    const overlapText = overlaps.length === 1 && overlaps[0] > 0
+        ? `相邻片段之间重叠约 ${overlaps[0]} 词`
+        : '相邻片段之间有大段重叠';
+    return `这里的「整体」是各片段数值的平均数，${overlapText}、彼此并不是独立的样本；`
+        + '所以这些数只适合用来描述和定位片段，本工具不做显著性判断。';
+}
+
+// 三个标量指标能不能跨书比（第四十批）。原来的可比较性说明只讲了功能词投影，
+// 对平均句长 / 用词重复度 / 独特词丰富度一个字都没有，读者只能自己猜。
+// 判据是实测的：四本内置书的每一个片段都正好是 blockSize 词，三个标量因此是在
+// 等长样本上算出来的。块长不一致时不能这么说，退回到不承诺。
+function buildScalarComparabilityNote(books) {
+    const metas = (books || []).map(name => normalizeBookMeta(name)).filter(Boolean);
+    if (metas.length < 2) return '';
+    const sizes = Array.from(new Set(metas.map(m => m.blockSize).filter(isFiniteNumber)));
+    if (sizes.length !== 1) {
+        return '这几本书的片段长度不一致，平均句长、用词重复度、独特词丰富度不宜直接跨书比较，请以走势图和原文为准。';
+    }
+    return `平均句长、用词重复度、独特词丰富度都是在同样长度的片段（每段 ${sizes[0]} 词）上算出来的，`
+        + '所以这三个数可以跨书直接比较；独特词丰富度随篇幅变化很小（公式里篇幅取的是对数），字数相差不大时也可比。';
 }
 
 // 「载入对比示例」：挑出在当前观察角度下差别最大的两本内置书
@@ -1640,6 +1723,12 @@ async function loadRealData() {
         showLoading('正在加载数据...');
 
         const response = await fetch(API_ENDPOINTS.fingerprintData);
+        // 服务端把「这份语料是什么」压成一个指纹放在 ETag 头上，供缓存判断用；
+        // 导出的摘要与数据表顺手带上它（第四十批），让导出物能说清自己算的是哪一份数据。
+        // ETag 形如 `"abc123"` 或弱验证器 `W/"abc123"`，去掉包装只留指纹本身。
+        const etag = response.headers.get('ETag') || '';
+        const fingerprint = etag.replace(/^W\//, '').replace(/"/g, '').trim();
+        corpusFingerprint = fingerprint || null;
         const contentType = response.headers.get('content-type') || '';
         const data = contentType.includes('application/json') ? await response.json() : null;
         if (!response.ok || !data || data.status !== 'success') {
@@ -2553,7 +2642,7 @@ function showDetail(data, bookName) {
     const locationText = formatBlockLocation(bookName, data.block) + formatWordCount(data.wordCount);
     const chapter = getBlockChapter(bookName, data.block);
     const chapterHtml = chapter
-        ? `<p class="chapter-location">🔖 所在章节：${escapeHtml(chapterTitle(chapter))} · ${escapeHtml(chapterLabel(chapter))}</p>`
+        ? `<p class="chapter-location" title="${escapeHtml(CHAPTER_LABEL_HINT)}">🔖 所在章节：${escapeHtml(chapterTitle(chapter))} · ${escapeHtml(chapterLabel(chapter))}<span class="chapter-location-hint">（标的是窗口正中间落在的那一章）</span></p>`
         : '';
     const overviewText = formatBookOverview(bookName);
     const overviewHtml = overviewText
@@ -2609,8 +2698,13 @@ function updateMetricHint() {
     const el = document.getElementById('metric-hint');
     if (!el) return;
     const hints = {
-        sentenceLength: '一句话平均几个词。句子长，读起来更书面、更正式；句子短，更口语、更利落。',
-        simpsonIndex: '这本书是不是翻来覆去用同一批词。数值越高越重复（词有点单调）；越低，用词越多样。',
+        // 原句是「句子长，读起来更书面、更正式；句子短，更口语、更利落」（第四十批删）。
+        // 「长句＝书面／正式」是一种常见的印象，不是这个工具量出来的东西——量出来的是词数，
+        // 「正式」与否要另立一套语体判据；写在指标说明里等于借工具的口说了一句没根据的话。
+        sentenceLength: '一句话平均几个词。句子长，一句话装的信息多、读得慢；句子短，读起来更利落。长短本身不代表写得好坏，也不等同于文体的正式程度。',
+        // 补上它与「独特词丰富度」的镜像关系（第四十批）：两个指标算的是同一件事的两面，
+        // 读者常把它们当成两个独立证据，于是把同一件事数了两遍（两个指标不合并，只加这一句）。
+        simpsonIndex: '这本书是不是翻来覆去用同一批词。数值越高越重复（词有点单调）；越低，用词越多样。它和「独特词丰富度」是一枚硬币的两面：一件事量了两次，一个高另一个就低，不要当成两条独立的证据。',
         hapaxLegomena: '由「总词数、不同词的个数、只出现过一次的词数」综合算出。它通常不是 0–1 的比例，也不是百分比——数值越大，一般说明用词越丰富、越不单调。这个数对篇幅的依赖很弱（公式里篇幅取的是对数），字数相差不大的书可以直接比；字数差到好几倍时，光篇幅本身就会把这个数推高一点。',
         // 原句是「点越靠近只说明这些词的用法越像」——主语是「点」，谓语说的是「词的用法」，
         // 读起来像句子缺了半截（第三十八批）。补上主语与宾语：谁靠近、什么像、像到什么程度为止。
@@ -2678,6 +2772,13 @@ function normalizeBookMeta(bookName) {
         projection: raw.projection || null
     };
 }
+
+// 章节标签的口径（第四十批）。标签取的是「片段窗口正中间」落在哪一章，而一格横跨 4–6 章。
+// 这带来一个不显眼但会误导人的后果：全书第 1 章永远标不到——实测 Tom Sawyer 35 章里
+// 只有 31 章可达、Huckleberry Finn 43 章里只有 40 章可达，两本书的第 1 章都在可达集合之外，
+// 导出的数据表第一行因此直接写着「第 2 章」。标签规则本身不改（改了会让所有词位置平移），
+// 但口径必须说出来，否则读者会以为第 1 章没有片段。
+const CHAPTER_LABEL_HINT = '标签取的是「片段窗口正中间」落在的那一章（一格约横跨 5 章）。所以相邻几格常标到同一章，全书第 1 章也可能一直不被标到。';
 
 // 某一章：片段 i 覆盖第 [i*step, i*step+blockSize) 个词，
 // 取片段中点所在的章（跨章片段不会被硬塞给上一章）。
@@ -3063,7 +3164,10 @@ function getMetricContextLine(metric) {
     const parts = [];
     if (baseline) {
         const label = builtinLoaded.length > 0 ? '内置示例书' : '当前已加载的书';
-        parts.push(`参考区间：${label}（${baseline.count} 本）的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}，这只是个参照，不是好坏标准。`);
+        // 「这只是个参照」三个字不够（第四十批）：读者照样会把它读成常模。
+        // 内置书只有 4 本，把「样本有多小」直接说出来，比只说「不是好坏标准」有用。
+        const caveat = `只有这 ${baseline.count} 本，够不上常模——`;
+        parts.push(`参考区间：${label}（${baseline.count} 本）的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}。${caveat}它只用来判断你的书落在哪一头，不是好坏标准。`);
     }
     if (selected && !sameAsBaseline) {
         // 只选了一本时，「在 X – X 之间」是句废话（最小值等于最大值），改说平均水平
@@ -3081,6 +3185,27 @@ function getMetricContextLine(metric) {
         }
     }
     if (parts.length === 0) return '';
+
+    // 三个标量为什么能跨书比（第四十批）：参照区间报了「你在 14.48–18.81 之间」，
+    // 却没说过这些数是不是同一把尺子量出来的。片段等长就成立（见 buildScalarComparabilityNote）。
+    if (selectedNames.length >= 2) {
+        const sizes = new Set(selectedNames
+            .map(name => normalizeBookMeta(name)).filter(Boolean)
+            .map(m => m.blockSize).filter(isFiniteNumber));
+        if (sizes.size === 1) {
+            parts.push(`这几本都是在同样长度的片段（每段 ${Array.from(sizes)[0]} 词）上算的，数字可以直接比。`);
+        }
+    }
+
+    // 上传的文本与内置示例书的清洗口径不同（第四十批）。内置书取自 Project Gutenberg，
+    // 工具剥掉的是它的授权声明那一段（书名页与目录留在正文里，照样计入）；你自己上传的
+    // 文本按原样分析，如果它自带来源说明、版权页之类，那些也会被算进去。两类混着比时
+    // 不说明，读者会以为「同样的处理，为什么对不上」。
+    const uploadedSelected = selectedNames.filter(name => !builtinBookNames.includes(name));
+    if (uploadedSelected.length > 0) {
+        const label = selectedNames.length === 1 ? '这一本' : `其中 ${uploadedSelected.length} 本`;
+        parts.push(`${label}是你上传的文本，按你给的原样分析（内置书会额外剥掉 Project Gutenberg 的授权声明那一段，你自己的书没有这一层）。`);
+    }
 
     let line = parts.join(' ');
     // hapaxLegomena 那句「对篇幅的依赖很弱」原本挂在这里，第二十六批挪进了
@@ -3538,8 +3663,19 @@ function exportProvenanceLines(maxWidth) {
     const where = currentTab === 'view-galaxy'
         ? '风格星系'
         : (currentTab === 'view-dashboard' ? '全书对比' : (chartType === 'line' ? '折线趋势图' : '指纹热力图'));
+    // 坐标模型编号只挂在风格星系这一张上（第四十批）。星系的横纵坐标是坐标模型算出来的
+    // （轴上那些「解释 X% 的差异」就是它给的），而模型编号此前只写在 BibTeX 与文本摘要里，
+    // 图上没有——图贴进论文就与页面脱钩，读者没法从图里知道坐标是谁给的。
+    // 「全书对比」「热力图」「折线趋势」画的都是标量指标，不用这个模型，盖上去是无用信息。
+    let modelPart = '';
+    if (currentTab === 'view-galaxy') {
+        const shared = getSharedProjection(getExportBooks());
+        if (shared && shared.model && shared.model.modelId) {
+            modelPart = `　坐标模型：${shared.model.modelId}`;
+        }
+    }
     // 时间用本地时间（和文件名、和文本摘要一致），不用 toISOString 的 UTC
-    const text = `文印·文学指纹　${where}　观察角度：${getMetricLabel(currentMetric)}　${new Date().toLocaleString('zh-CN')} 生成`;
+    const text = `文印·文学指纹　${where}　观察角度：${getMetricLabel(currentMetric)}${modelPart}　${new Date().toLocaleString('zh-CN')} 生成`;
     // 按画布实际宽度折行：署名是 10px 字，CJK 近似全宽，所以每字算 10px，
     // 左右各留 24px 边距。下限 24 字——画布再窄也别折成一堆碎片，那还不如让它出去。
     const budget = Math.max(24, Math.floor(((maxWidth || 800) - 48) / 10));
@@ -3996,7 +4132,19 @@ function copyConclusion(button) {
         return;
     }
     const header = `文印·文学指纹分析 · 结论（观察角度：${getMetricLabel(currentMetric)}；统计范围：${describeExportScope()}）`;
-    copyTextToClipboard([header, '', parts.join('\n\n')].join('\n'), button, '✓ 结论已复制');
+    // 出处尾注（第四十批）。原来复制出来的这段只有标题加正文——没有时间、没有链接、
+    // 没有模型编号、没有「看的是哪几本」。这段文字是拿去粘进笔记、发进群、写进论文的，
+    // 半个月后连「当时比的是哪两本」都要猜。尾注与导出摘要逐字一致（同一次导出、
+    // 同一个口径），所以这里直接复用摘要那套函数，不另写一份。
+    const books = getExportBooks();
+    const footer = [
+        `生成时间：${new Date().toLocaleString('zh-CN')}`,
+        `选书与数据版本：${describeCorpusVersion(books)}`,
+        buildComparabilitySentence(books),
+        `统计范围：${describeExportScope()}`,
+        `在线视图：${buildStateUrl()}${localUrlNote()}`
+    ].filter(Boolean).join('\n');
+    copyTextToClipboard([header, '', parts.join('\n\n'), '', '——', footer].join('\n'), button, '✓ 结论已复制');
 }
 
 // ==========================================
@@ -4087,6 +4235,41 @@ function describeExportScope() {
     return `走势图框选的 ${(range[0] * 100).toFixed(1)}%–${(range[1] * 100).toFixed(1)}% 区段（与「全书对比」页上的数字同一口径）`;
 }
 
+// 导出物里的「这次算的是哪一份数据」（第四十批）。内置示例书取自随工具发布的固定版本，
+// 用户上传的文本各有各的来源与版本；要把两者分开说，否则读者会以为「内置书」也是他给的。
+// 语料指纹由服务端对整份语料算出（见 corpusFingerprint），内容一变它就变——它能证明
+// 「两次导出的数字来自同一份输入」。但它是整份语料一个指纹，不是每本书各一个。
+function describeCorpusVersion(books) {
+    const names = Array.isArray(books) ? books : [];
+    const builtinCount = names.filter(name => builtinBookNames.includes(name)).length;
+    const uploadedCount = names.length - builtinCount;
+    const composition = `本次导出含内置示例书 ${builtinCount} 本`
+        + (uploadedCount > 0 ? ` + 你自己上传的 ${uploadedCount} 本` : '');
+    const fingerprint = corpusFingerprint ? `语料指纹 ${corpusFingerprint}` : '语料指纹未记录';
+    return `${composition}；${fingerprint}。指纹由服务端对整份语料算出，内容一变它就变——只能证明两次导出用的是同一份语料，不是每本书各有一个。`;
+}
+
+// 正文起点（第四十批）。内置书取自 Project Gutenberg，本书自己的书名页和目录留在正文之前，
+// 第 0 格因此把书名页与目录也算进去了（实测 Tom Sawyer 正文从第 984 个词起、Huckleberry Finn
+// 从第 1190 个词起；清洗管线只剥 Gutenberg 的授权声明，不剥书名页）。这条规则不改——改了会
+// 让所有「起始词位置」平移——但要把偏移量交给读者：拿片段位置回原文核对时先减掉它。
+function describeFrontMatter(books) {
+    const items = (Array.isArray(books) ? books : []).map(name => {
+        const meta = normalizeBookMeta(name);
+        const first = meta && Array.isArray(meta.chapters) && meta.chapters.length > 0 ? meta.chapters[0] : null;
+        const start = first && isFiniteNumber(first.wordStart) ? first.wordStart : 0;
+        return { name, start };
+    });
+    const withFrontMatter = items.filter(item => item.start > 0);
+    if (withFrontMatter.length === 0) {
+        return '各书正文之前没有识别到书名页或目录；「起始词位置」仍可能与原文词序有细微出入，核对时请以片段原文为准。';
+    }
+    const listed = withFrontMatter
+        .map(item => `《${getBookDisplayName(item.name)}》正文从第 ${item.start + 1} 个词开始`)
+        .join('、');
+    return `${listed}（之前的书名页、目录等前置内容也计入了分析）。拿「起始词位置」回原文核对时，请先减掉这段偏移。`;
+}
+
 // 按片段序号取出某指标的原始条目（按 block 对齐，避免四个指标之间错位）
 function getBlockSeriesMap(bookName, metric) {
     const map = new Map();
@@ -4153,12 +4336,23 @@ function buildMethodsParagraph(books) {
     // 来源要说准：clean_text 对**所有**书都跑，但只有带 Gutenberg 页眉页脚的文件才真被剥掉那层。
     // 原来那句话读起来像「每本书都清理过 Gutenberg 页眉」，对上传的其它来源文本是假话。
     parts.push(`文本统一空白、还原常见缩写；若来自 Project Gutenberg，另清理其页眉页脚（其它来源的文本原样保留，没有这层清理）。按每片段 ${blockSizes.join('/')} 词、相邻片段重叠 ${blockSizes.map((size, i) => size - steps[i]).join('/')} 词的滑动窗口切分。`);
+    // 缩写还原到底还原了哪些（第四十批）。这句话原来只说「还原常见缩写」，而它直接改平均句长：
+    // it's 算一个词，展开成 it is 就是两个词，一句话的词数随之变大。规则是固定有限的 30 条
+    // （见 src/data_loader.py 的 CONTRACTIONS），把范围写出来，别人才能照着复现这一步。
+    parts.push('其中「还原常见缩写」指把固定的 30 条英语缩写展开成完整形式（如 isn\'t → is not、'
+        + 'can\'t → cannot、it\'s → it is、let\'s → let us），完整清单见 data_loader.py 的 CONTRACTIONS；'
+        + '这一步会让每句话的词数变多、平均句长随之变大，是它与其他工具结果对不上的常见原因之一。');
     parts.push('计算指标包括平均句长、用词重复度（Simpson\'s D）、独特词丰富度（Honoré R）与功能词二维投影。');
     parts.push(buildComparabilitySentence(books));
+    // 三个标量能不能跨书比（第四十批）：原来的可比较性说明只讲了功能词投影。
+    parts.push(buildScalarComparabilityNote(books));
+    // 正文起点（第四十批）：内置书的名著把书名页与目录留在了正文前面，第 0 格把它们也算了进去。
+    parts.push(describeFrontMatter(books));
     if (chapterCounts.length > 0) {
         parts.push(`章节边界由章节标题自动识别（本次识别到 ${chapterCounts.join('、')} 章），用于定位片段所在的章节；章号是识别结果，不是人工标注的章号。`);
     }
-    parts.push(`生成时间：${new Date().toLocaleString('zh-CN')}。在线视图：${buildStateUrl()}`);
+    parts.push(`数据版本：${describeCorpusVersion(books)}`);
+    parts.push(`生成时间：${new Date().toLocaleString('zh-CN')}。在线视图：${buildStateUrl()}${localUrlNote()}。`);
     return parts.join('');
 }
 
@@ -4191,7 +4385,7 @@ function exportTableData() {
             const words = series.functionWords.get(i) || series.sentenceLength.get(i) || {};
             const value = (key) => {
                 const item = series[key].get(i);
-                return item && isFiniteNumber(item.value) ? String(item.value) : '';
+                return item ? formatExportNumber(item.value) : '';
             };
             const style = series.functionWords.get(i);
             rows.push([
@@ -4202,8 +4396,8 @@ function exportTableData() {
                 value('sentenceLength'),
                 value('simpsonIndex'),
                 value('hapaxLegomena'),
-                style && isFiniteNumber(style.value) ? String(style.value) : '',
-                style && isFiniteNumber(style.value_y) ? String(style.value_y) : '',
+                formatExportNumber(style && style.value),
+                formatExportNumber(style && style.value_y),
                 Array.isArray(words.keywords) ? words.keywords.join(' ') : ''
             ]);
         }
@@ -4226,9 +4420,17 @@ function exportTableData() {
     const comments = [
         '# 文印·文学指纹分析 数据表',
         `# 生成时间：${new Date().toLocaleString('zh-CN')}`,
+        `# 数据版本：${describeCorpusVersion(books)}`,
         `# 指标口径：平均句长（词/句）；用词重复度（Simpson，越高越重复）；独特词丰富度（Honoré R，越高用词越丰富）；风格走向_横/纵轴（高频小词用法的二维坐标）`,
+        `# 数值精度：全部 4 位有效数字（原始值是分词与滑窗算出来的，再多的位不是真实信息）`,
         `# 统计范围：${describeExportScope()}`,
         `# 片段口径：${windowSpecs.join('；')}。同一段原文会被反复计入，请勿把这些行当作互相独立的样本，按行做显著性检验会高估样本量。`,
+        // 章节标签的口径（第四十批）：表里那一列写的是「窗口正中间」落的那一章，
+        // 而一格横跨 4–6 章；不说清楚，读者会以为第 1 章没有片段（它确实永远标不到）。
+        `# 章节口径：${CHAPTER_LABEL_HINT}`,
+        // 正文起点（第四十批）：内置书取自 Project Gutenberg，书名页与目录留在正文之前，
+        // 第 0 格因此吃进了它们。把「正文从第几个词开始」写出来，读者才知道偏移量。
+        `# 正文起点：${describeFrontMatter(books)}`,
         `# 数据行数：${rows.length - 1}`
     ];
 
@@ -4294,8 +4496,9 @@ function exportCitation() {
     const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
     // 本机打开时 url 是 localhost，别人点开是打不开的，得在 note 里说清楚
     // 这条 note 会跟着引用条目进文献管理软件、进论文，读它的人不知道 localhost 是什么（第三十五批）。
-    // 意思不能丢：本机地址的链接发给同门是打不开的。
-    const localUrlNote = isLocalHost() ? '；在线视图指向本机地址，只有本机可以打开' : '';
+    // 意思不能丢：本机地址的链接发给同门是打不开的。（第四十批抽成公共函数，
+    // 「复制结论」的尾注也用同一句，免得两处各写一份、日后改一处漏一处。）
+    const localUrlNoteText = localUrlNote();
 
     // 原著条目。学生把这段贴进参考文献时，真正要引的是作品本身，不是这个工具；
     // 旧版只发一条 author = 本工具的 @misc，等于把「文印」写成了《白牙》的作者，
@@ -4314,12 +4517,15 @@ function exportCitation() {
     ];
 
     knownSources.forEach(({ src }) => {
+        // 不再写 `publisher = {Project Gutenberg}`（第四十批）：这条的 year 是作品**首次出版**
+        // 的年份（1876），而 Project Gutenberg 到 1971 年才成立——两者并排等于说这部小说
+        // 1876 年由 Gutenberg 出版。电子版的来源本来就在 note 与 url 里，删掉这个字段即可，
+        // 不另填「原始出版社」（那个信息在本书的 Gutenberg 头部里可靠地读不到）。
         chunks.push([
             `@book{${src.key},`,
             `  author    = {${src.author}},`,
             `  title     = {${src.title}},`,
             `  year      = {${src.year}},`,
-            `  publisher = {Project Gutenberg},`,
             `  note      = {电子文本：Project Gutenberg eBook \\#${src.ebook}，发布于 ${src.released}},`,
             `  url       = {https://www.gutenberg.org/ebooks/${src.ebook}}`,
             '}',
@@ -4343,7 +4549,7 @@ function exportCitation() {
         `  year         = {${now.getFullYear()}},`,
         `  month        = {${monthNames[now.getMonth()]}},`,
         `  howpublished = {在线交互式分析（Keim \\& Oelke 2007 指标口径）},`,
-        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNote}${knownSources.length ? `；原著条目见本文件开头的 @book` : ''}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
+        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNoteText}${knownSources.length ? `；原著条目见本文件开头的 @book` : ''}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
         `  url          = {${buildStateUrl()}}`,
         '}',
         ''
