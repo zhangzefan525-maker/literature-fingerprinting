@@ -405,6 +405,10 @@ function getGalaxyComparability(books) {
         independentBooks: others,
         axisExtent: first ? first.proj.axisExtent : null,
         axisLabels: first ? (first.proj.axisLabels || []) : [],
+        // 各成分解释了多大比例的差异，横轴纵轴各一个（第三十六批）。
+        // 这是解读这张图的前提：横轴 69%、纵轴 8.5%，差八倍——「两点靠得近」
+        // 几乎完全由横向位置决定。以前这个数只出现在导出的 BibTeX 里，图上没有。
+        explainedVarianceRatio: first ? (first.proj.explainedVarianceRatio || []) : [],
         modelId: first ? first.proj.modelId : null,
         mixedModel: false
     };
@@ -450,17 +454,32 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
         lines.push('⚠ 当前选中的书没有共同的坐标基准（多为旧版数据或不同模型生成的坐标），下面按「各书各自计算」的方式摆放：点与点之间的距离不可直接比较。重新上传一次 .txt 即可获得可比坐标。');
     } else {
         (comparability.axisLabels || []).forEach(text => lines.push(text));
+
+        // 两个轴各自承担了多少差异，是解读这张图的前提，以前只出现在导出的 BibTeX 里。
+        // 横轴 69.2%、纵轴 8.5%，差八倍——不说的话，读者会把「靠得近」当成
+        // 整体风格接近，其实那几乎全是横向位置在说话（第三十六批）。
+        const ratios = (comparability.explainedVarianceRatio || []).slice(0, 2).filter(isFiniteNumber);
+        if (ratios.length === 2) {
+            lines.push(`横轴承担的差异远多于纵轴（${(ratios[0] * 100).toFixed(1)}% 对 ${(ratios[1] * 100).toFixed(1)}%），` +
+                `所以「靠得近」主要说明横向位置接近；坐标原点是内置语料的平均水平。`);
+        }
+
         // 可比时用的是与内置示例书共用的那套固定坐标范围（resolveGalaxyExtent 的
-        // fixedExtent 分支），不随选书改变，所以只选一两本时点会挤在画布中间一小块。
-        // 实测 1440 与 900 两种宽度下点云都只占到画布宽度的三成——这是设计，不是画坏了，
-        // 但页面从来没说过，用户容易以为图出问题了。
+        // fixedExtent 分支），不随选书改变，所以只选一两本时点只会占到画布的一角。
+        // 实测 1440 与 900 两种宽度下点云都只占到画布宽度的三成上下——这是设计，不是画坏了，
+        // 但页面从来没说过，用户容易以为图出问题了。第三十六批补上坐标轴之后，
+        // 空出来的地方不再只是一片空白，而是「有刻度的余地」，所以这句话也改写：
+        // 原来写「集中在中间一小块」，实测点聚在**左**半边，说「中间」反而对不上。
         //
         // 条件必须卡在这里：独立模式（各书各自算，范围不共享）下这句话是假话，
         // 而且会和同一个面板上的「各书各自计算」告警直接打架；outOfRange 时范围已经
-        // 被扩展过去容纳超界的数据，点也不再挤在中间，说了反而误导。
+        // 被扩展过去容纳超界的数据，点也不再挤在一角，说了反而误导。
         if (extent && !extent.outOfRange) {
-            lines.push('（坐标范围与内置示例书共用、不随选书改变，所以只选一两本时点会集中在中间一小块；这是正常的。）');
+            lines.push('（空出来的部分是「与内置示例书共用坐标范围」的结果，不是没画出来。想看得更细可以滚轮放大，坐标轴会跟着重新标注。）');
         }
+
+        // 力导向的碰撞力会把点从真实坐标上推开一点才不重叠，读者有权知道位置是近似值
+        lines.push('（点为了不互相压住会被轻轻推开一点，所以位置是近似的。）');
         if (comparability.independentBooks.length > 0) {
             warn = true;
             const names = comparability.independentBooks.map(getBookDisplayName).join('、');
@@ -1626,8 +1645,20 @@ function describeChartForScreenReader({ kind, booksArray }) {
         : `《${names[0]}》等 ${names.length} 本书`;
 
     if (kind === 'galaxy') {
+        // 原来只说「按高频小词用法排布」，读屏用户听到的是一团没有坐标的点——
+        // 而这张图的三个编码（横轴、纵轴、圆点大小）一个都没交代。补上的是
+        // 「这张图有什么量可以读」，与画面上轴题和尺寸图例的口径一致（第三十六批）。
+        // 两个轴的占比取自和画面同一个来源，不是另写一份。
+        const ratios = (getGalaxyComparability(booksArray).explainedVarianceRatio || [])
+            .slice(0, 2).filter(isFiniteNumber);
+        const axisText = ratios.length === 2
+            ? `横轴是第 1 主成分（解释了约 ${Math.round(ratios[0] * 100)}% 的差异），`
+              + `纵轴是第 2 主成分（约 ${Math.round(ratios[1] * 100)}%），原点在内置语料的平均水平；`
+            : '';
         return `风格星系图：${booksText}的每个片段各画成一个圆点，按高频小词用法排布，`
-             + `靠得近说明用词习惯接近。按 Tab 键可逐个片段查看，回车打开该片段的详情。`;
+             + axisText
+             + `圆点越大表示「${getMetricLabel(currentMetric)}」越高，靠得近说明用词习惯接近。`
+             + `按 Tab 键可逐个片段查看，回车打开该片段的详情。`;
     }
 
     const counts = booksArray.map(b => getBookBlockCount(b)).filter(n => n > 0);
@@ -3111,6 +3142,56 @@ function updateGalaxySizeHint() {
     el.textContent = `大小 = 「${label}」的数值高低`;
 }
 
+// 圆点大小的刻度尺（第三十六批）。原来只有颜色图例，「大小」那一行只写字不给刻度，
+// 读者没法判断「多高算高、这两个点差多少」——气泡图的通行要求是配一条尺寸图例。
+// 三个圆用**同一个** radiusScale 画，所以图例上的大小和图上的是同一把尺子。
+function renderGalaxySizeLegend(radiusScale, nodes) {
+    const el = document.getElementById('galaxy-size-legend');
+    if (!el) return;
+    el.innerHTML = '';
+
+    const values = nodes.map(d => d.realValue).filter(isFiniteNumber).sort((a, b) => a - b);
+    // 值域退化（所有片段数值相同）时不画：normalizeExtent 会把域撑成 [min-1, max+1]，
+    // 照画就是三个假刻度
+    if (values.length < 2 || values[0] === values[values.length - 1]) {
+        el.hidden = true;
+        return;
+    }
+
+    const picks = [
+        { value: values[0], hint: '本图最小' },
+        { value: values[Math.floor(values.length / 2)], hint: '本图中位' },
+        { value: values[values.length - 1], hint: '本图最大' }
+    ];
+
+    const caption = document.createElement('span');
+    caption.className = 'galaxy-size-legend-caption';
+    caption.textContent = '圆点大小对应的数值：';
+    el.appendChild(caption);
+
+    picks.forEach(pick => {
+        const item = document.createElement('span');
+        item.className = 'galaxy-size-legend-item';
+        item.title = pick.hint;
+
+        const dot = document.createElement('span');
+        dot.className = 'galaxy-size-legend-dot';
+        // 直径 = 半径 × 2，与图上的画法一致
+        const d = radiusScale(pick.value) * 2;
+        dot.style.width = `${d.toFixed(1)}px`;
+        dot.style.height = `${d.toFixed(1)}px`;
+        item.appendChild(dot);
+
+        const text = document.createElement('span');
+        text.textContent = formatMetric(pick.value);
+        item.appendChild(text);
+
+        el.appendChild(item);
+    });
+
+    el.hidden = false;
+}
+
 // 指纹热力图图例：低值（黛蓝）↔ 高值（赤）在每个指标下的具体含义
 function getHeatmapLegend(metric) {
     const legend = {
@@ -4306,7 +4387,8 @@ function initStyleGalaxy() {
 
     const filter = defs.append("filter").attr("id", "glow");
     filter.append("feGaussianBlur")
-        .attr("stdDeviation", "2.5")
+        // 2.5 也是给深色底写的：在纸色底上 2.5 只是一团糊，收成 1.5（第三十六批）
+        .attr("stdDeviation", "1.5")
         .attr("result", "coloredBlur");
     const feMerge = filter.append("feMerge");
     feMerge.append("feMergeNode").attr("in", "coloredBlur");
@@ -4335,10 +4417,14 @@ function initStyleGalaxy() {
     // 只给真正画进这张图的书建渐变：圆点来自 plotBooks（图例仍遍历 books，
     // 那是为了把「未画入」的书也列出来），给跳过不画的书建渐变只会留下一批
     // 没有任何 url(#…) 引用的死 defs
+    // 球面的三档渐变（第三十六批压平）：原来高光提亮 1.5×、外圈压暗 1.2×，
+    // 是给深色底写的——深色外圈在深底上等于没有边，球看起来是发光的。底色换成
+    // 纸色之后，同一段代码读出来变成「一个个不透明的塑料球」。这里把落差收到
+    // 1.15× / 1.08×，留一点体积感就够了，读起来是墨点。
     plotBooks.forEach((book) => {
         const baseColor = d3.color(colorForBook(book));
-        const highlight = baseColor.brighter(1.5);
-        const shadow = baseColor.darker(1.2);
+        const highlight = baseColor.brighter(1.15);
+        const shadow = baseColor.darker(1.08);
 
         const gradId = "grad-" + getBookSafeId(book);
 
@@ -4399,17 +4485,34 @@ function initStyleGalaxy() {
     }
 
     const metricExtent = normalizeExtent(d3.extent(allNodes, d => d.realValue));
+    // 上限从 18 收到 14（第三十六批）：166 个半径 11 上下的实心球同屏，互相压住，
+    // 既看不出个数也看不出大小。收小之后碰撞力需要的位移也变小，位置反而更忠实。
+    // 触控 44px 的底线由 attachGalaxyTapPicker 那层透明接收层（容差 22px）保住。
     const radiusScale = d3.scaleSqrt()
         .domain(metricExtent)
-        .range([4, 18]);
+        .range([4, 14]);
 
     const galaxyExtent = resolveGalaxyExtent(allNodes, independentMode ? null : comparability.axisExtent);
     const xExtent = galaxyExtent.x;
     const yExtent = galaxyExtent.y;
-    const padding = 60;
-    const xScale = d3.scaleLinear().domain(xExtent).range([padding, width - padding]);
-    const yScale = d3.scaleLinear().domain(yExtent).range([padding, height - padding]);
+
+    // 从单一 padding=60 换成四边 margin（第三十六批）：坐标轴要有地方站。
+    // 容器高度仍是 HTML 里写死的 600px（d3_visualization.html），所以 plotH 是常数，
+    // 只有 plotW 随宽度变。
+    const margin = { top: 32, right: 24, bottom: 52, left: 56 };
+    const plotW = width - margin.left - margin.right;
+    const plotH = height - margin.top - margin.bottom;
+    // 窄到画不出轴时不画轴，只画点。当前断点触发不了（320px 视口下 plotW 仍有 240px），
+    // 挡的是以后有人改高度导致 range 反向、tickSize 符号翻转。
+    const drawAxes = plotW > 40 && plotH > 40;
+
+    // range 必须保持「上小下大」：src/projection.py 的 axis_labels() 把纵轴朝向写死进了
+    // 给读者看的那句话（「纵轴…值大在下」），这里一翻，那边的话当场变假，而且不会报错。
+    const xScale = d3.scaleLinear().domain(xExtent).range([margin.left, margin.left + plotW]);
+    const yScale = d3.scaleLinear().domain(yExtent).range([margin.top, margin.top + plotH]);
     renderGalaxyNote(comparability, galaxyExtent, droppedBlocks);
+    // 大小图例跟着 radiusScale 走；指标一换本函数会整个重跑，不需要额外钩子
+    renderGalaxySizeLegend(radiusScale, allNodes);
 
     allNodes.forEach(d => {
         d.r = radiusScale(d.realValue);
@@ -4425,12 +4528,101 @@ function initStyleGalaxy() {
         }
     });
 
+    // ---- 坐标层（第三十六批）----
+    // 网格、零线、两轴、轴题都放在圆点所在的 g **之外**：g 是 attr("transform", …) 的
+    // 接收者，把它们塞进 g 里，缩放时刻度和线宽会跟着一起被放大。分开之后，缩放改的
+    // 只是这些线的“位置”，线的长度和粗细原地不动——这正是 focus+context 要的效果：
+    // 滚轮放大 = 网格自动加密 = 真的能读细节，不需要再加一个「放大到所选书籍」的开关。
+    const back = svg.append("g").attr("class", "galaxy-back");
+    const gridX = back.append("g").attr("class", "grid grid-x").attr("stroke-opacity", 0.09);
+    const gridY = back.append("g").attr("class", "grid grid-y").attr("stroke-opacity", 0.09);
+    // 0 是内置语料的平均水平（PCA 得分以均值为中心）。哪条出了可见范围就藏哪条。
+    const zeroX = back.append("line").attr("class", "zero-line").attr("display", "none");
+    const zeroY = back.append("line").attr("class", "zero-line").attr("display", "none");
+
     const g = svg.append("g");
+    // 坐标轴刻度画在圆点之上，但落在绘图区之外，不会被圆点盖住
+    const axisX = svg.append("g").attr("class", "galaxy-axis-x");
+    const axisY = svg.append("g").attr("class", "galaxy-axis-y");
+
+    // 轴题只写「第几主成分 + 它解释了多少差异」。原始得分（-0.06 这种数字）不印：
+    // 对读这张图的人没有任何可操作性，印一批看不懂的数字比不印更差；一个百分数
+    // 就足以说清「这一维值不值得读」。
+    const ratio = comparability.explainedVarianceRatio || [];
+    const pcCaption = (i) => {
+        const pct = isFiniteNumber(ratio[i]) ? ` · 解释 ${(ratio[i] * 100).toFixed(1)}% 的差异` : '';
+        return `第 ${i + 1} 主成分${pct}`;
+    };
+
+    // axisRaf 必须声明在函数内部：放模块级的话，重新渲染时它还会闭包住上一轮
+    // 已经被移除的节点，而且会永久挡住新图的第一次重画。
+    let axisRaf = null;
+    let lastTransform = null;
+
+    function redrawAxes(t) {
+        // rescaleX 保 range、换 domain ⇒ zx(v) 恒等于该数据点在屏幕上的位置，
+        // 所以网格线和圆点在缩放过程中永远对得上
+        const zx = t.rescaleX(xScale);
+        const zy = t.rescaleY(yScale);
+
+        gridX.attr("transform", `translate(${margin.left},${margin.top + plotH})`)
+            .call(d3.axisBottom(zx).tickSizeOuter(0).tickSize(-plotH).tickFormat(""));
+        gridY.attr("transform", `translate(${margin.left},${margin.top})`)
+            .call(d3.axisLeft(zy).tickSizeOuter(0).tickSize(-plotW).tickFormat(""));
+        axisX.attr("transform", `translate(${margin.left},${margin.top + plotH})`)
+            .call(d3.axisBottom(zx).tickSizeOuter(0).tickFormat(""));
+        axisY.attr("transform", `translate(${margin.left},${margin.top})`)
+            .call(d3.axisLeft(zy).tickSizeOuter(0).tickFormat(""));
+
+        const [x0, x1] = zx.domain();
+        const [y0, y1] = zy.domain();
+        zeroX.attr("display", (x0 <= 0 && 0 <= x1) ? null : "none")
+            .attr("x1", zx(0)).attr("x2", zx(0))
+            .attr("y1", margin.top).attr("y2", margin.top + plotH);
+        zeroY.attr("display", (y0 <= 0 && 0 <= y1) ? null : "none")
+            .attr("x1", margin.left).attr("x2", margin.left + plotW)
+            .attr("y1", zy(0)).attr("y2", zy(0));
+    }
+
+    // 缩放一秒能来几十个事件。圆点那一次属性写必须立刻做（否则拖动发涩），
+    // 坐标层这四组重建按帧合并，一帧最多一次。
+    function scheduleAxes(t) {
+        lastTransform = t;
+        if (axisRaf !== null) return;
+        axisRaf = requestAnimationFrame(() => {
+            axisRaf = null;
+            redrawAxes(lastTransform);
+        });
+    }
+
     svg.call(d3.zoom()
-        .scaleExtent([0.5, 5]) 
+        .scaleExtent([0.5, 5])
         .on("zoom", (event) => {
             g.attr("transform", event.transform);
+            if (drawAxes) scheduleAxes(event.transform);
         }));
+
+    if (drawAxes) {
+        redrawAxes(d3.zoomTransform(svg.node()));
+        svg.append("text").attr("class", "axis-label")
+            .attr("x", margin.left + plotW / 2)
+            .attr("y", margin.top + plotH + 38)
+            .attr("text-anchor", "middle")
+            .text(pcCaption(0));
+        // 旋转 -90 之后 (x, y) 落到屏幕的 (y, -x) 上：**「离左边多远」要写在 y 上**。
+        // 折线图那处写的是 y=-46（:1793），看着可以照抄，其实不行——它是 append 到一个
+        // 带 translate 的 g 上的（:1789），负值是相对那个 g 的，落到容器里是正的。
+        // 这里的轴题直接挂在 svg 根上，而星系的容器是 overflow:hidden、SVG 与容器同宽，
+        // 负值等于把轴题钉进裁剪区：照抄过来实测包围盒落在 x=-29（容器左界之外），
+        // 屏幕上一个字都看不到，而且不会报错。所以放在左留白的中间（0–margin.left）。
+        // 这条也是本批的一个教训：**相邻图表里长得一样的写法，坐标系未必一样。**
+        svg.append("text").attr("class", "axis-label")
+            .attr("transform", "rotate(-90)")
+            .attr("x", -(margin.top + plotH / 2))
+            .attr("y", margin.left / 2 + 4)
+            .attr("text-anchor", "middle")
+            .text(pcCaption(1));
+    }
 
     if (galaxySimulation) galaxySimulation.stop();
 
@@ -4446,14 +4638,19 @@ function initStyleGalaxy() {
         .alphaTarget(0)
         .on("tick", ticked);
 
+    // 纸色描边：与 #galaxy-container 的底色同一个值。描边从「比球身更深的圈」
+    // 改成这一条纸色细缝之后，互相压住的点各自留住一圈轮廓，叠在一起的团块
+    // 不再糊成一片——散点密集时的通行做法（第三十六批）。
+    const PAPER_RIM = '#f2e7cd';
+
     const circles = g.selectAll("circle")
         .data(allNodes)
         .enter().append("circle")
         .attr("r", d => d.r)
         .attr("fill", d => `url(#grad-${getBookSafeId(d.book)})`)
-        .attr("stroke", d => d3.color(colorForBook(d.book)).darker(0.5))
-        .attr("stroke-width", 0.5)
-        .attr("stroke-opacity", 0.8)
+        .attr("stroke", PAPER_RIM)
+        .attr("stroke-width", 1)
+        .attr("stroke-opacity", 1)
         .attr("role", "button")
         .attr("aria-label", d => `${getBookDisplayName(d.book)} 第 ${d.blockIndex + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetric(d.realValue)}`)
         .style("cursor", "pointer")
@@ -4472,7 +4669,13 @@ function initStyleGalaxy() {
         
         const allCircles = g.selectAll("circle");
         const allNodeData = allCircles.data();
-        const neighbors = findNeighbors(d, allNodeData, 120);
+        // 邻域按「屏幕上 120px」算，所以要除以当前缩放倍数（第三十六批）。
+        // node.x/node.y 是 g 本地坐标，g 是均匀的平移+缩放，本地距离 D 在屏幕上就是 k·D。
+        // 不除的话，放大 5 倍之后眼睛看到点散开了、面板报的却还是同一批点。
+        // k 直接向 zoom 要（同 attachGalaxyTapPicker 的取法），不另存一个变量：
+        // 程序化重置或重新渲染之后，存下来的那个会不准。
+        const zoomK = d3.zoomTransform(svg.node()).k || 1;
+        const neighbors = findNeighbors(d, allNodeData, 120 / zoomK);
         // 用 Set 而不是数组 includes：neighbors 最多和全图节点数同量级，
         // 逐个 includes 在「邻居多」时退化成 O(n²)，扫一圈圆点就是上万次线性查找。
         const neighborSet = new Set(neighbors);
@@ -4480,12 +4683,14 @@ function initStyleGalaxy() {
         allCircles.filter(node => neighborSet.has(node))
             .transition().duration(motionDuration(100))
             .attr("stroke", "#b5472f")
-            .attr("stroke-width", 1.5)
+            .attr("stroke-width", 2)
             .attr("stroke-opacity", 1);
 
         const analysis = analyzeCluster(neighbors);
         const label = window.getMetricLabel ? getMetricLabel(currentMetric) : currentMetric;
-        updateHUD(analysis, label);
+        // 带上全图点数：面板要报「这 50 个点占全图 30%」，否则读者会以为
+        // 「附近」是一小撮，实际它是全图的三成（第三十六批）。
+        updateHUD(analysis, label, allNodeData.length);
 
         // value 传原始数值，不在这里先格式化：showTooltip 统一走 formatMetric，
         // 否则这里传字符串进去会命中 formatMetric 的 !isFiniteNumber 分支显示「暂无」。
@@ -4501,14 +4706,14 @@ function initStyleGalaxy() {
             .transition().duration(motionDuration(200))
             .attr("r", d.r)
             .style("filter", null)
-            .attr("stroke", d3.color(colorForBook(d.book)).darker(0.5))
-            .attr("stroke-width", 0.5);
+            .attr("stroke", PAPER_RIM)
+            .attr("stroke-width", 1);
 
         g.selectAll("circle")
              .transition().duration(motionDuration(200))
-             .attr("stroke", node => d3.color(colorForBook(node.book)).darker(0.5))
-             .attr("stroke-width", 0.5)
-             .attr("stroke-opacity", 0.8);
+             .attr("stroke", PAPER_RIM)
+             .attr("stroke-width", 1)
+             .attr("stroke-opacity", 1);
         
         setGalaxyIdleHint();
 
@@ -4552,7 +4757,7 @@ function initStyleGalaxy() {
     // 整片星系只留一个 Tab 停靠点（第一个点），其余靠上面的方向键。
     circles.attr("tabindex", (d, i) => (i === 0 ? 0 : -1));
 
-    // 触屏上没有「悬停」这一步，而圆点的直径只有 8–36px：手指按下去十有八九落空，
+    // 触屏上没有「悬停」这一步，而圆点的直径只有 8–28px：手指按下去十有八九落空，
     // 按偏了也完全没有反应。这里在圆点底下垫一层透明接收层，按下去取离手指最近的点。
     if (usesCoarsePointer()) {
         attachGalaxyTapPicker({ g: g, svg: svg, nodes: allNodes, circles: circles, width: width, height: height });
@@ -4600,7 +4805,8 @@ function initStyleGalaxy() {
     }
 }
 
-// 触屏上按星系圆点要「够得着」：圆点直径 8–36px、均值约 20px，低于项目自定的 44px
+// 触屏上按星系圆点要「够得着」：圆点直径 8–28px、均值约 19px（第三十六批收小之前是
+// 8–36/约 22px），低于项目自定的 44px
 // 触控目标底线，手指按偏了毫无反应，用户只会以为这一页不能点。
 // 做法是在圆点底下垫一层透明接收层，按下去取「离手指最近的那个点」，容差 22px
 // （直径 44px）。直接按在圆点上时走的仍是圆点自己的点击——这一层垫在最下面，抢不走。
@@ -4983,31 +5189,43 @@ function setGalaxyIdleHint() {
     const content = hud.querySelector('.hud-content');
     if (!title || !content) return;
 
+    // 说「附近点」而不是「区域」：面板里那几十个点是按屏幕距离挑出来的，放大缩小
+    // 会变多变小（见 findNeighbors 的调用处）。写成「区域」会让人以为图上真的有一块
+    // 划出来的地界，而它其实是跟着镜头走的（第三十六批）。
     if (usesCoarsePointer()) {
-        title.innerText = "◎ 点按查看区域风格";
-        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">点按任意圆点，查看这一片区域的风格特征。</p>';
+        title.innerText = "◎ 点按查看附近点";
+        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">点按任意圆点，看看它附近的点有什么共同特征。</p>';
     } else {
-        title.innerText = "◎ 悬停查看区域风格";
-        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看这一片区域的风格特征。</p>';
+        title.innerText = "◎ 悬停查看附近点";
+        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，看看它附近的点有什么共同特征。</p>';
     }
 }
 
-function updateHUD(analysisData, metricLabel) {
+function updateHUD(analysisData, metricLabel, totalCount) {
     const hud = document.getElementById('galaxy-hud');
     const content = hud.querySelector('.hud-content');
     const title = hud.querySelector('.hud-title');
 
     if (!analysisData) {
         title.innerText = "◎ 正在分析...";
-        content.innerHTML = `<p style="color:#6b6254; font-size:12px;">正在分析这片区域的风格...</p>`;
+        content.innerHTML = `<p style="color:#6b6254; font-size:12px;">正在分析附近的点...</p>`;
         return;
     }
 
-    // 说「附近区域」而不是「选中区域」：这里全程没有任何选择动作，只是把光标附近
+    // 说「附近的点」而不是「选中区域」：这里全程没有任何选择动作，只是把光标附近
     // 这一小片圆点聚起来看看。写「选中」会让人以为自己点中了什么、还想找「取消选中」。
-    title.innerHTML = `◎ 附近区域（${analysisData.count} 个片段）`;
+    // 也不再写「区域」——它是跟着镜头走的（放大就变少），不是图上划出来的一块地界。
+    // 带上占比是第一要务：报「附近 50 个片段」而全图只有 166 个，读者会以为
+    // 这 50 个是一小撮，实际它是全图的三成（第三十六批）。
+    const total = Number(totalCount);
+    const share = (Number.isFinite(total) && total > 0)
+        ? ` · 占本图 ${Math.round(analysisData.count / total * 100)}%`
+        : '';
+    title.innerHTML = `◎ 附近的 ${analysisData.count} 个点${share}`;
 
-    // 「区域平均」＋「平均句长」会读成「区域平均平均句长」：去掉标签自己的前导「平均」
+    // 「这 N 个点的平均句长」而不是「区域平均句长」：标签自带「平均」，指标名也自带
+    // 「平均」，拼起来会读成「区域平均平均句长」；去掉标签自己的前导「平均」，
+    // 再把「区域」换成「这 N 个点」，读者才知道这个数是谁的平均（第三十六批）。
     const hudMetricLabel = String(metricLabel || '').replace(/^平均/, '');
     // 书名统一走 getBookDisplayName（别处都显示《野性的呼唤》，这里原来显示
     // 截断的原始英文 key），截断交给已有的 truncateText，别硬切 15 个字
@@ -5022,7 +5240,7 @@ function updateHUD(analysisData, metricLabel) {
             <div class="hud-bar-fill" style="width: ${analysisData.dominanceRate}%;"></div>
         </div>
         <div class="hud-row" style="margin-top:8px;">
-            <span class="hud-label">区域平均${escapeHtml(hudMetricLabel)}:</span>
+            <span class="hud-label">这 ${analysisData.count} 个点的平均${escapeHtml(hudMetricLabel)}:</span>
             <span class="hud-value" style="color:#b5472f">${formatMetric(analysisData.avgMetric)}</span>
         </div>
         <div class="hud-row" style="margin-top:8px;">
