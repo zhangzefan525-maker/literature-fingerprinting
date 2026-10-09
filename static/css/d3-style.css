@@ -973,6 +973,16 @@ button:hover {
     height: 12px;
     border-radius: 50%;
     box-shadow: 0 0 0 1px rgba(47, 42, 35, 0.2);
+    /* 记号是 svg 子元素，行高不清零时 inline-block 底下会多出一条基线缝隙，
+       12px 的圆点里塞一个 12px 的圆会溢出。 */
+    line-height: 0;
+}
+/* 图例圆点里的那道记号（第三十八批）：12px 的色点上，「书 → 记号」得能直接对上。
+   它和图上那道记号是同一个形状、同一个颜色（纸色），只是画在图例的尺寸上。 */
+.galaxy-legend-mark {
+    display: block;
+    width: 12px;
+    height: 12px;
 }
 
 /* ---------- 风格星系：圆点大小的图例（第三十六批） ---------- */
@@ -1065,6 +1075,18 @@ button:hover {
     padding: 15px 18px;
     border-radius: 8px;
     border-left: 3px solid var(--vermilion);
+}
+
+/* 「重置视图」（第三十八批从行内样式搬过来的）。搬家的理由只有一个：
+   行内样式没法在 @media (pointer: coarse) 里给它补 44px 的触屏命中区——
+   实测这个按钮在 390×844 的触摸仿真下只有 25px 高，连 WCAG 2.5.8 的下限 24px
+   都刚够，而它是「把选书和框选全部恢复」，按偏了代价不小。
+   值一字未改（margin-left:10px; padding:4px 8px; font-size:12px），
+   类选择器本来也压得住 button 那条基础规则，所以外观与改动前一致。 */
+.adv-reset {
+    margin-left: 10px;
+    padding: 4px 8px;
+    font-size: 12px;
 }
 
 .adv-controls .filter-chip {
@@ -1287,6 +1309,13 @@ button:hover {
    与网格同一个理由——悬停、点按、拖动都该归圆点，色块不能挡在前面。
    指针事件在 SVG 里可继承，写在组上，这一层里的 path 就都不接了。 */
 .galaxy-territory {
+    pointer-events: none;
+}
+
+/* 球心那道纸色记号（第三十八批，圆点的第二个编码通道）：第二编码通道见
+   d3-charts.js 的 BOOK_GLYPH_RANGE。画在圆点上面，但仍然是圆点的装饰，
+   鼠标事件照旧归圆点，所以这一层也不接指针事件。 */
+.galaxy-glyph-layer {
     pointer-events: none;
 }
 
@@ -2281,6 +2310,10 @@ button.copy-failed:hover {
     .insight-copy,
     .drill-remove-btn,
     #restartGalaxyBtn,
+    /* 「重置视图」（第三十八批）：原来只有行内样式，进不了这份名单，390×844 触摸
+       仿真下实测 25px 高。它是「把选书和框选全部恢复」这种一按就改一屏的按钮，
+       尤其不该让手指按偏。 */
+    #advResetBtn,
     #smoothness,
     select {
         min-height: 44px;

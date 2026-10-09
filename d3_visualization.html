@@ -158,13 +158,16 @@
 
         <!-- 新增：顶部 Tab 切换导航 -->
         <div class="tab-navigation" role="tablist" aria-label="分析视图">
-            <button id="tab-view-main" class="tab-btn active" role="tab" aria-selected="true" aria-controls="view-main" onclick="switchTab('view-main')">
+            <!-- title 是给鼠标用户的「这个页签里有什么」：三个名字（趋势/星系/对比）
+                 都说得出口，但光看名字猜不到点进去会看到什么图。读屏用户不听 title
+                 （面板内的 h2 已经是它们的名字），所以这几个 title 纯粹是锦上添花，不承载信息。 -->
+            <button id="tab-view-main" class="tab-btn active" role="tab" aria-selected="true" aria-controls="view-main" onclick="switchTab('view-main')" title="按全书进度看指标怎么变：指纹热力图 / 折线趋势图">
                 <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-line"/></svg> 基础趋势分析
             </button>
-            <button id="tab-view-galaxy" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-galaxy" tabindex="-1" onclick="switchTab('view-galaxy')">
+            <button id="tab-view-galaxy" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-galaxy" tabindex="-1" onclick="switchTab('view-galaxy')" title="把每个片段画成圆点，看几本书的用词习惯离得近不近">
                 <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-atom"/></svg> 风格星系
             </button>
-            <button id="tab-view-dashboard" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-dashboard" tabindex="-1" onclick="switchTab('view-dashboard')">
+            <button id="tab-view-dashboard" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-dashboard" tabindex="-1" onclick="switchTab('view-dashboard')" title="把几本书摆在一起比：整体水平、逐段走势，以及值得一看的片段">
                 <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-bar"/></svg> 全书对比
             </button>
         </div>
@@ -253,7 +256,7 @@
                          这正是「把图截进论文」时会犯的错。
                          位置放在图**下面**（不是标题条里）：第二十二批把首屏图表顶压到 ≤650px
                          是靠标题条那两行截断换来的，往那里加行会把那笔账还回去。 -->
-                    <p id="heatmap-scale-note" class="chart-scale-note" hidden>色标范围由当前选中的这几本书决定（图上「统一色标」那一行就是它）：换一批书，同一个数值的颜色会跟着变。所以不同次选择下截的图，颜色不能直接对比。</p>
+                    <p id="heatmap-scale-note" class="chart-scale-note" hidden>色标范围由当前选中的这几本书决定（图上「统一色标」那一行就是它）：换一批书，同一个数值的颜色会跟着变。所以不同次选择下截的图，颜色不能直接对比。另外两件事也一并说清：相邻两格是错开约 1 千词、重叠约 9 千词的滑动窗口（一格约 1 万词），同一段原文会在好几格里重复出现，所以连续一片偏高的格子说的是「这一段整体偏高」，不等于这里有十几个各自独立的高值；每本书的格子大小不一样（格子多的那本书格子小），两本书横着对齐着看同一行没有意义，能横着比的只有颜色。</p>
                 </div>
                 <div class="detail-panel" id="detailPanel" role="status" aria-live="polite">
                     <h3>▤ 数据详情</h3>
@@ -322,7 +325,7 @@
                     <div class="adv-controls">
                         <span>选择书籍: </span>
                         <span id="adv-filters"></span>
-                        <button type="button" onclick="advReset()" style="margin-left:10px; padding:4px 8px; font-size:12px;">重置视图</button>
+                        <button type="button" id="advResetBtn" class="adv-reset" onclick="advReset()" title="把选中的书和走势图上的框选都恢复到刚打开时的样子（回到默认选中的书、取消框选）">重置视图</button>
                     </div>
                 </div>
 
@@ -871,7 +874,12 @@
         // 所以只描述它偏向坐标轴的哪一端。
         const INSIGHT_METRIC = {
             sentenceLength: { up: '后半段的平均句长高于前半段', down: '后半段的平均句长低于前半段', high: '句子最长', low: '句子最短' },
-            simpsonIndex:  { up: '后半段的用词重复度高于前半段', down: '后半段的用词重复度低于前半段', high: '用词重复度最高（词汇较单调）', low: '用词重复度最低（词汇最丰富）' },
+            // high/low 后面会由 renderInsight 拼上「（数值）」，原来这两条自己带着
+            // 「（词汇较单调）」「（词汇最丰富）」，于是句子里出现两个连着的括号，
+            // 而且是个评价——这一页从头到尾的立场是「只描述，不代表写得好或不好」，
+            // 「单调」两个字正好把那个立场推翻了。指标名本身已经把意思说全了
+            // （「用词重复度」高就是高），括号里的评价删掉，只留下数字。
+            simpsonIndex:  { up: '后半段的用词重复度高于前半段', down: '后半段的用词重复度低于前半段', high: '用词重复度最高', low: '用词重复度最低' },
             // 这句原来写的是「后半段只出现一次的词更多」。方向对，但把原因说窄了：
             // Honoré 的 R = 100·ln(N) / (1 − V1/V)，决定它的是 N（词数）、V（不同词数）、
             // V1（只出现一次的词数）三个数一起——V 降得够多时 V1 一个没多，R 照样升高。
