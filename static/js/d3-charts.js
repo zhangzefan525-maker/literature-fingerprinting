@@ -304,7 +304,12 @@ function getErrorMessage(response, result) {
     if (response.status === 413) {
         return '文件太大，服务器不接受这么大的上传。请先截取要研究的章节，或拆成几个文件分次上传。';
     }
-    if (!response.ok) return `服务器暂时无法完成分析（HTTP ${response.status}），请稍后重试。`;
+    // 状态码不再拼进给读者看的那句话（第三十五批）。读这句话的人是文学研究者，
+    // 「HTTP 500」对他没有任何可操作性；代码改走 console.warn，排障时照样找得到。
+    if (!response.ok) {
+        console.warn('[分析服务] HTTP', response.status);
+        return '服务器暂时无法完成分析，请稍后重试。';
+    }
     return '服务器返回了无法识别的结果，请稍后重试。';
 }
 
@@ -890,7 +895,8 @@ async function proceedUpload(file) {
         renderQuickPreviewIfIdle(); // 新书进来后，面板空闲时也该有内容可点
     } catch (e) {
         console.error('上传分析失败:', e);
-        setUploadStatus('上传失败：无法连接当前分析服务。请确认服务器已启动，或稍后重试。', 'error');
+        // 同 :1399——「请确认服务器已启动」是给部署者的话（第三十五批）。
+        setUploadStatus('上传失败：暂时无法连接到分析服务，请检查网络后稍后重试。', 'error');
     } finally {
         stopUploadTicker();
         setUploadBusy(false);
@@ -1313,7 +1319,7 @@ async function deleteLibraryBook(bookName) {
         const remaining = Object.keys(realData || {}).length;
         if (remaining === 0) {
             const selector = document.getElementById('bookSelector');
-            if (selector) selector.innerHTML = '<p class="state-card empty">没有已加载的书籍了。请上传文本，或将 .txt 放入 data/raw。</p>';
+            if (selector) selector.innerHTML = '<p class="state-card empty">没有已加载的书籍了。上传一个 .txt 文本就能继续。</p>';
             showNoDataMessage();
             return;
         }
@@ -1396,7 +1402,9 @@ async function loadBooksList() {
         loadRealData(); // 打开页面即自动加载数据并出图
     } catch (error) {
         console.error('网络错误:', error);
-        showError('无法连接到当前分析服务。请确保已运行 python api_server.py，或稍后重试。');
+        // 原话是「请确保已运行 python api_server.py」——那是写给部署者看的（第三十五批）。
+        // 读者不知道 api_server.py 是什么，也不需要知道；技术细节丢在上一行的 console.error 里。
+        showError('暂时无法连接到分析服务。请检查网络后稍后重试。');
     }
 }
 
@@ -1404,7 +1412,8 @@ function updateBookSelector(books) {
     const selector = document.getElementById('bookSelector');
     if (!selector) return;
     if (!books || books.length === 0) {
-        selector.innerHTML = '<p class="state-card empty">没有找到任何书籍。请将 .txt 文件放入 data/raw，或直接上传文本。</p>';
+        // 同上：data/raw 是服务器上的目录，用户在自己电脑上找不到它（第三十五批）。
+        selector.innerHTML = '<p class="state-card empty">书架上还没有书。上传一个 .txt 文本就能开始分析。</p>';
         return;
     }
 
@@ -1553,7 +1562,7 @@ async function loadRealData() {
         if (droppedBooks.length > 0) {
             setGlobalStatus('notice',
                 `链接里的这 ${droppedBooks.length} 本书在这台服务器上找不到：${droppedBooks.map(getBookDisplayName).join('、')}`
-                + '（可能已被删除，或链接来自别的部署）。下面显示的是现有的书。');
+                + '（可能已被删除，或这个链接来自另一台服务器）。下面显示的是现有的书。');
         }
         if (selectedBooks.size === 0) {
             // 首屏默认：差别最明显的两本内置书（第一次来的用户打开就能看到「对比」
@@ -1586,7 +1595,8 @@ async function loadRealData() {
         renderQuickPreviewIfIdle();
     } catch (error) {
         console.error('加载数据失败:', error);
-        showError('无法加载数据，请检查分析服务是否运行。');
+        // 原话让用户「检查分析服务是否运行」——他没有这个开关可拨（第三十五批）。
+        showError('数据暂时加载不出来，请稍后重试。');
     }
 }
 
@@ -2777,7 +2787,8 @@ async function resolveExcerpt(bookName, blockIndex) {
     const result = await resp.json().catch(() => null);
     if (!resp.ok || !result || result.status !== 'success'
         || typeof result.excerpt !== 'string' || !result.excerpt) {
-        throw new Error((result && result.message) || `取摘录失败（HTTP ${resp.status}）`);
+        if (!(result && result.message)) console.warn('[摘录] HTTP', resp.status);
+        throw new Error((result && result.message) || '取摘录失败，请稍后重试。');
     }
     const payload = { excerpt: result.excerpt, extended: !!result.extended };
     _excerptCache.set(cacheKey, payload);
@@ -3526,7 +3537,9 @@ function exportChart() {
 
     img.onerror = function(e) {
         console.error("图像导出失败:", e);
-        showError("图像生成失败，请查看控制台详情。");
+        // 「请查看控制台详情」对读者是天书——他不知道控制台是什么，也看不到（第三十五批）。
+        // 详情仍在上一行的 console.error 里；给读者的这句改成他真能做的下一步。
+        showError("图像生成失败，请稍后重试；如果一直失败，换个观察角度再导出。");
     };
 
     img.src = imageSrc;
@@ -4009,7 +4022,9 @@ function exportCitation() {
         + (books.length ? `-${books.length}book` : '');
     const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
     // 本机打开时 url 是 localhost，别人点开是打不开的，得在 note 里说清楚
-    const localUrlNote = isLocalHost() ? '；在线视图为本机地址（localhost），仅供本机打开' : '';
+    // 这条 note 会跟着引用条目进文献管理软件、进论文，读它的人不知道 localhost 是什么（第三十五批）。
+    // 意思不能丢：本机地址的链接发给同门是打不开的。
+    const localUrlNote = isLocalHost() ? '；在线视图指向本机地址，只有本机可以打开' : '';
 
     // 原著条目。学生把这段贴进参考文献时，真正要引的是作品本身，不是这个工具；
     // 旧版只发一条 author = 本工具的 @misc，等于把「文印」写成了《白牙》的作者，
