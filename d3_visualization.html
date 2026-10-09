@@ -150,8 +150,11 @@
         <div class="quickstart" id="quickstart">
             <!-- 第二十批起，首屏已经自动选中「差别最明显的两本」，所以这句不再说
                  「可以先用一组…」（那件事已经发生了，再读就像按钮没生效），改说它现在
-                 真正的作用：跳到结论页——「一句话解读」「值得一看的片段」都长在那里。 -->
-            <span class="quickstart-lead">第一次来？已经替你选好差别最明显的两本了，点这里直接看结论。</span>
+                 真正的作用：跳到结论页——「一句话解读」「值得一看的片段」都长在那里。
+                 第四十三批又去掉了「已经替你选好差别最明显的两本了」这半句：同一屏里
+                 顶部状态条（d3-charts.js 里 announceOrNotice 那处）正在说同一件事，而且
+                 说得更全（哪两本、凭什么、想换怎么办）。这句只留「点这里看什么」。 -->
+            <span class="quickstart-lead">第一次来？点这里跳到「全书对比」，看写好的结论。</span>
             <button type="button" class="quickstart-demo" onclick="loadComparisonExample()">载入对比示例</button>
             <button type="button" class="quickstart-close" onclick="hideQuickStart()" aria-label="不再自动显示快速开始" title="收起。之后可以在「基础趋势分析」页右上角手动载入对比示例">✕</button>
         </div>
@@ -264,7 +267,10 @@
                          这正是「把图截进论文」时会犯的错。
                          位置放在图**下面**（不是标题条里）：第二十二批把首屏图表顶压到 ≤650px
                          是靠标题条那两行截断换来的，往那里加行会把那笔账还回去。 -->
-                    <p id="heatmap-scale-note" class="chart-scale-note" hidden>色标范围由当前选中的这几本书决定（图上「统一色标」那一行就是它）：换一批书，同一个数值的颜色会跟着变。所以不同次选择下截的图，颜色不能直接对比。另外两件事也一并说清：相邻两格是错开约 1 千词、重叠约 9 千词的滑动窗口（一格约 1 万词），同一段原文会在好几格里重复出现，所以连续一片偏高的格子说的是「这一段整体偏高」，不等于这里有十几个各自独立的高值；每本书的格子大小不一样（格子多的那本书格子小），两本书横着对齐着看同一行没有意义，能横着比的只有颜色。</p>
+                    <!-- 第四十三批删掉了括号里的「（一格约 1 万词）」：这一页标题下面那句
+                         「一格（一个点）约对应 1 万词」就在同一屏的正上方，两个数字挨着印两遍。
+                         前面「错开 1 千词、重叠 9 千词」已经把一格多长交代完了。 -->
+                    <p id="heatmap-scale-note" class="chart-scale-note" hidden>色标范围由当前选中的这几本书决定（图上「统一色标」那一行就是它）：换一批书，同一个数值的颜色会跟着变。所以不同次选择下截的图，颜色不能直接对比。另外两件事也一并说清：相邻两格是错开约 1 千词、重叠约 9 千词的滑动窗口，同一段原文会在好几格里重复出现，所以连续一片偏高的格子说的是「这一段整体偏高」，不等于这里有十几个各自独立的高值；每本书的格子大小不一样（格子多的那本书格子小），两本书横着对齐着看同一行没有意义，能横着比的只有颜色。</p>
                 </div>
                 <div class="detail-panel" id="detailPanel" role="status" aria-live="polite">
                     <h3>▤ 数据详情</h3>
@@ -291,7 +297,12 @@
                     <span>每个圆点 = 一段文本（约 1 万词）</span>
                     <span>颜色 = 不同书</span>
                     <span id="galaxy-guide-size">大小 = 数值高低</span>
-                    <span>位置 = 高频小词<span id="galaxy-guide-axis-words"></span>的用法</span>
+                    <!-- 这里原来挂了一个 <span id="galaxy-guide-axis-words">，由 renderAxisWordHints
+                         回填「（the / his / of / he）」。同一行下面图例里已经逐个列出这几本书的
+                         轴词了，标题那句「每个点的位置，根据书中高频小词（…）的使用习惯计算」
+                         也带着同一份词表——一屏里同一组词出现三遍。第四十三批去掉这一处，
+                         标题那句留着（它是完整句子，读得通）。 -->
+                    <span>位置 = 高频小词的用法</span>
                     <!-- 手指没有滚轮，也没有「悬停」。触屏设备上写「滚轮缩放」是教用户
                          做一个做不到的动作，所以两种指针对应两句，由 CSS 按 hover 能力选。 -->
                     <span class="pointer-hint-hover">滚轮缩放 · 拖动探索 · 点击看原文</span>
@@ -328,11 +339,18 @@
                 <div class="adv-header">
                     <div>
                         <h2 style="margin:0; color:#2f2a23; font-size: 18px;">📚 全书对比</h2>
-                        <small style="color:#6b6254">选择书籍 · 拖选片段 · 查看片段详情</small>
+                        <!-- 这里原来有一行三步副标题「选择书籍 · 拖选片段 · 查看片段详情」。
+                             但同屏正下方，这三步各自长在控件身上、说得还更准：选书在页顶那条
+                             全局书名栏、「拖拽选择片段」写在走势图标题上、「▸ 片段详情」是右栏的
+                             栏题（第四十三批）。首屏早在第十九批就因为同一个理由删掉了同款三步
+                             （见 #quickstart 上方那段注释），这一页一直漏着。 -->
                     </div>
                     <div class="adv-controls">
-                        <span>选择书籍: </span>
-                        <span id="adv-filters"></span>
+                        <!-- 这里原来还有一排书名筛选项（「选择书籍:」+ 一排 chip）。它和页顶那条
+                             全局书名栏是同一份状态、同一个动作、名字逐字相同——同屏两排开关做一件事
+                             （renderFilters 的注释里自己写着「和顶部的书名按钮是同一个动作」）。
+                             两排相隔不到一屏，删掉本页这排、只留页顶那条（第四十三批，用户拍板）。
+                             本页标题行因此只剩「重置视图」这一个本页独有的动作。 -->
                         <button type="button" id="advResetBtn" class="adv-reset" onclick="advReset()" title="清空走势图上的框选，并让所有已加载的书都参与对比（刚打开时默认只选差别最大的一对，所以点这里书会变多，不是变回原样）">重置视图</button>
                     </div>
                 </div>
@@ -601,8 +619,10 @@
                 });
             });
 
-            renderFilters();
-            
+            // renderFilters() 在这里调用过：它把 advState.data 画成本页标题行的一排
+            // 书名 chip。那排与页顶全局书名栏重复，第四十三批删掉了本页这排（见 #adv-controls
+            // 上方的注释），函数一并删除。
+
             // 每次调用都重新初始化结构，以适应可能的容器尺寸变化 (Tab切换)
             initD3Structures();
             advState.chartsInitDone = true;
@@ -750,9 +770,14 @@
             // 两遍几乎逐字重复的免责话；现在与导出物末尾那句共用同一个常量
             // （ANOMALY_GLOBAL_NOTE，在 d3-charts.js 里），屏幕与导出不可能各说一套。
             // 只在真有片段列表时才加：全都「没有特别偏离的片段」时，这句解释不指向任何东西。
+            //
+            // 第四十三批又把「点开左侧曲线可以查看它前后的变化。」并到这一处来：它逐字相同、
+            // 每本书脚注各印一遍，而它说的是「怎么用这张表」（一个所有书共有的动作），
+            // 跟「本书有几个片段」不是一回事，不该逐本重复。它随 globalNote 一起出现，
+            // 条件也一致——没有片段可看时，这句话没有指向物。
             const hasItems = reports.some(r => r && !r.failed && Array.isArray(r.items) && r.items.length > 0);
             const globalNote = (hasItems && typeof ANOMALY_GLOBAL_NOTE === 'string')
-                ? `<div class="anomaly-muted">${escapeHtml(ANOMALY_GLOBAL_NOTE)}</div>`
+                ? `<div class="anomaly-muted">${escapeHtml(ANOMALY_GLOBAL_NOTE)}点开左侧曲线可以查看它前后的变化。</div>`
                 : '';
             panel.innerHTML = blocks + globalNote;
         }
@@ -802,9 +827,9 @@
             }).join('');
             // 脚注与导出共用同一个函数（anomalyNotes 在 d3-charts.js 里），屏幕与导出物不可能
             // 各说一套。脚注按书各写一份——「本书共几个片段」这种话一张嘴只能对着一个统计对象说。
-            // 所有书共有的那层免责话（重叠滑窗不是独立样本、不做显著性判断）已经从脚注里
-            // 挪到整块末尾只写一次（第四十二批，见 renderAnomalyPanel）。
-            const foot = `<div class="anomaly-muted">${escapeHtml(anomalyNotes(report).join(''))}点开左侧曲线可以查看它前后的变化。</div>`;
+            // 所有书共有的那两层（重叠滑窗不是独立样本、不做显著性判断；点开左侧曲线看前后变化）
+            // 都已经从脚注里挪到整块末尾只写一次（见 renderAnomalyPanel）。
+            const foot = `<div class="anomaly-muted">${escapeHtml(anomalyNotes(report).join(''))}</div>`;
             return head + cards + foot;
         }
 
@@ -939,7 +964,18 @@
             if (!(extent > 0)) return '';
             const ratio = gap / extent;
             // 九成以上就说到底：默认那两本正是这批书里差得最远的一对，写「十成」拗口又像夸张。
-            if (ratio >= 0.9) return '这两本差不多就是这批书里差得最远的两本。';
+            //
+            // 但「自动挑的那一对」要在这里闭嘴（第四十三批）。工具挑的就是该指标均值最大与
+            // 最小的两本，所以 ratio 恒为 1、这句话每次都会说；而 renderInsight 紧接着还会加
+            // 一句「这两本是按「差距最大」自动挑出来的，不是你挑的」——同一屏里同一件事说了
+            // 两遍。留后者（它顺带交代了谁挑的、想换怎么办），这里让位。
+            //
+            // 判据只卡在这一个分支：读者自己手选的两本如果正好也是最远的一对，这句仍然要说
+            // ——那时没有「自动挑的」那句，说了才不丢信息。
+            if (ratio >= 0.9) {
+                if (typeof isAutoPickedPair === 'function' && isAutoPickedPair()) return '';
+                return '这两本差不多就是这批书里差得最远的两本。';
+            }
             const tenths = Math.round(ratio * 10);
             if (tenths < 1) return '这个差距不到这批书里最大差距的一成。';
             return `约是这批书里最大差距的 ${tenths} 成。`;
@@ -1786,27 +1822,10 @@
             if (typeof syncUrlState === 'function') syncUrlState();
         }
 
-        function renderFilters() {
-            const container = d3.select("#adv-filters");
-            container.html("");
-            advState.data.forEach(book => {
-                const on = (typeof selectedBooks !== 'undefined') && selectedBooks.has(book.name);
-                container.append("button")
-                    .attr("type", "button")
-                    .attr("class", `filter-chip${on ? ' active' : ''}`)
-                    .attr("aria-pressed", on ? "true" : "false")
-                    .attr("title", book.displayName && book.displayName !== book.name ? book.name : null)
-                    .style("border-left", `3px solid ${book.color}`)
-                    .text(book.displayName || book.name)
-                    .on("click", function() {
-                        // 和顶部的书名按钮是同一个动作、同一份状态，直接复用它的逻辑，
-                        // 这样顶部按钮、指标提示、网址、三个页签的图会一起更新。
-                        // selectBook 自带「至少留一本」的保护，所以不会把书全点光。
-                        if (typeof selectBook === 'function') selectBook(book.name);
-                    });
-            });
-        }
-        
+        // renderFilters() 原名副其实地长在这儿：它把 advState.data 渲染成本页标题行的
+        // 一排书名 chip，点一下调 selectBook()（和页顶全局书名栏同一个动作、同一份状态）。
+        // 两排相隔不到一屏、名字逐字相同，第四十三批删掉了本页这排，函数随之删除——
+        // 选书统一由页顶那条全局书名栏承担。留着空函数比删掉更容易被后人当模板抄回去。
         function showAdvTooltip(e, html) {
             // 和主提示框同一个毛病：只写 left: pageX+10，而绝对定位元素的宽度由
             // 「容器剩余宽度」决定——320px 下悬停走势图最右那个点，可用宽度只剩 44px，

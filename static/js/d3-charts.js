@@ -588,12 +588,16 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
         (comparability.axisLabels || []).forEach(text => lines.push(text));
 
         // 两个轴各自承担了多少差异，是解读这张图的前提，以前只出现在导出的 BibTeX 里。
-        // 横轴 69.2%、纵轴 8.5%，差八倍——不说的话，读者会把「靠得近」当成
-        // 整体风格接近，其实那几乎全是横向位置在说话（第三十六批）。
+        // 不说的话，读者会把「靠得近」当成整体风格接近，其实那几乎全是横向位置在说话
+        // （第三十六批）。
+        //
+        // 第四十三批把括号里的两个百分数删了。它们本来就是为了说明「横向远多于纵向」，
+        // 而那两行轴标题就在正上方，逐字写着「第 1 主成分 · 解释 69.2% 的差异」——
+        // 同一块面板里同样的两个数挨着印两遍。结论（横向为主）留着，数由轴标题去说。
         const ratios = (comparability.explainedVarianceRatio || []).slice(0, 2).filter(isFiniteNumber);
         if (ratios.length === 2) {
-            lines.push(`横轴承担的差异远多于纵轴（${(ratios[0] * 100).toFixed(1)}% 对 ${(ratios[1] * 100).toFixed(1)}%），` +
-                `所以「靠得近」主要说明横向位置接近；坐标原点是内置语料的平均水平。`);
+            lines.push('横轴承担的差异远多于纵轴，所以「靠得近」主要说明横向位置接近；'
+                + '坐标原点是内置语料的平均水平。');
         }
 
         // 可比时用的是与内置示例书共用的那套固定坐标范围（resolveGalaxyExtent 的
@@ -880,11 +884,16 @@ function isAutoPickedPair() {
     return picks.every(name => selectedBooks.has(name));
 }
 
-// 「整体」这类数字的口径提醒（第四十批）。它回答读者拿到一个平均数后一定会问的两件事：
-// 这个平均数背后有没有起伏、以及能不能拿去做检验。
+// 「整体」这类数字的口径提醒（第四十批）。它回答读者拿到一个平均数后一定会问的问题：
+// 这个平均数背后有没有起伏、这些数能不能当样本用。
 // 片段是重叠滑窗切出来的（默认相邻重叠 9000 词），把它们当成互相独立的样本会高估样本量，
-// 在近重复的序列上算出来的「标准差」也就不是它字面上给人的那个意思。所以这里明说
-// 本工具不做显著性判断——不写这一句，0.009 和 0.011 很容易被顺手写成「显著不同」。
+// 在近重复的序列上算出来的「标准差」也就不是它字面上给人的那个意思。
+//
+// 第四十三批删掉了结尾那半句「本工具不做显著性判断」。同一块面板下方「值得一看的片段」
+// 的脚注（ANOMALY_GLOBAL_NOTE）就紧跟着说同一件事，导出摘要里两节也挨着——同一屏里
+// 同一句提醒说两遍。留下的是「片段之间有重叠、不是独立样本、只适合描述和定位」这层事实，
+// 它才是「别拿去做检验」的**理由**；结论那半句由下面那处说。两处共用同一个判据，
+// 不存在「删了这句就没人说」的缺口（导出物里还有方法说明那一段兜底）。
 function buildAveragingNote(books) {
     const metas = (books || []).map(name => normalizeBookMeta(name)).filter(Boolean);
     if (metas.length === 0) return '';
@@ -893,7 +902,7 @@ function buildAveragingNote(books) {
         ? `相邻片段之间重叠约 ${overlaps[0]} 词`
         : '相邻片段之间有大段重叠';
     return `这里的「整体」是各片段数值的平均数，${overlapText}、彼此并不是独立的样本；`
-        + '所以这些数只适合用来描述和定位片段，本工具不做显著性判断。';
+        + '所以这些数只适合用来描述和定位片段。';
 }
 
 // 三个标量指标能不能跨书比（第四十批）。原来的可比较性说明只讲了功能词投影，
@@ -3420,17 +3429,13 @@ function getAxisWordsHint() {
     return words.length ? `（${words.join(' / ')} 这类）` : '';
 }
 
-function getAxisWordsParen() {
-    const words = getSelectedAxisWords();
-    return words.length ? `（${words.join(' / ')}）` : '';
-}
-
-// 把轴词回填进静态 HTML 里的两个占位 span（词表为空时保持为空）
+// 把轴词回填进静态 HTML 里的占位 span（词表为空时保持为空）。
+//
+// 第四十三批删掉了第二个占位 span：星系图指南行原来还带一份「（the / his / of / he）」，
+// 和本行（标题里那句）、下面的图例重复了同一组词。getAxisWordsParen 随之删除。
 function renderAxisWordHints() {
     const hint = document.getElementById('galaxy-axis-words');
     if (hint) hint.textContent = getAxisWordsHint();
-    const paren = document.getElementById('galaxy-guide-axis-words');
-    if (paren) paren.textContent = getAxisWordsParen();
 }
 
 // 星系图例里「大小 = …」那行要点出当前观察角度是哪个指标。
@@ -4050,25 +4055,35 @@ function exportSummary() {
     // 为什么不在导出时顺手算一遍：算这两节要先把「全书对比」的数据拉下来并渲染，
     // 那是一次用户没要求的加载和一次对他当前页签的界面写入。既有设计已经选定了
     // 这条路——copyConclusion 也是让用户自己切过去，不是替他切。跟着它走。
-    const NOT_GENERATED = '这一节这次没有生成。请先切到「全书对比」页（会自动挑选对比书并算出结论），再回来导出，摘要里就会带上它。';
+    // 两节同因（都是「没进过「全书对比」页」），所以两条路各写一遍同样的三行说明是多余的：
+    // 第四十三批改成两节都缺时合成一处说（标题照旧两行，说明只说一次）。
+    // 只有一节缺时那份说明与原来逐字节相同。
+    const notGeneratedNotice = (both) => both
+        ? '这两节这次都没有生成。请先切到「全书对比」页（会自动挑选对比书并算出结论），再回来导出，摘要里就会带上它们。'
+        : '这一节这次没有生成。请先切到「全书对比」页（会自动挑选对比书并算出结论），再回来导出，摘要里就会带上它。';
     const insightText = buildInsightText();
-    if (insightText) {
-        lines.push('【一句话解读】');
-        lines.push(insightText);
-        lines.push('');
-    } else {
-        lines.push('【一句话解读】');
-        lines.push(NOT_GENERATED);
-        lines.push('');
-    }
     const anomalyText = buildAnomalyText();
-    if (anomalyText) {
+    if (!insightText && !anomalyText) {
+        lines.push('【一句话解读】');
         lines.push('【值得一看的片段】');
-        lines.push(anomalyText);
+        lines.push(notGeneratedNotice(true));
         lines.push('');
     } else {
-        lines.push('【值得一看的片段】');
-        lines.push(NOT_GENERATED);
+        if (insightText) {
+            lines.push('【一句话解读】');
+            lines.push(insightText);
+        } else {
+            lines.push('【一句话解读】');
+            lines.push(notGeneratedNotice(false));
+        }
+        lines.push('');
+        if (anomalyText) {
+            lines.push('【值得一看的片段】');
+            lines.push(anomalyText);
+        } else {
+            lines.push('【值得一看的片段】');
+            lines.push(notGeneratedNotice(false));
+        }
         lines.push('');
     }
 
@@ -4123,11 +4138,14 @@ function buildInsightText() {
     return lines.join('\n');
 }
 
-// 异常面板脚注的三句话，屏幕与导出共用（第十一批、第十五批都吃过「两处各说一套」的亏）。
-// 它们分别管三件最容易被读错的事：这只是描述性的「离整体远」、列表有上限、
-// 相邻片段大面积重叠所以不是互相独立的样本。
+// 异常面板脚注里**逐本不同**的那两句，屏幕与导出共用（第十一批、第十五批都吃过
+// 「两处各说一套」的亏）。留下的都对着一张统计对象说话：列表有上限、本书有几个片段。
+//
+// 第四十三批又搬走了一句：「这里的「偏离」只是统计意义上离整体较远……不代表写得好或不好。」
+// 它逐字相同、每本书各印一遍（两本书就是两遍），说的是所有书共有的一层意思，
+// 已并入 ANOMALY_GLOBAL_NOTE（见下），和「不做显著性判断」一起整份只说一次。
 function anomalyNotes(report) {
-    const notes = ['这里的「偏离」只是统计意义上离整体较远（离均值超过 2 个标准差，或超出四分位距范围），不代表写得好或不好。'];
+    const notes = [];
     // 接口把 items 截断到 8 条，counts.total 才是「一共找出多少个」。
     // 不说这一句，读者会把列出的这 8 条当成全集，写成「全书共 8 个偏离片段」。
     if (report && isFiniteNumber(report.flagged) && report.flagged > report.items.length) {
@@ -4147,12 +4165,14 @@ function anomalyNotes(report) {
     return notes;
 }
 
-// 「值得一看的片段」整份输出末尾的那一句（第四十二批）。
-// 它说的是所有书共有的一件事——片段是重叠滑窗切出来的、本工具不做显著性判断——
-// 所以整份只说一次，不再逐本重复（两本书时原来会说两遍）。
+// 「值得一看的片段」整份输出末尾的那一句（第四十二批），第四十三批又并进来一句。
+// 它说的是所有书共有的一层意思——「偏离」只是描述性的、片段是重叠滑窗切出来的、
+// 本工具不做显著性判断——所以整份只说一次，不再逐本重复（两本书时原来各说两遍）。
 // 屏幕上的异常面板与导出物（buildAnomalyText）用的是同一个常量，两处不可能各说一套。
-const ANOMALY_GLOBAL_NOTE = '上面这些片段是相邻重叠的滑窗切出来的，不能当成互相独立的样本；'
-    + '本工具不做显著性判断，它们只用来帮你挑原文，不构成「显著偏离」的结论。';
+const ANOMALY_GLOBAL_NOTE = '上面这些片段的「偏离」只是统计意义上离整体较远'
+    + '（离均值超过 2 个标准差，或超出四分位距范围），不代表写得好或不好。'
+    + '它们是相邻重叠的滑窗切出来的，不能当成互相独立的样本；'
+    + '本工具不做显著性判断，只用来帮你挑原文，不构成「显著偏离」的结论。';
 
 // 「值得一看的片段」的纯文字版本，同样取自屏幕上那一份（lastAnomalyReports）。
 // 还没加载出来（没进「全书对比」页）时返回空串，调用方据此跳过这一节——

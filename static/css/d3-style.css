@@ -1089,25 +1089,9 @@ button:hover {
     font-size: 12px;
 }
 
-.adv-controls .filter-chip {
-    display: inline-block;
-    padding: 5px 12px;
-    margin-left: 5px;
-    background: var(--elev);
-    border: 1px solid var(--border);
-    border-radius: 15px;
-    font-size: 12px;
-    cursor: pointer;
-    -webkit-user-select: none;user-select: none;
-    color: var(--ink-70);
-    transition: var(--transition-control);
-}
-
-.adv-controls .filter-chip.active {
-    background: var(--vermilion-soft);
-    border-color: var(--vermilion);
-    color: var(--ink-100);
-}
+/* 这里原来还有 `.adv-controls .filter-chip`（和它的 .active）两组规则，给「全书对比」
+   页标题行那排书名 chip 用。第四十三批删掉了那排 chip（它和页顶全局书名栏是同一份状态、
+   同一个动作、名字也逐字相同），样式随之没有了承载者，一并删掉。 */
 
 /* ---------- 仪表盘 ---------- */
 .dashboard-grid {
@@ -1994,16 +1978,8 @@ button:hover {
     box-shadow: none;
 }
 
-/* ---------- 全书对比筛选 chip 使用原生 <button>，统一字体 ---------- */
-.adv-controls .filter-chip {
-    font-family: inherit;
-    line-height: 1.4;
-    text-align: center;
-    appearance: none;
-    -webkit-appearance: none;
-    box-sizing: border-box;
-}
-.adv-controls .filter-chip:focus-visible { outline: 2px solid var(--vermilion); outline-offset: 2px; }
+/* 这里原来是「全书对比筛选 chip 使用原生 <button>，统一字体」那一组 .filter-chip 规则。
+   chip 已随第四十三批删除，规则一并删除。 */
 
 /* ---------- 全局键盘焦点可见性（不改变鼠标点击时的外框） ---------- */
 :focus-visible {
@@ -2304,7 +2280,6 @@ button.copy-failed:hover {
     .quickstart-close,
     .export-group button,
     .book-btn,
-    .filter-chip,
     .sort-control,
     .copy-block-btn,
     .save-toggle,
@@ -2413,10 +2388,10 @@ button.copy-failed:hover {
     .selection-notice,      /* 一过性的选书提示（fixed，还可能在每页重复） */
     .galaxy-modal-overlay,  /* 弹窗：是界面状态，不是内容 */
     .controls,              /* 图表类型下拉 + 曲线平滑滑块 */
-    .adv-controls > button, /* 「重置视图」。写成「>」是量出来的：不加「>」会把
-                               #adv-filters 里那排选书 chip 一起藏掉（chip 也是
-                               <button>），于是「全书对比」页印出来只剩「选择书籍:」
-                               四个字——纸面上反而比改之前更说不清选的是哪几本。 */
+    .adv-controls > button, /* 「重置视图」。这个「>」当初是为了不误伤 #adv-filters 那排
+                               选书 chip 才加的（chip 也是 <button>）；chip 已在第四十三批
+                               删除，现在本页只剩这一个按钮，「>」已不承担区分作用，留着
+                               是为了继续把范围钉在直接子按钮上。 */
     #demo-entry,            /* 「载入对比示例」 */
     #restartGalaxyBtn,      /* 「↻ 重新布局」 */
     .galaxy-hud,            /* 星系右上角那块面板：纯悬停交互，纸上既压住圆点又印一句
@@ -2458,14 +2433,8 @@ button.copy-failed:hover {
            是因为内阴影不参与布局——加粗边框会让每个 chip 宽 2px，一行书名跟着重排。 */
         box-shadow: inset 0 0 0 1px var(--vermilion);
     }
-    /* 「全书对比」页那排选书 chip 的选中态同理：原来是淡朱砂底 + 朱砂描边，
-       底色一没，选中和没选中就只剩描边色一个差别（黑白打印机上更是分不出来）。 */
-    .adv-controls .filter-chip.active {
-        background: none;
-        border-color: var(--vermilion);
-        color: var(--ink-100);
-        box-shadow: inset 0 0 0 1px var(--vermilion);
-    }
+    /* 这里原来还有一条 `.adv-controls .filter-chip.active`（「全书对比」页那排选书
+       chip 的选中态，同样是为了黑白打印能分辨）。chip 已随第四十三批删除。 */
     /* 这一条是全篇唯一用 print-color-adjust 的地方，理由只有一个：星系的颜色图例
        是一个 12px 的圆点，圆点整块的意义就是它的底色，而底色是 JS 用行内
        style.background 写上去的（d3-charts.js 的 colorForBook）——CSS 改不了它，
