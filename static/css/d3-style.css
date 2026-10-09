@@ -1283,6 +1283,13 @@ button:hover {
     pointer-events: none;
 }
 
+/* 每本书的「地盘」（第三十七批）：同色半透明色块，垫在圆点下面。
+   与网格同一个理由——悬停、点按、拖动都该归圆点，色块不能挡在前面。
+   指针事件在 SVG 里可继承，写在组上，这一层里的 path 就都不接了。 */
+.galaxy-territory {
+    pointer-events: none;
+}
+
 .axis-label {
     font-size: 12px;
     fill: var(--ink-70);
