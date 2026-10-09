@@ -217,7 +217,7 @@
             <div class="adv-header">
                 <div>
                     <h2 style="margin:0; color:#2f2a23; font-size: 18px;"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-line"/></svg> 基础趋势分析</h2>
-                    <small style="color:#6b6254">横轴是全书进度，纵轴是「观察角度」里选的这个指标；一格（一个点）约对应 1 万词。点一下图里的位置，右侧会显示那一段的详情。</small>
+                    <small style="color:#6b6254">横轴是全书进度，纵轴是「观察角度」里选的这个指标；一格（一个点）约对应 1 万词。点一下图里的位置，就能看到那一段的详情。想直接看写好的结论，切到上面的「全书对比」。</small>
                 </div>
                 <div>
                     <button type="button" id="demo-entry" class="demo-entry" hidden onclick="loadComparisonExample()" title="自动挑出当前观察角度下差别最大的一对书，并切到「全书对比」页看结论">载入对比示例</button>
@@ -325,7 +325,7 @@
                     <div class="adv-controls">
                         <span>选择书籍: </span>
                         <span id="adv-filters"></span>
-                        <button type="button" id="advResetBtn" class="adv-reset" onclick="advReset()" title="把选中的书和走势图上的框选都恢复到刚打开时的样子（回到默认选中的书、取消框选）">重置视图</button>
+                        <button type="button" id="advResetBtn" class="adv-reset" onclick="advReset()" title="清空走势图上的框选，并让所有已加载的书都参与对比（刚打开时默认只选差别最大的一对，所以点这里书会变多，不是变回原样）">重置视图</button>
                     </div>
                 </div>
 
@@ -950,10 +950,14 @@
                     if (otherMeans.length) {
                         const benchmark = d3.mean(otherMeans);
                         const diff = data[0].currentMean - benchmark;
-                        const dir = diff > 0 ? '高于' : (diff < 0 ? '低于' : '接近');
-                        const cmp = dir === '接近'
-                            ? '这本书与它们的水平差不多'
-                            : `这本书比它们${dir}约 ${fmtMetric(Math.abs(diff))}`;
+                        // 原来是拼「比它们」+ 方向词，得到「这本书比它们高于约 1.2」——
+                        // 「比」后面只能跟「高/低」，不能再跟「高于/低于」。这是页面上最显眼的
+                        // 那句结论（全书对比的第一行），所以把方向词直接写进每个分支里。
+                        const cmp = diff > 0
+                            ? `这本书比它们高出约 ${fmtMetric(diff)}`
+                            : (diff < 0
+                                ? `这本书比它们低了约 ${fmtMetric(-diff)}`
+                                : '这本书与它们的水平差不多');
                         const scopeWord = brushScope ? `在框选的 ${brushScope} 区段内平均` : '平均水平';
                         lines.push(`作为参照，其它 ${otherMeans.length} 本已加载的书（含你自己上传的）${scopeWord}约为 ${fmtMetric(benchmark)}，${cmp}。`);
                     }

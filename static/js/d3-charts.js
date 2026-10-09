@@ -56,7 +56,13 @@ const DEFAULT_ADV_SORT = ADV_SORT_STATES[0];
 
 // 初始化
 document.addEventListener('DOMContentLoaded', function() {
-    applyUrlState(readUrlState()); // 先按链接里的状态设置视图，再加载数据
+    // 先按状态设置视图，再加载数据。
+    // 链接里有认得的参数就以链接为准——别人发来的、自己存下来发的，都必须赢过本机记忆，
+    // 否则「打开即还原本次选择」这个承诺就废了。打开根地址（链接没带参数）时接着上次：
+    // 写论文是几周里反复回来的事，每天都从默认那两本重新选起，人就只好一直开着页面不敢关。
+    const linkState = readUrlState();
+    const fromLink = linkState && Object.keys(linkState).length > 0;
+    applyUrlState(fromLink ? linkState : (readSavedViewState() || linkState));
     initEventListeners();
     initTabKeyboard();
     applyQuickStartVisibility();
@@ -79,12 +85,16 @@ document.addEventListener('DOMContentLoaded', function() {
 let pendingUrlBooks = null;
 let pendingUrlBrush = null;
 
-function readUrlState() {
-    let params;
-    try {
-        params = new URLSearchParams(window.location.search);
-    } catch (e) {
-        return null; // 极老的浏览器没有 URLSearchParams，当作没有链接状态
+// params 可以不传（默认取当前网址的查询串）。传进来的那一份给「上次离开时的视图」用
+// （见 readSavedViewState）：它存的也是同一套查询串，于是两处共用同一份白名单校验，
+// 不会出现「链接里校验过的值，从本机记忆里读出来却没人管」。
+function readUrlState(params) {
+    if (!params) {
+        try {
+            params = new URLSearchParams(window.location.search);
+        } catch (e) {
+            return null; // 极老的浏览器没有 URLSearchParams，当作没有链接状态
+        }
     }
 
     const state = {};
@@ -160,7 +170,12 @@ function applyUrlState(state) {
 // 把当前视图状态写回网址栏（不产生历史记录）
 function syncUrlState() {
     if (!window.history || !window.history.replaceState) return;
-    window.history.replaceState(null, '', buildStateUrl());
+    const url = buildStateUrl();
+    window.history.replaceState(null, '', url);
+    // 顺手记到本机：下次打开根地址时接着上次（链接里有认得的参数时链接优先，
+    // 见 DOMContentLoaded 里那一段）。放在这里是因为这个函数就是「视图变了」的唯一出口，
+    // 另外挂几处的话，迟早有一处新加的改状态忘了记。
+    rememberViewState(url);
 }
 
 // 当前状态对应的完整链接（复制链接、导出摘要都用它）
@@ -196,15 +211,64 @@ function buildStateUrl() {
     return `${window.location.origin}${window.location.pathname}${query ? `?${query}` : ''}`;
 }
 
+// ---- 上次离开时的视图（本机记住，下次打开接着上次）----
+// 存的就是查询串本身（buildStateUrl 产出的「?」之后那一段），不另立一套字段：同一个格式、
+// 同一份白名单校验（readUrlState），两份格式迟早会有一份忘了跟着改。键名带版本号——
+// 将来字段变了，旧值直接读不出来、退回默认，而不是把页面带到一个半旧半新的状态上。
+const LAST_VIEW_KEY = 'wf-last-view-v1';
+
+function readSavedViewState() {
+    if (!window.localStorage) return null;
+    try {
+        const raw = window.localStorage.getItem(LAST_VIEW_KEY);
+        if (!raw) return null;
+        return readUrlState(new URLSearchParams(raw));
+    } catch (e) {
+        return null; // 无痕模式 / 存储被禁用 / 旧值不是合法查询串：一律当作没有记忆
+    }
+}
+
+function rememberViewState(url) {
+    if (!window.localStorage) return;
+    try {
+        const cut = url.indexOf('?');
+        const query = cut < 0 ? '' : url.slice(cut + 1);
+        // 全默认时本来就不该留下痕迹（buildStateUrl 对默认值不写参数，所以这里一般是空）
+        if (!query) { window.localStorage.removeItem(LAST_VIEW_KEY); return; }
+        window.localStorage.setItem(LAST_VIEW_KEY, query);
+    } catch (e) { /* 存不下就算了：记不住状态而已，不能因为这件事打断任何一次操作 */ }
+}
+
+// 「链接里没有哪几本」。内置书在别人的服务器上也有，自己上传的那几本没有——对方打开时
+// 那几本会静默消失（url 里那个名字对不上任何一本书），而发链接的人以为分享的是完整结果。
+// 复制链接、导出摘要两处都要说同一件事，所以判据只写在这里一份。
+// builtinBookNames 还没建好时（书单还在加载）不做判断，免得全被当成上传的。
+function getUnsharedUploadedBooks() {
+    if (builtinBookNames.length === 0) return [];
+    return Array.from(getActiveBookSet()).filter(name => !builtinBookNames.includes(name));
+}
+
+// 摘要里的「在线视图」链接有两件事必须说清，否则收件人打开看到的会是另一份分析，
+// 而摘要里没有一个字解释为什么对不上。BibTeX 导出里一直有本机地址那一句，摘要里没有
+// （同一份分析的两个导出物说法不一致），第三十九批补齐。
+function buildShareCaveats() {
+    const notes = [];
+    if (isLocalHost()) {
+        notes.push('- 上面这个链接指向本机地址，只有本机能打开；要发给别人，请连同本摘要一起发。');
+    }
+    const uploaded = getUnsharedUploadedBooks();
+    if (uploaded.length > 0) {
+        const names = uploaded.map(getBookDisplayName).join('、');
+        notes.push(`- 链接里没有《${names}》（共 ${uploaded.length} 本）：这是你自己上传的文本，`
+            + '别人打开链接时看不到这几本，他们看到的会是少掉这几本的另一份分析。');
+    }
+    return notes;
+}
+
 // 「复制此链接」：把当前视图（指标/选书/标签页/图形/框选）发给同事
 function copyShareLink(button) {
     syncUrlState();
-    // 链接里只带书名。内置书在别人的服务器上也有，自己上传的那几本没有——对方打开时
-    // 那几本会静默消失（url 里那个名字对不上任何一本书），而复制的人以为分享的是完整结果。
-    // 所以复制前先点名。builtinBookNames 还没建好时（书单还在加载）不做判断，免得全被当成上传的。
-    const uploaded = builtinBookNames.length === 0
-        ? []
-        : Array.from(getActiveBookSet()).filter(name => !builtinBookNames.includes(name));
+    const uploaded = getUnsharedUploadedBooks();
     const okText = uploaded.length ? `✓ 链接已复制（不含你上传的 ${uploaded.length} 本）` : '✓ 链接已复制';
     copyTextToClipboard(buildStateUrl(), button, okText);
     if (uploaded.length > 0) {
@@ -373,6 +437,19 @@ function normalizeExtent(extent, fallback = 0) {
     if (!isFiniteNumber(min) || !isFiniteNumber(max)) return [fallback - 1, fallback + 1];
     if (min === max) return [min - 1, max + 1];
     return [min, max];
+}
+
+// 「这把尺子量得出差别吗」——按**屏幕上显示得出来的精度**判（formatMetric），不是按浮点数
+// 是否严格相等。原来的判据是 min === max：于是「最小 14.481、最大 14.482」这种（显示出来
+// 都是 14.48）会走进正常那条路，radiusScale 把整段 [4,14] 铺在这个 0.001 的跨度上——
+// 读者看到 3.5 倍的圆点大小差，而屏幕上两边的数字一模一样。图在替一个看不见的差别大声说话。
+// 改成「两个端点显示成同一个数」之后，这种情形与「所有值完全相同」走同一条路（见下面
+// renderGalaxySizeLegend 与 initStyleGalaxy 两处调用），圆点大小也就基本一样了。
+// 数字取到几位是现成的口径（METRIC_DIGITS），这里直接复用，免得又出现一套「多少算一样」。
+function sizeExtentIsFlat(extent) {
+    const [min, max] = extent;
+    if (!isFiniteNumber(min) || !isFiniteNumber(max)) return true;
+    return formatMetric(min) === formatMetric(max);
 }
 
 // ==========================================
@@ -913,6 +990,14 @@ async function proceedUpload(file) {
         } else if (result.shadowsExisting) {
             notes.push(`书名和你已保存的${newName}重名：屏幕上显示的是这次的分析结果，`
                 + '书架里存着的仍是上次保存的那一份（这次未勾选保存）。');
+        }
+        // 「刷新后不会保留」只说了一半：没保存的上传还留在内存里，图能照画、原文摘录也取得到，
+        // 用户于是以为一切正常。真正做不到的是**要回头问服务器**的那一步——「全书对比」里的
+        // 异常片段分析走 /api/analysis，读的是服务器上那份语料，不含没落盘的上传。
+        // 不说这句，用户会在切到那一页、看到红字时才第一次知道，而那时只能重传一遍。
+        if (!result.saved && !result.warning) {
+            notes.push('「全书对比」里的异常片段分析要回头问服务器，这一步算不了没保存的上传，'
+                + '切到那一页会显示取不到；本页的图和原文摘录不受影响。');
         }
         if (result.warning) notes.push(result.warning);
         setUploadStatus(
@@ -2984,6 +3069,13 @@ function getMetricContextLine(metric) {
         // 只选了一本时，「在 X – X 之间」是句废话（最小值等于最大值），改说平均水平
         if (selected.count === 1) {
             parts.push(`你选中的这 1 本，平均水平是 ${formatMetric(selected.min)}。`);
+        } else if (sizeExtentIsFlat([selected.min, baseline.min])
+                   && sizeExtentIsFlat([selected.max, baseline.max])) {
+            // 选中的正好是这批书里平均最高和最低的那几本时，两段数字会一模一样。默认那两本
+            // 就是这样（一批书里句子最短、最长的那两本），于是屏幕上出现「参考区间 …在 14.48 –
+            // 18.81…。你选中的 2 本在 14.48 – 18.81 之间。」——第二句一个字都没多给，
+            // 读者只会以为这个功能坏了。改成说清为什么一样（判据同 C4，见 sizeExtentIsFlat）。
+            parts.push('你选中的这几本，正好涵盖了这批书的最高与最低水平——所以上面的数字看起来和参照区间一样。');
         } else {
             parts.push(`你选中的 ${selected.count} 本在 ${formatMetric(selected.min)} – ${formatMetric(selected.max)} 之间。`);
         }
@@ -3200,7 +3292,7 @@ function renderGalaxySizeLegend(radiusScale, nodes) {
     const values = nodes.map(d => d.realValue).filter(isFiniteNumber).sort((a, b) => a - b);
     // 值域退化（所有片段数值相同）时不画：normalizeExtent 会把域撑成 [min-1, max+1]，
     // 照画就是三个假刻度
-    if (values.length < 2 || values[0] === values[values.length - 1]) {
+    if (values.length < 2 || sizeExtentIsFlat([values[0], values[values.length - 1]])) {
         el.hidden = true;
         return;
     }
@@ -3740,6 +3832,9 @@ function exportSummary() {
         ...(contextLine ? [`- 解读参考：${contextLine}`] : []),
         `- 选择书籍：${books.map(getBookDisplayName).join('、')}`,
         `- 在线视图（打开即还原本次选择）：${buildStateUrl()}`,
+        // 这条链接有两件事必须跟着一起说，否则收件人打开会看到另一份分析而摘要里
+        // 一个字都不解释：本机地址别人打不开；自己上传的书不在别人的服务器上。
+        ...buildShareCaveats(),
         ''
     ];
 
@@ -4597,7 +4692,14 @@ function initStyleGalaxy() {
         return;
     }
 
-    const metricExtent = normalizeExtent(d3.extent(allNodes, d => d.realValue));
+    // 尺子的值域。先用浮点数判退化（min === max），再用「屏幕上显示得出来的精度」判一次
+    // （sizeExtentIsFlat，见该函数）：后者才是读者能分辨的粒度。两个端点显示成同一个数时，
+    // 走和「所有值都相同」同一条路——给它 1 单位的余量，让所有片段落在同一个半径上，
+    // 而不是把 [4,14] 铺在一个屏幕上根本看不见的跨度上。
+    const rawMetricExtent = d3.extent(allNodes, d => d.realValue);
+    const metricExtent = sizeExtentIsFlat(rawMetricExtent)
+        ? normalizeExtent([rawMetricExtent[0], rawMetricExtent[0]])
+        : normalizeExtent(rawMetricExtent);
     // 上限从 18 收到 14（第三十六批）：166 个半径 11 上下的实心球同屏，互相压住，
     // 既看不出个数也看不出大小。收小之后碰撞力需要的位移也变小，位置反而更忠实。
     // 触控 44px 的底线由 attachGalaxyTapPicker 那层透明接收层（容差 22px）保住。
