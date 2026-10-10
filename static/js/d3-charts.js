@@ -1542,7 +1542,11 @@ const _deletingBooks = new Set();
 // 从「我的图书馆」删除：确认 → DELETE 接口 → 同步内存/选择/按钮/图表
 async function deleteLibraryBook(bookName) {
     if (_deletingBooks.has(bookName)) return;
-    if (!window.confirm(`确定从「我的图书馆」删除《${getBookDisplayName(bookName)}》？此操作不可撤销。`)) return;
+    // 说具体（第四十七批）：原来只有一句「此操作不可撤销」，读者不知道有没有回收站、
+    // 也不知道想留档该做什么。**不写「先抄书架编号」**——编号只回答「这是哪个书架」，
+    // 删掉的那份数据不会因为编号还在就回得来（审查台账里那半句是错的，复现后不采纳）。
+    if (!window.confirm(`确定从「我的图书馆」删除《${getBookDisplayName(bookName)}》？`
+        + '删除后无法恢复，也没有回收站；要留档请先用上方「更多导出」导出数据表或摘要。')) return;
 
     _deletingBooks.add(bookName);
     setDeletingBookState(bookName, true);
@@ -1835,11 +1839,18 @@ async function loadRealData() {
         selectedBooks = new Set(requestedBooks.filter(book => availableBooks.includes(book)));
         // 链接里点了名、但这台服务器上已经没有的书：必须说出来。
         // 原来只是悄悄换成第一本书，用户会以为自己看的还是同事分享的那几本。
+        //
+        // 这句要「攒着、晚一步说」（第四十七批实测）：找不到的书会让 selectedBooks 变空，
+        // 紧接着就走进下面「自动挑差异最大的两本」那个分支，而那条回执走的是 announceOrNotice
+        // ——它会把这条顶掉，自己又 6 秒就收，收链接的人最后一句话也没看见。所以两种情况
+        // 合成同一条**常驻**提示：只丢了一部分，就地发；全丢了，等自动选书定下来跟它一起发。
         const droppedBooks = requestedBooks.filter(book => !availableBooks.includes(book));
-        if (droppedBooks.length > 0) {
-            setGlobalStatus('notice',
-                `链接里的这 ${droppedBooks.length} 本书在这台服务器上找不到：${droppedBooks.map(getBookDisplayName).join('、')}`
-                + '（可能已被删除，或这个链接来自另一台服务器）。下面显示的是现有的书。');
+        const droppedNotice = droppedBooks.length > 0
+            ? `链接里的这 ${droppedBooks.length} 本书在这台服务器上找不到：${droppedBooks.map(getBookDisplayName).join('、')}`
+              + '（可能已被删除，或这个链接来自另一台服务器）。'
+            : '';
+        if (droppedNotice && selectedBooks.size > 0) {
+            setGlobalStatus('notice', `${droppedNotice}下面显示的是现有的书。`, { sticky: true });
         }
         if (selectedBooks.size === 0) {
             // 首屏默认：差别最明显的两本内置书（第一次来的用户打开就能看到「对比」
@@ -1858,10 +1869,14 @@ async function loadRealData() {
                 // 或者自己选过书之后都不会走到这个分支）。
                 // 「更换**下方**选书即可」原来指错了方向（第四十六批）：这几句提示可能出现在
                 // 任何一个页签上，而书选栏始终在页顶。改选书这件事本来也不需要方位词。
-                announceOrNotice(
-                    `已替你选中差异最大的两本：《${picks.map(getBookDisplayName).join('》《')}》——`
-                    + `它们的「${getMetricLabel(currentMetric)}」差距最大。如需比较其他组合，改选其它书籍即可。`
-                );
+                const autoPickNotice = `已替你选中差异最大的两本：《${picks.map(getBookDisplayName).join('》《')}》——`
+                    + `它们的「${getMetricLabel(currentMetric)}」差距最大。如需比较其他组合，改选其它书籍即可。`;
+                if (droppedNotice) {
+                    // 链接里的书全没了（所以才会走到这里自动挑书）：两件事一条说完，且不自动收
+                    setGlobalStatus('notice', droppedNotice + autoPickNotice, { sticky: true });
+                } else {
+                    announceOrNotice(autoPickNotice);
+                }
             } else {
                 selectBook(availableBooks[0]); // 兜底：连一对都挑不出来时，照旧选第一本
             }
@@ -2700,6 +2715,7 @@ function renderQuickPreviewIfIdle() {
         <div class="quick-preview" data-book-id="${escapeHtml(book)}">
             ${rows}
         </div>
+        <p class="excerpt-note">这三段是按数值从高到低挑的，而片段之间彼此重叠——它们可能来自同一段原文，不宜当作三处独立证据。</p>
         <p class="excerpt-note">点击上面任意一行，等同于点击图中对应的位置。</p>
     `;
     detailPanel.querySelectorAll('.quick-preview-row').forEach((btn, i) => {
@@ -2920,6 +2936,13 @@ function chaptersWithoutBlocks(bookName) {
 // 原始标题确实写着 CHAPTER II，不加说明就成了自相矛盾的两句话。
 function chapterLabel(chapter) {
     return chapter ? `第 ${chapter.index + 1} 章（按标题自动识别）` : '';
+}
+
+// 只有章号，不带口径后缀（第四十七批）。CSV 里这一列每行都是同一个后缀，一百多行纯噪声；
+// 而口径在表头注释块里说一次就够（第四十三/四十四批定的「同一屏说两遍就收掉一处」，
+// 这里是一张表说一百多遍）。屏幕上仍用 chapterLabel —— 那里一次也就出现一两处。
+function chapterShortLabel(chapter) {
+    return chapter ? `第 ${chapter.index + 1} 章` : '';
 }
 
 // 章节标题：有「部」时带上部名，否则只显示原始标题。
@@ -4237,7 +4260,7 @@ function exportSummary() {
         lines.push('');
     }
 
-    lines.push('说明：本摘要用于记录当前页面的选择。图中的数值与位置只是风格方面的数据，请结合作品原文与具体片段理解，不宜单独当作文学质量高低的评判。');
+    lines.push('说明：本摘要记录了导出时的选书与观察角度。图中的数值与位置只是风格方面的数据，请结合作品原文与具体片段理解，不宜单独当作文学质量高低的评判。');
 
     downloadBlob(lines.join('\n'), `文印_分析摘要_${exportTimestamp()}.txt`, 'text/plain;charset=utf-8');
     flashExportReceipt(document.getElementById('exportSummaryBtn'), '摘要已导出（.txt），在浏览器的「下载」列表里。');
@@ -4472,6 +4495,22 @@ function describeCorpusVersion(books) {
     return `${composition}；${fingerprint}。这个指纹是服务端按整份语料的「内容」算的，不是文件的修改时间：内容一样它就不变，内容一变它就变。整份语料共用一个指纹，不是每本书各有一个。`;
 }
 
+// 数据格式版本（第四十七批）：引用条目要回答「哪个版本」，而唯一不会骗人的版本号是
+// 跟着数据自己走的那一个。这个编号由生成数据的程序写进每本书的 metadata，不需要任何人
+// 记得升级——与第四十六批否掉的「工具版本常量」是两回事（那个永远不会被升，写了更坏）。
+// 取不到就不写这一句，不退化成空字段。
+function describeDataFormatVersion(books) {
+    const versions = Array.from(new Set((Array.isArray(books) ? books : [])
+        .map(name => {
+            const meta = realData && realData[name] && realData[name].metadata;
+            const v = meta ? Number(meta.schemaVersion) : NaN;
+            return Number.isFinite(v) && v > 0 ? v : null;
+        })
+        .filter(v => v !== null)));
+    if (versions.length === 0) return '';
+    return `数据格式 v${versions.join('/v')}`;
+}
+
 // 正文起点（第四十批）。内置书取自 Project Gutenberg，本书自己的书名页和目录留在正文之前，
 // 第 0 格因此把书名页与目录也算进去了（实测 Tom Sawyer 正文从第 984 个词起、Huckleberry Finn
 // 从第 1190 个词起；清洗管线只剥 Gutenberg 的授权声明，不剥书名页）。这条规则不改——改了会
@@ -4532,11 +4571,11 @@ function buildComparabilitySentence(books) {
     const { model, allShared, legacyBooks, mixedModels } = getSharedProjection(books);
     if (allShared) {
         const ratio = (model.explainedVarianceRatio || []).map(v => `${(v * 100).toFixed(1)}%`).join(' / ');
-        return `功能词投影由统一的坐标模型计算（模型编号 ${model.modelId}${ratio ? `，前两个主成分解释方差 ${ratio}` : ''}），因此各书的坐标落在同一基底上，可直接比较。`;
+        return `功能词二维投影由统一的坐标模型计算（模型编号 ${model.modelId}${ratio ? `，前两个主成分解释方差 ${ratio}` : ''}），因此各书的坐标落在同一基底上，可直接比较。`;
     }
     if (legacyBooks.length > 0) {
         const names = legacyBooks.map(name => `《${getBookDisplayName(name)}》`).join('、');
-        return `功能词投影由统一的坐标模型计算，但${names}是旧版数据、没有共同坐标基准，${legacyBooks.length > 1 ? '这几本' : '这一本'}的坐标不参与跨书比较；其余书之间可直接比较。`;
+        return `功能词二维投影由统一的坐标模型计算，但${names}是旧版数据、没有共同坐标基准，${legacyBooks.length > 1 ? '这几本' : '这一本'}的坐标不参与跨书比较；其余书之间可直接比较。`;
     }
     if (mixedModels) {
         return '选中的书来自不同的坐标模型，坐标没有落在同一基底上，不宜跨书解读。';
@@ -4583,10 +4622,13 @@ function buildMethodsParagraph(books) {
     // _clean_tokens，照实写给读者，不引用文件名。
     parts.push('词是这样数的：文本先转小写、用 NLTK 的英语分词器切词，只保留全字母的词——'
         + '数字与标点都不计入，所有格也只算词干（Tom\'s 只算 Tom 一个词）。');
-    // 小词表是哪一套（第四十六批）。四个指标里只有功能词投影依赖一张外部词表，
+    // 小词表是哪一套（第四十六批）。四个指标里只有功能词二维投影依赖一张外部词表，
     // 换一张词表整张图都会变，而说明里原来一个字没提。
     // 不写死词表里有多少个：那个数跟着 NLTK 版本走，写死等于给一个会过期的事实。
-    parts.push('功能词二维投影用的词表是 NLTK 的英语停用词表（the / of / he 这类小词），'
+    // 第一次出现就把它和界面上的名字挂上（第四十七批）：同一个量在界面上叫「风格走向」、
+    // 在这里叫「功能词二维投影」、在代码里叫「功能词投影」，三处互不点明，读者会以为是
+    // 两回事（以为漏算或算多了）。写法照抄另外两个指标现成的桥接（「用词重复度（Simpson's D）」）。
+    parts.push('功能词二维投影（界面上的「风格走向」）用的词表是 NLTK 的英语停用词表（the / of / he 这类小词），'
         + '每个片段按这些小词在该片段里的相对出现次数投影。');
     parts.push('计算指标包括平均句长、用词重复度（Simpson\'s D）、独特词丰富度（Honoré R）与功能词二维投影。');
     parts.push(buildComparabilitySentence(books));
@@ -4597,6 +4639,12 @@ function buildMethodsParagraph(books) {
     if (chapterCounts.length > 0) {
         parts.push(`章节边界由章节标题自动识别（本次识别到 ${chapterCounts.join('、')} 章），用于定位片段所在的章节；章号是识别结果，不是人工标注的章号。`);
     }
+    // 指路（第四十七批）：摘要通篇不提同一菜单里另外两份产物，收件人只能「信这张图」，
+    // 想复算却不知道逐片段数值就在隔壁。按按钮原名写（「导出数据表」「导出引用」），
+    // 只用一句、且 buildMethodsParagraph 全项目只有 exportSummary 一个调用点，不会重复说。
+    // 第三十九批否掉的是「把产物打成 zip」，这里只指路，不打包。
+    parts.push('同一菜单里另有「导出数据表」（每个片段一行，可导入 Excel / R）与「导出引用」'
+        + '（BibTeX，含所选书的书目信息与电子文本编号）：需要复算明细或往论文里加引用时，可一并导出。');
     parts.push(`数据版本：${describeCorpusVersion(books)}`);
     parts.push(`生成时间：${new Date().toLocaleString('zh-CN')}。在线视图：${buildStateUrl({ shareable: true })}${localUrlNote()}${unsharedUploadedNote()}。`);
     return parts.join('');
@@ -4637,7 +4685,7 @@ function exportTableData() {
             rows.push([
                 getBookDisplayName(book), // 表头是「书名」，与摘要/参考文献里的中文名保持一致
                 String(i + 1),
-                chapter ? `${chapterLabel(chapter)} ${chapterTitle(chapter)}` : '',
+                chapter ? `${chapterShortLabel(chapter)} ${chapterTitle(chapter)}` : '',
                 meta ? String(i * meta.step + 1) : '', // 起始词位置从第 1 个词数起
                 value('sentenceLength'),
                 value('simpsonIndex'),
@@ -4673,7 +4721,7 @@ function exportTableData() {
         `# 片段口径：${windowSpecs.join('；')}。同一段原文会被反复计入，请勿把这些行当作互相独立的样本，按行做显著性检验会高估样本量。`,
         // 章节标签的口径（第四十批）：表里那一列写的是「窗口正中间」落的那一章，
         // 而一格横跨 4–6 章；不说清楚，读者会以为第 1 章没有片段（它确实永远标不到）。
-        `# 章节口径：${CHAPTER_LABEL_HINT}`,
+        `# 章节口径：章号由章节标题自动识别，不是人工标注。${CHAPTER_LABEL_HINT}`,
         // 正文起点（第四十批）：内置书取自 Project Gutenberg，书名页与目录留在正文之前，
         // 第 0 格因此吃进了它们。把「正文从第几个词开始」写出来，读者才知道偏移量。
         `# 正文起点：${describeFrontMatter(books)}`,
@@ -4752,15 +4800,23 @@ function exportCitation() {
     const now = new Date();
     // key 必须唯一：只写年月日的话，同一天导两次（换个观察角度、换几本书）就会撞 key，
     // 文献管理软件会把两条当成同一条。补上时分，再补一个书名首字，尽量不撞。
+    // 第四十七批又补上「秒」：同一分钟内连着导两次（换了框选范围、点了别的书再导）
+    // 仍然会撞，而补秒是零成本的。
     const key = `wenxin${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
-        + `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+        + `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
         + (books.length ? `-${books.length}book` : '');
+    // 访问日期（第四十七批）。文献管理软件与导师都会问「哪天访问的」，而这条记录本来就
+    // 是「此刻打开的这个在线页面」，导出当天就是访问当天——照实写。
+    const urlDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
     // 本机打开时 url 是 localhost，别人点开是打不开的，得在 note 里说清楚
     // 这条 note 会跟着引用条目进文献管理软件、进论文，读它的人不知道 localhost 是什么（第三十五批）。
     // 意思不能丢：本机地址的链接发给同门是打不开的。（第四十批抽成公共函数，
     // 「复制结论」的尾注也用同一句，免得两处各写一份、日后改一处漏一处。）
     const localUrlNoteText = localUrlNote();
+    // 取不到就整段省略（连同它前面那个分号），不退化成「数据格式 v」这种空字段
+    const dataFormat = describeDataFormatVersion(books);
+    const dataFormatText = dataFormat ? `；${dataFormat}` : '';
 
     // 原著条目。学生把这段贴进参考文献时，真正要引的是作品本身，不是这个工具；
     // 旧版只发一条 author = 本工具的 @misc，等于把「文印」写成了《白牙》的作者，
@@ -4771,10 +4827,12 @@ function exportCitation() {
 
     const chunks = [
         '文印 · 引用条目',
-        '本文件有两类条目，请勿混用：',
+        '本文件有三类条目，请勿混用：',
         '  1. @book —— 本次分析用到的内置示例书，引用文学作品本身时用这一条。',
         '     year 是作品首次出版的年份；电子版的来源与发布日期写在 note 里。',
-        '  2. @misc —— 本次在线分析记录本身（哪一次、什么参数、跑了哪几本书），不是出版物。',
+        '  2. @inproceedings —— 本工具所用方法的出处，引用方法本身时用这一条',
+        '     （@misc 的 howpublished 里点名的那一篇）。',
+        '  3. @misc —— 本次在线分析记录本身（哪一次、什么参数、跑了哪几本书），不是出版物。',
         ''
     ];
 
@@ -4801,9 +4859,25 @@ function exportCitation() {
         chunks.push('');
     }
 
+    // 方法出处（第四十七批）。@misc 的 howpublished 一直写着「Keim & Oelke 2007 指标口径」，
+    // 而全文没有这一篇的条目——读者导进 Zotero 只拿到一个点名，查不到是哪一篇。
+    // 书目信息取自该文的出版记录（IEEE VAST 2007）。
+    chunks.push([
+        '@inproceedings{keim2007literature,',
+        '  author    = {Keim, Daniel A. and Oelke, Daniela},',
+        '  title     = {Literature Fingerprinting: A New Method for Visual Literary Analysis},',
+        '  booktitle = {2007 IEEE Symposium on Visual Analytics Science and Technology (VAST 2007)},',
+        '  publisher = {IEEE},',
+        '  year      = {2007},',
+        '  pages     = {115--122},',
+        '  doi       = {10.1109/VAST.2007.4389004}',
+        '}',
+        ''
+    ].join('\n'));
+
     // @misc 这条描述的是「本次在线分析」，不是正式出版物。
     // 每个字段末尾都要有逗号（BibTeX 靠逗号分字段，漏一个会整条报错、
-    // 丢掉除标题外的全部字段）；最后一行 url 后面不能有逗号。
+    // 丢掉除标题外的全部字段）；最后一行（第四十七批起是 urldate）后面不能有逗号。
     chunks.push([
         `@misc{${key},`,
         `  title        = {文印·文学指纹分析记录：${books.map(name => `{${getBookDisplayName(name)}}`).join('、')}},`,
@@ -4811,8 +4885,9 @@ function exportCitation() {
         `  year         = {${now.getFullYear()}},`,
         `  month        = {${monthNames[now.getMonth()]}},`,
         `  howpublished = {在线交互式分析（Keim \\& Oelke 2007 指标口径）},`,
-        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNoteText}${unsharedUploadedNote()}${knownSources.length ? `；原著条目见本文件开头的 @book` : ''}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
+        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${dataFormatText}${localUrlNoteText}${unsharedUploadedNote()}${knownSources.length ? `；原著条目见本文件开头的 @book` : ''}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
         `  url          = {${buildStateUrl({ shareable: true })}}`,
+        `  urldate      = {${urlDate}}`,
         '}',
         ''
     ].join('\n'));
@@ -4840,7 +4915,7 @@ function exportVectorChart() {
 // 于是切到「风格星系」「全书对比」之后，加载失败、分析失败、无数据全是静默的。
 let _globalStatusTimer = null;
 
-function setGlobalStatus(kind, message) {
+function setGlobalStatus(kind, message, { sticky = false } = {}) {
     const el = document.getElementById('global-status');
     if (!el) return;
     if (_globalStatusTimer) { clearTimeout(_globalStatusTimer); _globalStatusTimer = null; }
@@ -4855,7 +4930,10 @@ function setGlobalStatus(kind, message) {
     el.textContent = message;
     // 「成功」「提示」过几秒自己收起，免得一条过期消息一直挂在页面上；
     // 「错误」「加载中」留在原地，等下一次状态更新来替换。
-    if (kind === 'success' || kind === 'notice') {
+    // sticky（第四十七批）：加进来看的这一条不是「刚才发生了什么」，而是「这个网址本身缺东西」
+    // ——一条链接后来再怎么点，那几本书也不会自己回来，所以它不能 6 秒后就走。收件人晚一步
+    // 看图，看到的书会比分享的人少几本，而页面上一点痕迹都不留。只有「链接里的书找不到」用它。
+    if ((kind === 'success' || kind === 'notice') && !sticky) {
         _globalStatusTimer = setTimeout(() => setGlobalStatus(null, ''), 6000);
     }
 }
@@ -5655,14 +5733,37 @@ function attachGalaxyTapPicker(opts) {
 // 这里不再写绝对字数（第四十四批）：本片段多少词，上面那个徽章（formatWordCount）已经写了；
 // 这段摘录多少字符，下面那个复制按钮也写了。同一个弹窗、同一屏、同一个数，本来写了两遍。
 // 这一行只留徽章和按钮都给不出的那一件事——占全片段多大比例。
-function modalExcerptNote(excerpt, wordCount) {
+//
+// 第四十七批又接了第二件事（`d` 传进来时才算）：片段盖住了正文之前的内容时，补一句
+// 说明为什么引文不像正文。改一个签名，弹窗里三条路径（短摘录 / 取长摘录失败 / 取长摘录
+// 成功）都跟着一致——和上面「两条路径口径一致」是同一个理由。
+function modalExcerptNote(excerpt, wordCount, d) {
+    const frontMatter = d ? frontMatterOverlapNote(d.book, d.blockIndex) : '';
     const wc = Number(wordCount);
     if (Number.isFinite(wc) && wc > 0) {
         // 英文平均一个词连同后随空格约 6 个字符，只用来给一个数量级感受
         const pct = Math.max(1, Math.round(excerptCharCount(excerpt) / (wc * 6) * 100));
-        return `这里显示的是片段开头的一段（约占 ${pct}%），不是全文。`;
+        return `这里显示的是片段开头的一段（约占 ${pct}%），不是全文。${frontMatter}`;
     }
-    return '这里显示的是片段开头的一段，不是全文。';
+    return `这里显示的是片段开头的一段，不是全文。${frontMatter}`;
+}
+
+// 「这一段为什么看起来不像正文」（第四十七批）。内置书的书名页与目录留在正文之前、
+// 也计入了分析，所以第 1 个片段的引文常常是书名页或目录——不说，读者的第一反应是
+// 「这工具把原文抓错了」。导出摘要与 CSV 里早有同一件事（describeFrontMatter，第四十批），
+// 但那两处读者要等导出才看得到；这里把它挪到读者正盯着看的那一屏。
+// 只在**真的**重叠时出现：判据与 describeFrontMatter 用同一个 wordStart（正文从第几个词起）。
+function frontMatterOverlapNote(bookName, blockIndex) {
+    const meta = normalizeBookMeta(bookName);
+    const first = meta && Array.isArray(meta.chapters) && meta.chapters.length > 0 ? meta.chapters[0] : null;
+    const start = first && isFiniteNumber(first.wordStart) ? first.wordStart : 0;
+    const idx = Number(blockIndex);
+    if (start <= 0 || !isFiniteNumber(idx) || idx < 0) return '';
+    // 片段覆盖的正文从第 idx * step 个词起；它落在正文起点之前，就说明吃进了前置内容
+    const blockStart = idx * (isFiniteNumber(meta.step) && meta.step > 0 ? meta.step : 1000);
+    if (blockStart >= start) return '';
+    return `这一片段开头是书名页、目录等正文之前的内容（本书正文从第 ${start + 1} 个词开始），`
+        + '它们也计入了分析——引文看起来不像正文，原因在这里。';
 }
 
 function openGalaxyModal(d) {
@@ -5725,7 +5826,7 @@ function openGalaxyModal(d) {
     // 都没有时（那时复制按钮是隐藏的，不会重复）才由这行小字顶替那句加载提示。
     if (noteEl) {
         noteEl.textContent = shortExcerpt
-            ? modalExcerptNote(shortExcerpt, d.wordCount)
+            ? modalExcerptNote(shortExcerpt, d.wordCount, d)
             : '正在取本片段更长的摘录…';
     }
 
@@ -5745,7 +5846,7 @@ function openGalaxyModal(d) {
     const showShortExcerptOnly = (reason) => {
         if (noteEl) {
             noteEl.textContent = shortExcerpt
-                ? modalExcerptNote(shortExcerpt, d.wordCount) + reason
+                ? modalExcerptNote(shortExcerpt, d.wordCount, d) + reason
                 : '这个片段暂时没有可显示的摘录。';
         }
         if (modalCopyBtn) {
@@ -5771,7 +5872,7 @@ function openGalaxyModal(d) {
                 textContainer.textContent = payload.excerpt;
                 textContainer.lang = 'en';
             }
-            if (noteEl) noteEl.textContent = modalExcerptNote(payload.excerpt, d.wordCount);
+            if (noteEl) noteEl.textContent = modalExcerptNote(payload.excerpt, d.wordCount, d);
             if (modalCopyBtn) {
                 modalCopyBtn.disabled = false;
                 modalCopyBtn.removeAttribute('aria-busy');
