@@ -192,15 +192,26 @@ function syncUrlState() {
     rememberViewState(url);
 }
 
-// 当前状态对应的完整链接（复制链接、导出摘要都用它）
-function buildStateUrl() {
+// 当前状态对应的完整链接。分两种用途，靠 options.shareable 区分（第四十六批）：
+//   · 默认（地址栏、刷新要回到自己的书）：带上所选的全部书；
+//   · shareable（所有要离开浏览器的产物——复制链接、导出摘要、复制结论、引用条目）：
+//     剔掉自己上传的那几本。
+// 为什么剔：内置书在别人的服务器上也有，上传的书没有。名字带上去对方也打不开，
+// 而摘要里紧接着就有一句「链接里没有《X》」，URL 里却白纸黑字写着它——同一个链接，
+// 两句话打架；「复制此链接」的回执也早写着「不含你上传的 N 本」，而它复制的 URL 里带着。
+// 判据只写在这里一份（getUnsharedUploadedBooks），几处口径不会再各说一套。
+function buildStateUrl({ shareable = false } = {}) {
     const params = new URLSearchParams();
     if (currentMetric !== METRIC_KEYS[0]) params.set('metric', currentMetric);
     if (chartType !== 'heatmap') params.set('chart', chartType);
     if (smoothness !== DEFAULT_SMOOTHNESS) params.set('smooth', String(smoothness));
     if (currentTab !== VIEW_IDS[0]) params.set('view', currentTab);
     // 「全书对比」页上以该页的书籍筛选为准，链接打开后看到的就是同一批书
-    const books = Array.from(getActiveBookSet());
+    let books = Array.from(getActiveBookSet());
+    if (shareable) {
+        const unshared = getUnsharedUploadedBooks();
+        books = books.filter(name => !unshared.includes(name));
+    }
     if (books.length > 0) params.set('books', books.join('|'));
 
     // advState 定义在页面内的另一段脚本里，取不到就当没有框选
@@ -279,6 +290,16 @@ function buildShareCaveats() {
     return notes;
 }
 
+// 「链接里不含你上传的那几本」——一句跟在链接后面的短注（第四十六批）。
+// 摘要里有 buildShareCaveats 那一条独立的提醒，但复制结论、方法说明、引用条目
+// 这三处没有那个块，链接却一样会离开浏览器。共用同一个判据，不各写一份。
+function unsharedUploadedNote() {
+    const uploaded = getUnsharedUploadedBooks();
+    if (uploaded.length === 0) return '';
+    const names = uploaded.map(getBookDisplayName).join('、');
+    return `；链接里不含你上传的 ${uploaded.length} 本（《${names}》），他人打开时看不到这几本`;
+}
+
 // 「复制此链接」按钮的说明必须与它真能做的事一致（第四十二批）。
 // 第四十批把 HTML 里写死的「发给同事即可复现」留着没动，理由是线上（公网地址）那句是真的、
 // 只有本机是假的，不想为了本机把线上的话改少。可问题是同一个控件点下去的回执偏偏写着
@@ -303,7 +324,7 @@ function copyShareLink(button) {
     const okText = uploaded.length
         ? `✓ 链接已复制${localPart}（不含你上传的 ${uploaded.length} 本）`
         : `✓ 链接已复制${localPart}`;
-    copyTextToClipboard(buildStateUrl(), button, okText);
+    copyTextToClipboard(buildStateUrl({ shareable: true }), button, okText);
     // 两条提醒都往同一条状态栏写，所以合成一句再发一次——分两次调用的话后一条会把
     // 前一条顶掉（两条同时成立时用户只看得到后半句，本机地址那句就白说了）。
     const notices = [];
@@ -1255,8 +1276,23 @@ function buildBookGroup(book, { active = false, deletable = false, onClick } = {
     button.type = 'button';
     button.className = 'book-btn' + (active ? ' active' : '');
     button.dataset.id = id;
-    button.title = book.name || id;
-    button.textContent = getBookDisplayName(book.name || id);
+    // 书名下面加一小行「作者 · 年份」（第四十六批）。这四本是**故意两两同作者**的，
+    // 而整个界面原来一个作者名都没有——第一次打开的人看到的是四本互不相干的书，
+    // 很可能随手挑两本比一比，恰好错过这个工具最值得做的那一类对比（同一作家不同时期）。
+    // 只写进悬停提示不够：触屏没有悬停，第一眼也看不到，而这要解决的正是「第一眼看不出」。
+    // 上传的书读不到可靠的作者与年份，不替用户编一个，所以只有内置书有这一行。
+    const displayName = getBookDisplayName(book.name || id);
+    const source = getBuiltinBookSource(book.name || id);
+    button.textContent = displayName;
+    if (source) {
+        button.title = `《${displayName}》——${source.authorZh}，${source.year} 年首次出版`;
+        const meta = document.createElement('span');
+        meta.className = 'book-meta';
+        meta.textContent = `${source.authorZh} · ${source.year}`;
+        button.appendChild(meta);
+    } else {
+        button.title = book.name || id;
+    }
     if (typeof onClick === 'function') button.addEventListener('click', onClick);
     wrap.appendChild(button);
 
@@ -1820,9 +1856,11 @@ async function loadRealData() {
                 // 选中两本必须是「说明过的」：不说一句，用户打开就看到两张并排的图，
                 // 不知道这两本是谁挑的、凭什么。只在自动挑书这一次说（带书籍链接进来、
                 // 或者自己选过书之后都不会走到这个分支）。
+                // 「更换**下方**选书即可」原来指错了方向（第四十六批）：这几句提示可能出现在
+                // 任何一个页签上，而书选栏始终在页顶。改选书这件事本来也不需要方位词。
                 announceOrNotice(
                     `已替你选中差异最大的两本：《${picks.map(getBookDisplayName).join('》《')}》——`
-                    + `它们的「${getMetricLabel(currentMetric)}」差距最大。如需比较其他组合，更换下方选书即可。`
+                    + `它们的「${getMetricLabel(currentMetric)}」差距最大。如需比较其他组合，改选其它书籍即可。`
                 );
             } else {
                 selectBook(availableBooks[0]); // 兜底：连一对都挑不出来时，照旧选第一本
@@ -3223,30 +3261,39 @@ function getMetricContextLine(metric) {
     const parts = [];
     if (baseline) {
         const label = builtinLoaded.length > 0 ? '内置示例书' : '当前已加载的书';
+        // 点名是哪几本（第四十六批）。原来只写「内置示例书」，全文没有一处列出这 4 本的
+        // 书名——摘要里要能写出「参照区间的样本是哪 4 部作品」，论文被问到常模样本是什么
+        // 才答得上。顺序按作者、再按年份排（同作者两部相邻），顺带把这四本「两两同作者」
+        // 的结构摆出来。
+        const named = builtinLoaded.length > 0
+            ? `（${sortBuiltinByAuthorThenYear(builtinLoaded).map(n => `《${getBookDisplayName(n)}》`).join('')}）`
+            : '';
         // 「这只是个参照」三个字不够（第四十批）：读者照样会把它读成常模。
         // 内置书只有 4 本，把「样本有多小」直接说出来，比只说「不是好坏标准」有用。
         const caveat = `只有这 ${baseline.count} 本，不足以构成常模——`;
         // 括号里不再重复本数（第四十四批）：「参考区间：内置示例书（4 本）的…。只有这 4 本…」
         // 一句话里出现了两次。本数留在 caveat 里——那是第四十批有意加的强调（把样本有多小
-        // 直接说出来），括号里那个只是顺带一记。
-        parts.push(`参考区间：${label}的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}。${caveat}它只用于判断你的书落在参考区间的哪一端，不是好坏标准。`);
+        // 直接说出来），上面那个括号现在装的是书名，不是本数。
+        parts.push(`参考区间：${label}${named}的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}。${caveat}它只用于判断你的书落在参考区间的哪一端，不是好坏标准。`);
     }
     if (selected && !sameAsBaseline) {
         // 只选了一本时，「在 X – X 之间」是句废话（最小值等于最大值），改说平均水平
+        // 「你选中的」一律改「所选」（第四十六批）：这句话会跟着导出摘要/复制结论离开
+        // 屏幕，而在文件里「你」变成了收件人——读它的导师并没有选过这几本书。
         if (selected.count === 1) {
-            parts.push(`你选中的这 1 本，平均水平是 ${formatMetric(selected.min)}。`);
+            parts.push(`所选这 1 本，平均水平是 ${formatMetric(selected.min)}。`);
         } else if (sizeExtentIsFlat([selected.min, baseline.min])
                    && sizeExtentIsFlat([selected.max, baseline.max])) {
             // 选中的正好是这批书里平均最高和最低的那几本时，两段数字会一模一样。默认那两本
             // 就是这样（一批书里句子最短、最长的那两本），于是屏幕上出现「参考区间 …在 14.48 –
-            // 18.81…。你选中的 2 本在 14.48 – 18.81 之间。」——第二句一个字都没多给，
+            // 18.81…。所选 2 本在 14.48 – 18.81 之间。」——第二句一个字都没多给，
             // 读者只会以为这个功能坏了。改成说清为什么一样（判据同 C4，见 sizeExtentIsFlat）。
             // 这句话会跟着「导出摘要 / 复制结论」离开屏幕（第四十二批），所以不能再用
             // 「上面的数字」「参照区间」这类指代——文件里没有「上面」，也没有那块界面。
             // 把因果说全：为什么两段范围一模一样，以及这不是数据出问题。
-            parts.push('你选中的这几本，正好是这批书里该指标最高和最低的那几本；所以它们自己的范围，和作为参照的那几本的范围是同一个——这是选书的必然结果，不是数据有问题。');
+            parts.push('所选这几本，正好是这批书里该指标最高和最低的那几本；所以它们自己的范围，和作为参照的那几本的范围是同一个——这是选书的必然结果，不是数据有问题。');
         } else {
-            parts.push(`你选中的 ${selected.count} 本在 ${formatMetric(selected.min)} – ${formatMetric(selected.max)} 之间。`);
+            parts.push(`所选 ${selected.count} 本在 ${formatMetric(selected.min)} – ${formatMetric(selected.max)} 之间。`);
         }
     }
     if (parts.length === 0) return '';
@@ -3262,14 +3309,16 @@ function getMetricContextLine(metric) {
         }
     }
 
-    // 上传的文本与内置示例书的清洗口径不同（第四十批）。内置书取自 Project Gutenberg，
-    // 工具剥掉的是它的授权声明那一段（书名页与目录留在正文里，照样计入）；你自己上传的
-    // 文本按原样分析，如果它自带来源说明、版权页之类，那些也会被算进去。两类混着比时
-    // 不说明，读者会以为「同样的处理，为什么对不上」。
+    // 上传的文本与内置示例书的清洗口径（第四十批加，第四十六批改对）。
+    // 原来这里写的是「上传的按原样分析，你自己的书没有这一层」——**是错的**：
+    // api_server 的上传路径调用的是同一个 clean_text，剥不剥 Gutenberg 授权声明那一段
+    // 只看文本里有没有 *** START/END OF … GUTENBERG … *** 这对标记，与「内置还是上传」无关。
+    // 把语料整理自 Gutenberg 的研究者会据此以为自己那份没被处理，判断可比性的前提就是错的。
+    // 现在如实说清判据是「看标记」，不再按来源分。
     const uploadedSelected = selectedNames.filter(name => !builtinBookNames.includes(name));
     if (uploadedSelected.length > 0) {
         const label = selectedNames.length === 1 ? '这一本' : `其中 ${uploadedSelected.length} 本`;
-        parts.push(`${label}是你上传的文本，按你给的原样分析（内置书会额外剥掉 Project Gutenberg 的授权声明那一段，你自己的书没有这一层）。`);
+        parts.push(`${label}是你上传的文本，和内置书走同一套清洗（统一空白、还原常见缩写）。此外，只有文本里带 Project Gutenberg 起始/结束标记的文件才会再剥掉它的授权声明那一段——看的是文件里有没有这对标记，不是看它是内置的还是你上传的。`);
     }
 
     let line = parts.join(' ');
@@ -3651,6 +3700,56 @@ function collectExportLegend() {
         return { items, shape: 'line' };
     }
     return { items: [], shape: 'rect' };
+}
+
+// 屏幕上的「风格走势」图例（第四十六批）。这一页三张图里原来只有这张没有一个书名，
+// 而导出的 PNG/SVG 反而有图例——本末倒置。取法与 collectExportLegend 完全一样：
+// 颜色与线型直接读屏幕上已经渲染好的 path，不自己重算一遍（重算要复刻 dashForBook
+// 的槽位分配，很容易对不上）。线型要画出来：它是色盲读者唯一不靠颜色分辨的线索。
+function renderAdvLineLegend() {
+    const box = document.getElementById('adv-line-legend');
+    if (!box) return;
+    const items = [];
+    const seen = new Set();
+    document.querySelectorAll('#adv-line .line-path').forEach(path => {
+        const datum = path.__data__;
+        if (!datum || seen.has(datum.id)) return;
+        seen.add(datum.id);
+        items.push({
+            color: path.getAttribute('stroke') || datum.color || '#2f2a23',
+            dash: path.getAttribute('stroke-dasharray') || '',
+            name: datum.displayName || datum.name
+        });
+    });
+    if (items.length === 0) {
+        box.textContent = '';
+        box.hidden = true;
+        return;
+    }
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    box.textContent = '';
+    items.forEach(item => {
+        const wrap = document.createElement('span');
+        wrap.className = 'chart-legend-item';
+        const swatch = document.createElementNS(SVG_NS, 'svg');
+        swatch.setAttribute('width', '24');
+        swatch.setAttribute('height', '10');
+        swatch.setAttribute('aria-hidden', 'true');
+        swatch.classList.add('chart-legend-swatch');
+        const line = document.createElementNS(SVG_NS, 'line');
+        line.setAttribute('x1', '0');
+        line.setAttribute('y1', '5');
+        line.setAttribute('x2', '24');
+        line.setAttribute('y2', '5');
+        line.setAttribute('stroke', item.color);
+        line.setAttribute('stroke-width', '2');
+        if (item.dash) line.setAttribute('stroke-dasharray', item.dash);
+        swatch.appendChild(line);
+        wrap.appendChild(swatch);
+        wrap.appendChild(document.createTextNode(item.name));
+        box.appendChild(wrap);
+    });
+    box.hidden = false;
 }
 
 // 风格星系的坐标轴含义也只写在图外的 #galaxy-axis-note 里，一并带走
@@ -4050,7 +4149,7 @@ function exportSummary() {
         ...(contextLine ? [`- 解读参考：${contextLine.replace(/^参考区间：/, '')}`] : []),
         ...(crossNote ? [`- 指标关系：${crossNote}`] : []),
         `- 选择书籍：${books.map(getBookDisplayName).join('、')}`,
-        `- 在线视图（打开即还原本次选择）：${buildStateUrl()}`,
+        `- 在线视图（打开即还原本次选择）：${buildStateUrl({ shareable: true })}`,
         // 这条链接有两件事必须跟着一起说，否则收件人打开会看到另一份分析而摘要里
         // 一个字都不解释：本机地址别人打不开；自己上传的书不在别人的服务器上。
         ...buildShareCaveats(),
@@ -4259,7 +4358,7 @@ function copyConclusion(button) {
         // 否则同一件事的两个角度会被当成两条独立证据（与导出摘要里那句同源）。
         crossMetricNote(),
         `统计范围：${describeExportScope()}`,
-        `在线视图：${buildStateUrl()}${localUrlNote()}`
+        `在线视图：${buildStateUrl({ shareable: true })}${localUrlNote()}${unsharedUploadedNote()}`
     ].filter(Boolean).join('\n');
     copyTextToClipboard([header, '', parts.join('\n\n'), '', '——', footer].join('\n'), button, '✓ 结论已复制');
 }
@@ -4354,16 +4453,23 @@ function describeExportScope() {
 
 // 导出物里的「这次算的是哪一份数据」（第四十批）。内置示例书取自随工具发布的固定版本，
 // 用户上传的文本各有各的来源与版本；要把两者分开说，否则读者会以为「内置书」也是他给的。
-// 语料指纹由服务端对整份语料算出（见 corpusFingerprint），内容一变它就变——它能证明
-// 「两次导出的数字来自同一份输入」。但它是整份语料一个指纹，不是每本书各一个。
+//
+// 语料指纹（第四十批加，第四十六批改对）：服务端现在算的是整份语料的**内容**
+// （见 api_server 的 _corpus_content_digest），所以「内容一变它就变」这句才成立。
+// 原来服务端算的是文件的修改时间与大小，这句话与实现不符——文件重新生成过而内容没改，
+// 指纹也会变；两台机器上同一份内容反倒给出两个指纹。整份语料共用一个指纹，不是每本书各一个。
+//
+// 「本次导出含内置示例书 N 本」改成「本次分析用到的…」（第四十六批）：同一个摘要里
+// 「内置示例书」还出现在「参考区间：内置示例书（4 本）」那一句，一处指「这次分析的两本」、
+// 一处指「服务器上常驻的四本」，同一个词指两件事。两边各加一个限定词分开。
 function describeCorpusVersion(books) {
     const names = Array.isArray(books) ? books : [];
     const builtinCount = names.filter(name => builtinBookNames.includes(name)).length;
     const uploadedCount = names.length - builtinCount;
-    const composition = `本次导出含内置示例书 ${builtinCount} 本`
+    const composition = `本次分析用到内置示例书 ${builtinCount} 本`
         + (uploadedCount > 0 ? ` + 你自己上传的 ${uploadedCount} 本` : '');
     const fingerprint = corpusFingerprint ? `语料指纹 ${corpusFingerprint}` : '语料指纹未记录';
-    return `${composition}；${fingerprint}。指纹由服务端对整份语料算出，内容一变它就变——只能证明两次导出用的是同一份语料，不是每本书各有一个。`;
+    return `${composition}；${fingerprint}。这个指纹是服务端按整份语料的「内容」算的，不是文件的修改时间：内容一样它就不变，内容一变它就变。整份语料共用一个指纹，不是每本书各有一个。`;
 }
 
 // 正文起点（第四十批）。内置书取自 Project Gutenberg，本书自己的书名页和目录留在正文之前，
@@ -4450,9 +4556,11 @@ function buildMethodsParagraph(books) {
 
     const parts = [];
     parts.push(`本次分析使用「文印」文学指纹工具，共分析 ${books.length} 本书、${totalBlocks} 个片段。`);
-    // 来源要说准：clean_text 对**所有**书都跑，但只有带 Gutenberg 页眉页脚的文件才真被剥掉那层。
-    // 原来那句话读起来像「每本书都清理过 Gutenberg 页眉」，对上传的其它来源文本是假话。
-    parts.push(`文本统一空白、还原常见缩写；若来自 Project Gutenberg，另清理其页眉页脚（其它来源的文本原样保留，没有这层清理）。按每片段 ${blockSizes.join('/')} 词、相邻片段重叠 ${blockSizes.map((size, i) => size - steps[i]).join('/')} 词的滑动窗口切分。`);
+    // 判据是「文本里有没有那对标记」，不是「来自哪里」（第四十批加，第四十六批改准）。
+    // 原来写「若来自 Project Gutenberg，另清理其页眉页脚（其它来源的文本原样保留）」，
+    // 而对一本上传的 Gutenberg 版文件，它照样会被剥掉——那句话对它是假话。clean_text 的
+    // 判断条件本来就只看标记，照实写。
+    parts.push(`文本统一空白、还原常见缩写；此外，只有文本里带 Project Gutenberg 起始/结束标记的文件才会再剥掉它的授权声明那一段（这一步看的是文件里有没有这对标记，不按来源分）。按每片段 ${blockSizes.join('/')} 词、相邻片段重叠 ${blockSizes.map((size, i) => size - steps[i]).join('/')} 词的滑动窗口切分。`);
     // 缩写还原到底还原了哪些（第四十批）。这句话原来只说「还原常见缩写」，而它直接改平均句长：
     // it's 算一个词，展开成 it is 就是两个词，一句话的词数随之变大。规则是固定有限的一批
     // （源码里是 30 条，见 src/data_loader.py 的 CONTRACTIONS），把范围写出来，别人才能照着复现这一步。
@@ -4469,6 +4577,17 @@ function buildMethodsParagraph(books) {
         + '不归一的话，引号挡在句末标点前面，一整段对话会被算成一句话：'
         + '《汤姆·索亚历险记》修好之前只切出 3666 句，修好后是 4912 句，少了约三分之一，'
         + '平均句长随之虚高，而它正是本工具默认的观察角度。');
+    // 词是怎么数出来的（第四十六批）。上面把句子怎么切（分母）交代了，唯独没写词怎么切
+    // （分子）——而平均句长就是词数除以句数。第四十二批补断句那句的理由，对分子一字不差
+    // 地同样成立：不写，读者拿同一个文本也复现不出同一个数。规则取自 src/metrics.py 的
+    // _clean_tokens，照实写给读者，不引用文件名。
+    parts.push('词是这样数的：文本先转小写、用 NLTK 的英语分词器切词，只保留全字母的词——'
+        + '数字与标点都不计入，所有格也只算词干（Tom\'s 只算 Tom 一个词）。');
+    // 小词表是哪一套（第四十六批）。四个指标里只有功能词投影依赖一张外部词表，
+    // 换一张词表整张图都会变，而说明里原来一个字没提。
+    // 不写死词表里有多少个：那个数跟着 NLTK 版本走，写死等于给一个会过期的事实。
+    parts.push('功能词二维投影用的词表是 NLTK 的英语停用词表（the / of / he 这类小词），'
+        + '每个片段按这些小词在该片段里的相对出现次数投影。');
     parts.push('计算指标包括平均句长、用词重复度（Simpson\'s D）、独特词丰富度（Honoré R）与功能词二维投影。');
     parts.push(buildComparabilitySentence(books));
     // 三个标量能不能跨书比（第四十批）：原来的可比较性说明只讲了功能词投影。
@@ -4479,7 +4598,7 @@ function buildMethodsParagraph(books) {
         parts.push(`章节边界由章节标题自动识别（本次识别到 ${chapterCounts.join('、')} 章），用于定位片段所在的章节；章号是识别结果，不是人工标注的章号。`);
     }
     parts.push(`数据版本：${describeCorpusVersion(books)}`);
-    parts.push(`生成时间：${new Date().toLocaleString('zh-CN')}。在线视图：${buildStateUrl()}${localUrlNote()}。`);
+    parts.push(`生成时间：${new Date().toLocaleString('zh-CN')}。在线视图：${buildStateUrl({ shareable: true })}${localUrlNote()}${unsharedUploadedNote()}。`);
     return parts.join('');
 }
 
@@ -4573,19 +4692,19 @@ function exportTableData() {
 // 只有这四本拿得到原著信息；用户上传的文本没有可靠的作者与版本，不能替他们编一个。
 const BUILTIN_BOOK_SOURCES = {
     'the adventures of tom sawyer': {
-        key: 'twain1876tomsawyer', author: 'Twain, Mark', title: 'The Adventures of Tom Sawyer',
+        key: 'twain1876tomsawyer', author: 'Twain, Mark', authorZh: '马克·吐温', title: 'The Adventures of Tom Sawyer',
         year: 1876, ebook: 74, released: '2004-07-01'
     },
     'the adventures of huckleberry finn': {
-        key: 'twain1884huckleberryfinn', author: 'Twain, Mark', title: 'Adventures of Huckleberry Finn',
+        key: 'twain1884huckleberryfinn', author: 'Twain, Mark', authorZh: '马克·吐温', title: 'Adventures of Huckleberry Finn',
         year: 1884, ebook: 76, released: '2004-06-29'
     },
     'the call of the wild': {
-        key: 'london1903callofthewild', author: 'London, Jack', title: 'The Call of the Wild',
+        key: 'london1903callofthewild', author: 'London, Jack', authorZh: '杰克·伦敦', title: 'The Call of the Wild',
         year: 1903, ebook: 215, released: '2008-07-02'
     },
     'white fang': {
-        key: 'london1906whitefang', author: 'London, Jack', title: 'White Fang',
+        key: 'london1906whitefang', author: 'London, Jack', authorZh: '杰克·伦敦', title: 'White Fang',
         year: 1906, ebook: 910, released: '1997-05-01'
     }
 };
@@ -4596,6 +4715,21 @@ const BUILTIN_BOOK_SOURCES = {
 function getBuiltinBookSource(name) {
     if (typeof name !== 'string') return null;
     return BUILTIN_BOOK_SOURCES[name.trim().toLowerCase()] || null;
+}
+
+// 把内置书按「作者、再按年份」排一遍（第四十六批）：「参考区间」那句现在要点名这 4 本，
+// 按这个顺序排，同作者的两部正好相邻（吐温 1876/1884、伦敦 1903/1906），读者一眼就能
+// 看出这四本是「两两同作者」而不是四本互不相干的书。查不到原著信息的排在最后、保持原序。
+function sortBuiltinByAuthorThenYear(names) {
+    return (Array.isArray(names) ? names.slice() : []).sort((a, b) => {
+        const sa = getBuiltinBookSource(a);
+        const sb = getBuiltinBookSource(b);
+        if (!sa && !sb) return 0;
+        if (!sa) return 1;
+        if (!sb) return -1;
+        if (sa.author !== sb.author) return sa.author < sb.author ? -1 : 1;
+        return (sa.year || 0) - (sb.year || 0);
+    });
 }
 
 // 导出引用条目（BibTeX）：给报告、论文的参考文献用
@@ -4677,8 +4811,8 @@ function exportCitation() {
         `  year         = {${now.getFullYear()}},`,
         `  month        = {${monthNames[now.getMonth()]}},`,
         `  howpublished = {在线交互式分析（Keim \\& Oelke 2007 指标口径）},`,
-        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNoteText}${knownSources.length ? `；原著条目见本文件开头的 @book` : ''}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
-        `  url          = {${buildStateUrl()}}`,
+        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${localUrlNoteText}${unsharedUploadedNote()}${knownSources.length ? `；原著条目见本文件开头的 @book` : ''}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
+        `  url          = {${buildStateUrl({ shareable: true })}}`,
         '}',
         ''
     ].join('\n'));

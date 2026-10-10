@@ -432,26 +432,48 @@ def _corpus_stamp(target_file, visitor=None):
     return (stamp[0], stamp[1], _library_stamp(visitor))
 
 
-def _corpus_etag(stamp):
-    """
-    语料指纹 → ETag。
+# 语料内容指纹的缓存：stamp → sha1。stamp 是「文件动没动」，文件没动就不必重算。
+_CONTENT_DIGEST_CACHE_MAX = 16
+_content_digest_cache = {}
 
-    指纹就是 _load_corpus 判断「要不要重读文件」用的那个：重新生成数据、本书架增删改，
-    都会让它变；没变就说明这次要发的东西和上次一模一样。没有指纹时返回 None，
-    调用方按「不带条件缓存」处理。
 
-    它**只由「这份内容是什么」决定**，与缓存有没有命中无关。以前这里读的是缓存槽里存的
-    那个键，而槽位会被别人的请求挤掉——同一个访客、同一份内容，也能拿到一个新 ETag，
-    304 就这么白丢了。
+def _corpus_content_digest(target_file, visitor=None):
     """
+    语料**内容**的指纹（→ ETag）：把这次要发的这份语料（内置示例书 + 本书架）
+    规范化序列化后取 sha1。取不到时返回 None，调用方按「不带条件缓存」处理。
+
+    **它算的是内容，不是文件时间。** 这个指纹会跟着导出物走（前端读 ETag 头，
+    见 describeCorpusVersion），对读者说的话是「内容一变它就变」——而它原来挂在
+    _corpus_stamp 上，后者只有 (修改时间, 大小)：文件被重新生成过、时间戳变了而
+    内容一字未改，指纹照样变；两台机器上同一份内容反倒给出两个指纹，两个人一对
+    就会得出「我们用的不是同一份数据」。按内容算，那句话才成立。
+
+    走 _load_corpus（有缓存）而不是自己读文件：不重复解析那 700 KB。序列化时排掉
+    键序与空白（sort_keys + 紧凑分隔符），让「同一份内容、不同的排版方式」算出同一个。
+    用 visitor 归一到「这一位访客的语料」——指纹本来就因人而异（每人书架上放着自己的书）。
+    """
+    stamp = _corpus_stamp(target_file, visitor)
     if stamp is None:
         return None
-    return hashlib.sha1(repr(stamp).encode("utf-8")).hexdigest()
+    cached = _content_digest_cache.get(stamp)
+    if cached is not None:
+        return cached
+
+    data, _message = _load_corpus(visitor)
+    if data is None:
+        return None
+    payload = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+    if len(_content_digest_cache) >= _CONTENT_DIGEST_CACHE_MAX:
+        _content_digest_cache.clear()
+    _content_digest_cache[stamp] = digest
+    return digest
 
 
 def _current_corpus_etag():
     """本次请求要发的这份语料的 ETag（按本请求的访客算，因人而异）。"""
-    return _corpus_etag(_corpus_stamp(_corpus_path()))
+    return _corpus_content_digest(_corpus_path())
 
 
 def _load_corpus(visitor=None):

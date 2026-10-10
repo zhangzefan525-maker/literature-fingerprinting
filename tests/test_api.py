@@ -274,6 +274,38 @@ class LibraryApiTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.get_json()["status"], "error")
 
+    # ---- 语料指纹（ETag）：认内容，不认文件时间 ----
+    def test_fingerprint_follows_content_not_file_mtime(self):
+        """
+        界面上对读者说的话是「内容一变它就变」——那它就只能跟着内容变。
+
+        原来这个指纹取的是 (文件修改时间, 文件大小)，从头到尾没读过语料一个字：
+        文件被重新生成过一次、内容一字未改，指纹照样翻脸；反过来两台机器上同一份
+        内容又会给出两个指纹，两个人一对，就会得出「我们用的不是同一份数据」。
+        """
+        api_server._content_digest_cache.clear()
+        first = self.client.get("/api/fingerprint-data").headers["ETag"]
+        self.assertTrue(first)
+        # 连着要两次，中间什么都没动：指纹必须一模一样
+        self.assertEqual(self.client.get("/api/fingerprint-data").headers["ETag"], first)
+
+        # 语料真的多了一本书 → 指纹该变
+        shelf = self._put_library("Alice")
+        with_alice = self.client.get("/api/fingerprint-data").headers["ETag"]
+        self.assertNotEqual(with_alice, first)
+
+        # 只把这份书库文件的修改时间推回 2020 年，内容一个字没改 → 指纹不该变。
+        # （旧实现挂在修改时间上，这一步就会失败。）
+        stamp = 1_600_000_000_000_000_000
+        os.utime(shelf, ns=(stamp, stamp))
+        self.assertEqual(self.client.get("/api/fingerprint-data").headers["ETag"], with_alice)
+
+        # 内容真改了（数值变了，文件的排版也一起换了）→ 这时才该变
+        changed = copy.deepcopy(FAKE_BOOK)
+        changed["metadata"]["totalBlocks"] = 99
+        shelf.write_text(json.dumps(changed, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.assertNotEqual(self.client.get("/api/fingerprint-data").headers["ETag"], with_alice)
+
     # ---- DELETE /api/library/<name> ----
     def test_delete_library_book(self):
         # 本机也要令牌（默认），这里模拟「保存它的那个浏览器」带着令牌来删
