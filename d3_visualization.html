@@ -381,6 +381,13 @@
 
                         <div class="dash-card">
                             <h4>〰 风格走势 <span style="font-size:10px;color:#b5472f">拖拽选择片段</span></h4>
+                            <!-- 折线图的图例（第四十六批）。这一页三张图里，只有这张原来没有一个书名：
+                                 两条线只靠颜色与虚实区分，不悬停就认不出哪条是谁——而「这两本书为什么
+                                 不一样」正是这张图讲得最清楚的事。更说不通的是，导出的 PNG/SVG 反而
+                                 有图例（collectExportLegend 会补一个），屏幕上却没有，本末倒置。
+                                 容器必须放在 #adv-line **外面**：initD3Structures() 会清空 #adv-line
+                                 里的所有子元素。内容由 renderAdvLineLegend() 逐本填。 -->
+                            <div id="adv-line-legend" class="chart-legend" hidden></div>
                             <div id="adv-line" class="dash-chart-body"></div>
                         </div>
                     </div>
@@ -1100,8 +1107,24 @@
             // 这两本不是读者挑的（第四十批）：首屏默认与「载入对比示例」都会替读者选出
             // 差别最大的一对。这件事原来只在加载时弹一句提示，而结论会被复制、被导出，
             // 读结论的人看不到那句提示——所以结论本身也要留一笔。
+            // 「更换**下方**选书即可」改掉了（第四十六批）：书选栏在页顶，不在下方；而这句话
+            // 会被复制进笔记、写进论文，在文件里连一个「下方」都没有。改成不依赖方位的说法。
             if (typeof isAutoPickedPair === 'function' && isAutoPickedPair()) {
-                lines.push('这两本是按「差距最大」自动挑出的，并非你手动选择——如需比较其他组合，更换下方选书即可。');
+                lines.push('这两本是按「差距最大」自动挑出的，并非你手动选择——如需比较其他组合，改选其它书籍即可。');
+            }
+
+            // 同一位作者的两部作品（第四十六批）。这四本内置书是**故意两两同作者**的，
+            // 而默认替你挑出的那对，正好是同一位作者相隔八年的两部——「同一作家不同时期」
+            // 正是文学研究里最常做的一类对比。界面上原来一个作者名都没有，读者不知道
+            // 自己手上这对是这个意思。只说事实（谁、相隔几年），不替读者下判断。
+            if (data.length === 2 && typeof getBuiltinBookSource === 'function') {
+                const sa = getBuiltinBookSource(data[0].name);
+                const sb = getBuiltinBookSource(data[1].name);
+                if (sa && sb && sa.author === sb.author && sa.year && sb.year) {
+                    const years = [sa.year, sb.year].sort((x, y) => x - y);
+                    lines.push(`这两部是同一个作者（${sa.authorZh}）的作品，首次出版相隔 ${years[1] - years[0]} 年`
+                        + `（${years[0]} / ${years[1]}）——「同一作家不同时期」的对比，是文学研究里最常做的一类。`);
+                }
             }
 
             // 「整体」这个平均数的口径（第四十批）：重叠滑窗不是独立样本，本工具不做显著性判断。
@@ -1213,6 +1236,10 @@
             );
 
             attachDrillKeyboard(pathsMerged);
+
+            // 屏幕上的图例跟着线一起更新（第四十六批）。放在画完 path 之后：它直接读
+            // 已经渲染好的 stroke / stroke-dasharray，不自己算一遍颜色。
+            if (typeof renderAdvLineLegend === 'function') renderAdvLineLegend();
 
             const dots = g.select(".content-area").selectAll(".peak-dot").data(data, d=>d.id);
             dots.join(

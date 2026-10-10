@@ -754,6 +754,18 @@ button:hover {
     border-color: transparent;
 }
 
+/* 书名按钮里的第二行「作者 · 年份」（第四十六批）。只有内置示例书有这一行——
+   这四本是故意两两同作者的，而界面原来一个作者名都没有。用 opacity 而不是固定
+   颜色，是为了在深色的选中态（.book-btn.active 是深底浅字）上也读得出来。 */
+.book-meta {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    font-weight: 400;
+    opacity: 0.7;
+    line-height: 1.2;
+}
+
 /* ---------- 上传条 ---------- */
 .upload-bar {
     display: flex;
@@ -1269,6 +1281,34 @@ button:hover {
     min-height: 0;
     position: relative;
     overflow: hidden;
+}
+
+/* 「风格走势」卡片的图例（第四十六批）。样式对着 .galaxy-legend 写：同一个东西
+   （哪条线是哪本书）在两页上长得一样。不设 min-height——空的时候它自己 hidden，
+   而 svg 的高度是在 initD3Structures 里量一次的，多出来的这一行吃掉的是卡片
+   底部那段空白边距（advMargin.bottom = 100），x 轴与「阅读进度」标签都在安全线内。 */
+.chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 14px;
+    margin: 0 0 6px 0;
+    font-size: 0.78rem;
+    color: var(--ink-70);
+}
+
+.chart-legend[hidden] { display: none; }
+
+.chart-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.chart-legend-swatch {
+    flex: none;
+    display: block;
+    /* 记号是 svg 子元素，行高不清零时 inline-block 底下会多出一条基线缝隙 */
+    line-height: 0;
 }
 
 .axis text {
