@@ -98,7 +98,7 @@
                  两件事——只有这个浏览器看得见；清除浏览器数据/换设备就找不回来。
                  不说第二句的话，用户会把它当网盘用。 -->
             <label class="save-toggle" id="save-toggle" for="save-upload">
-                <input type="checkbox" id="save-upload" aria-describedby="save-note"> 存入「我的图书馆」
+                <input type="checkbox" id="save-upload" aria-describedby="save-note"> 存入书架
             </label>
             <!-- 上一批把这段说明从「重名会自动改名、不会覆盖」改成了实话，但仍然只写在
                  label 的 title 里——悬停几秒才出现，触摸屏点不到、键盘也读不到，而它说的
@@ -253,7 +253,7 @@
                 <div class="control-group" id="smoothnessGroup">
                     <!-- for= 不能省：没有它，<label> 和滑块之间没有任何关联，点「曲线平滑：」
                          不会把焦点给滑块，读屏报的也不是这个可见的名字（只能退到 title）。
-                         同页别处（「存入我的图书馆」那个 checkbox）本来就是这么写的。 -->
+                         同页别处（「存入书架」那个 checkbox）本来就是这么写的。 -->
                     <label for="smoothness">曲线平滑：</label>
                     <input type="range" id="smoothness" min="1" max="10" value="3" title="数值越大，趋势曲线越平滑">
                 </div>
@@ -385,7 +385,7 @@
                         </div>
 
                         <div class="dash-card">
-                            <h4>〰 风格走势 <span style="font-size:10px;color:#b5472f">拖拽选择片段</span></h4>
+                            <h4>〰 逐段走势 <span style="font-size:10px;color:#b5472f">拖拽选择片段</span></h4>
                             <!-- 折线图的图例（第四十六批）。这一页三张图里，只有这张原来没有一个书名：
                                  两条线只靠颜色与虚实区分，不悬停就认不出哪条是谁——而「这两本书为什么
                                  不一样」正是这张图讲得最清楚的事。更说不通的是，导出的 PNG/SVG 反而
@@ -478,7 +478,7 @@
 
             <h2 id="shelf-modal-title">🔑 书架编号</h2>
             <p class="shelf-modal-lead">
-                「我的图书馆」里的书存在服务器上，靠下面这个编号认领。清除浏览器数据、换台设备或换一个浏览器之后，
+                书架里的书存在服务器上，靠下面这个编号认领。清除浏览器数据、换台设备或换一个浏览器之后，
                 填上编号即可恢复这个书架，包括「删除」的权限。
             </p>
 
@@ -1455,7 +1455,7 @@
                 });
         }
 
-        // 「风格走势」图的指针状态。折线自己收不到鼠标事件——d3 的 brush 在上面铺了一层
+        // 「逐段走势」图的指针状态。折线自己收不到鼠标事件——d3 的 brush 在上面铺了一层
         // 透明 overlay（拖动框选就靠它），悬停和点击全被那层吃掉。所以这两件事都从层上
         // 接过来，再按「离哪条线最近」判断用户指的是哪一本。
         // 判定用「离哪条线最近」而不是「有没有压在线身上」：折线只有 1.5px 宽，

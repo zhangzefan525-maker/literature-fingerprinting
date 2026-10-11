@@ -84,7 +84,7 @@ def handle_request_too_large(_error):
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data" / "raw"
 STATIC_DIR = BASE_DIR / "static"
-LIBRARY_DIR = BASE_DIR / "data" / "library"  # 用户「我的图书馆」（勾选保存的派生分析 JSON）
+LIBRARY_DIR = BASE_DIR / "data" / "library"  # 用户书架（勾选保存的派生分析 JSON）
 
 # 确保目录存在
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -105,7 +105,7 @@ _DEMO_SCHEMA_VERSION = 3
 
 
 # ---------------------------------------------------------------------------
-# 访客身份：每个浏览器一枚匿名编号，「我的图书馆」按它分目录存放
+# 访客身份：每个浏览器一枚匿名编号，书架按它分目录存放
 #
 # 以前所有人共用一份 data/library/，于是甲勾选保存的书不只出现在乙的书单里，
 # 还会并进乙看到的那份语料——乙能在「值得一看的片段」里读到甲上传文本的原文摘录，
@@ -191,7 +191,7 @@ def _hand_out_visitor_cookie(resp):
 
 
 # ---------------------------------------------------------------------------
-# 「我的图书馆」：文件名校验 / 命名去重 / 落盘读写
+# 书架：文件名校验 / 命名去重 / 落盘读写
 # 统一由这里的 sanitize + resolve 决定最终书名（= 前端数据键 = 磁盘文件名），
 # 客户端不二次清洗，避免「键 ↔ 文件名」漂移。
 # ---------------------------------------------------------------------------
@@ -668,7 +668,7 @@ def favicon():
 @app.route('/api/fingerprint-data', methods=['GET'])
 def get_fingerprint_data():
     """
-    获取所有书籍的指纹数据（内置示例书 + 「我的图书馆」）
+    获取所有书籍的指纹数据（内置示例书 + 书架）
     """
     try:
         _ensure_demo_data()
@@ -765,11 +765,11 @@ def get_block_excerpt(book_name):
         if not isinstance(book_data, dict):
             # 原来的话是「请刷新页面后重试」——刷新恰恰是最没用的一步：这本书本来就不在
             # 服务器这份语料里（语料 = 内置示例书 + 你保存过的书），刷新一遍还是不在。
-            # 真正的原因是上传时没勾选「存入我的图书馆」，真正的出路是重传一遍并勾上它。
+            # 真正的原因是上传时没勾选「存入书架」，真正的出路是重传一遍并勾上它。
             return jsonify({
                 "status": "error",
-                "message": "这本书不在服务器的语料里——多半是你上传时没有勾选「存入我的图书馆」，"
-                           "刷新页面拿不回来。请重新上传一次、上传时勾上「存入我的图书馆」，再回来看这一页。"
+                "message": "这本书不在服务器的语料里——多半是你上传时没有勾选「存入书架」，"
+                           "刷新页面拿不回来。请重新上传一次、上传时勾上「存入书架」，再回来看这一页。"
             }), 404
         excerpt, extended = _find_excerpt(book_data, block)
         if not excerpt:
@@ -817,8 +817,8 @@ def analyze_book(book_name):
             # 与上面取摘录那处同一个原因、同一句话（见那里关于「刷新帮不上忙」的说明）。
             return jsonify({
                 "status": "error",
-                "message": "这本书不在服务器的语料里——多半是你上传时没有勾选「存入我的图书馆」，"
-                           "刷新页面拿不回来。请重新上传一次、上传时勾上「存入我的图书馆」，再回来看这一页。"
+                "message": "这本书不在服务器的语料里——多半是你上传时没有勾选「存入书架」，"
+                           "刷新页面拿不回来。请重新上传一次、上传时勾上「存入书架」，再回来看这一页。"
             }), 404
 
         series = book_data.get(metric)
@@ -995,7 +995,7 @@ def analyze_upload():
 
     blocks = get_blocks(raw_text, block_size=BLOCK_SIZE, overlap=OVERLAP)
 
-    # 前端在勾选「存入我的图书馆」时随 multipart 附 save=1
+    # 前端在勾选「存入书架」时随 multipart 附 save=1
     want_save = request.form.get("save", "").strip().lower() in {"1", "true", "yes", "on"}
 
     try:
@@ -1035,8 +1035,8 @@ def analyze_upload():
             # 「请改在上方展示区查看」指向一个根本不会出现的书名——用户唯一能做的
             # 就是重传一遍，而磁盘问题没解决必然再失败一次。
             # 现在照样把结果下发（saved=False），前端能照常画图，只是刷新后不留存。
-            app.logger.exception("保存到我的图书馆失败")
-            save_error = ("分析已经完成、图上可以正常看，但没能存进「我的图书馆」"
+            app.logger.exception("保存到书架失败")
+            save_error = ("分析已经完成、图上可以正常看，但没能存进书架"
                           "（服务器磁盘不可写或已满）。刷新页面后这本书会消失，"
                           "需要留存请先联系管理员腾出磁盘空间，再上传一次。")
         else:
@@ -1143,7 +1143,7 @@ def list_books():
 @app.route('/api/library/<book_name>', methods=['DELETE'])
 def delete_library_book(book_name):
     """
-    从「我的图书馆」删除一本书。
+    从书架删除一本书。
 
     - 内置示例书不可删除（400）；
     - 书库中不存在返回 404（**别人的书也不在你书架里，同样是 404**）；
@@ -1160,7 +1160,7 @@ def delete_library_book(book_name):
     # 「看不见」和「删不掉」在这里是同一件事，不需要两套判断。
     target = _shelf_dir() / f"{name}.json"
     if not target.exists():
-        return jsonify({"status": "error", "message": f"「我的图书馆」中不存在《{name}》。"}), 404
+        return jsonify({"status": "error", "message": f"书架里没有《{name}》。"}), 404
 
     exempt = _local_delete_allowed() and _is_local_host(request.host)
     if not exempt:
@@ -1202,7 +1202,7 @@ def delete_library_book(book_name):
     except OSError:
         pass
 
-    return jsonify({"status": "success", "message": f"已从「我的图书馆」删除《{name}》。"})
+    return jsonify({"status": "success", "message": f"已从书架删除《{name}》。"})
 
 
 # ---------------------------------------------------------------------------
@@ -1332,9 +1332,9 @@ if __name__ == '__main__':
     print("  GET /api/book/<name>          - 获取特定书籍数据")
     print("  GET /api/excerpt/<name>?block=N - 按需取某个片段的长摘录")
     print("  GET /favicon.ico              - 站点图标")
-    print("  GET /api/books                - 列出所有书籍（含「我的图书馆」）")
-    print("  DELETE /api/library/<name>    - 删除「我的图书馆」中的一本书")
-    print("  POST /api/shelf/claim         - 用书架编号找回「我的图书馆」（换设备）")
+    print("  GET /api/books                - 列出所有书籍（含书架）")
+    print("  DELETE /api/library/<name>    - 删除书架中的一本书")
+    print("  POST /api/shelf/claim         - 用书架编号找回书架（换设备）")
     # 端口优先读环境变量 PORT（Render 等托管平台会注入），本地默认 5000
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"

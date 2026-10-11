@@ -310,6 +310,23 @@ body::before {
 .global-status.notice  { border-left-color: var(--warn); }
 .global-status[hidden] { display: none; }
 
+/* 状态条里的「下一步」按钮（第四十八批）。挂在 #global-status 里、跟在正文之后——
+   状态条是普通行内流，所以这里**只**加左外边距，不动它的 display：改成 flex 会让所有
+   既有状态消息的排版都跟着变，而它们大多数根本没有按钮。
+   button 的全局样式是深底浅字的一整块实心，这里要的是「一条消息里的一个动作」，所以全部改回描边。 */
+.global-status-action {
+    margin-left: 10px;
+    padding: 3px 10px;
+    font-size: 0.85em;
+    font-weight: 600;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 6px;
+    color: inherit;
+    cursor: pointer;
+}
+.global-status-action:hover { background: rgba(120, 96, 60, 0.14); }
+
 /* ---------- 全局导出条（在标签页之外，三个视图共用） ---------- */
 .global-toolbar {
     display: flex;
@@ -752,6 +769,24 @@ button:hover {
     background: var(--ink-100);
     color: #fdfaf3;
     border-color: transparent;
+}
+
+/* 书名栏末尾那一格「＋ 上传我的文本」（第四十八批）。
+   刻意**不**共用 .book-btn：那一类是「一本书」的长相，会被选中态、按钮同步、删除钮那一圈
+   逻辑认领。这里只要和它们像同一个家族，同时一眼看得出是另一种动作——所以边框是虚的、底色透明。 */
+.book-upload-chip {
+    padding: 9px 18px;
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    color: var(--ink-70);
+    cursor: pointer;
+    transition: var(--transition-control);
+}
+
+.book-upload-chip:hover {
+    border-color: var(--vermilion);
+    color: var(--ink-100);
 }
 
 /* 书名按钮里的第二行「作者 · 年份」（第四十六批）。只有内置示例书有这一行——
@@ -1852,7 +1887,8 @@ button:hover {
     /* 选书那排：字号与内边距缩小后 4 本书名能排成一行（触控下限 44px 由文件末尾的
        @media (pointer:coarse) 段保底）。书多了仍会折行——那是动态内容，不硬压。 */
     .book-selector { gap: 8px; }
-    .book-btn { padding: 8px 12px; font-size: 13px; }
+    .book-btn,
+    .book-upload-chip { padding: 8px 12px; font-size: 13px; }
 
     /* 三个页签排成一行：字号 12.5px + 内边距 8/11 后合计约 316px < 360px。
        图标保留（去掉图标在 320px 下更宽松，但那是另一档，不值得为它丢识别度）。 */
@@ -2030,7 +2066,7 @@ button:hover {
 /* 使 HTML hidden 属性始终生效（压过元素的 display 规则） */
 [hidden] { display: none !important; }
 
-/* ---------- 「我的图书馆」：保存勾选 + 书名 chip 的删除钮 ---------- */
+/* ---------- 书架：保存勾选 + 书名 chip 的删除钮 ---------- */
 .save-toggle {
     display: inline-flex;
     align-items: center;
@@ -2193,7 +2229,7 @@ button:hover {
 
 /* ---------- 第二十批：「书架编号」按钮与弹窗 ---------- */
 /* 常驻在上传条里（新设备上正需要它，那时这个书架还是空的），外观跟旁边的
-   「存入我的图书馆」一档：13px、--ink-70，不跟上传按钮抢视线。 */
+   「存入书架」一档：13px、--ink-70，不跟上传按钮抢视线。 */
 .shelf-code-btn {
     font-family: inherit;
     font-size: 13px;
@@ -2320,6 +2356,9 @@ button.copy-failed:hover {
     .quickstart-close,
     .export-group button,
     .book-btn,
+    /* 「＋ 上传我的文本」（第四十八批）：它与 .book-btn 同排同高，触摸下也按 44px 给。
+       不并进上面那一行是因为注释里说的是按钮家族，这一格是虚线框的另一种动作。 */
+    .book-upload-chip,
     .sort-control,
     .copy-block-btn,
     .save-toggle,
@@ -2433,6 +2472,7 @@ button.copy-failed:hover {
                                删除，现在本页只剩这一个按钮，「>」已不承担区分作用，留着
                                是为了继续把范围钉在直接子按钮上。 */
     #demo-entry,            /* 「载入对比示例」 */
+    .book-upload-chip,      /* 「＋ 上传我的文本」：纸面上点不动，和上面那条同理 */
     #restartGalaxyBtn,      /* 「↻ 重新布局」 */
     .galaxy-hud,            /* 星系右上角那块面板：纯悬停交互，纸上既压住圆点又印一句
                                「将鼠标移到圆点上」——一个纸面上做不到的动作。补上坐标轴

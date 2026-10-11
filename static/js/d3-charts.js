@@ -22,7 +22,7 @@ function localUrlNote() {
 }
 
 // 这行和下面那句隐私说明一起，构成首屏那条常驻提示。原来两句加起来约 130 字，1000px 宽的
-// 窗口里要折三行、整条 120px 高，而其中「勾选「存入我的图书馆」后……」半句与勾选框自己的
+// 窗口里要折三行、整条 120px 高，而其中「勾选「存入书架」后……」半句与勾选框自己的
 // title 逐字重复（那个 title 里说得很完整），删掉；剩下的隐私告知必须留在明面上——折进
 // 抽屉反而是想藏起来的样子——所以是压缩措辞，不是折叠。
 // 必须与 d3_visualization.html 里 #upload-status 的初始文案逐字一致：这一份是
@@ -349,13 +349,13 @@ function consumePendingUrlBrush() {
     return Array.isArray(range) && range.length === 2 ? range : null;
 }
 
-// 「存入我的图书馆」勾选框：本地默认勾选（本机留档安全），远程默认不勾（默认不落盘）
+// 「存入书架」勾选框：本地默认勾选（本机留档安全），远程默认不勾（默认不落盘）
 function syncSaveToggleDefault() {
     const cb = document.getElementById('save-upload');
     if (cb) cb.checked = isLocalHost();
 }
 
-// 上传是否要写入「我的图书馆」：以勾选框为准；找不到勾选框时本机默认保存、远程不保存
+// 上传是否要写入书架：以勾选框为准；找不到勾选框时本机默认保存、远程不保存
 function isUploadSaveWanted() {
     const cb = document.getElementById('save-upload');
     if (cb) return cb.checked;
@@ -1065,6 +1065,10 @@ async function proceedUpload(file) {
     setUploadBusy(true);
     setUploadStatus(`正在分析「${file.name}」（长文本可能需要一些时间），请勿关闭页面…`, 'loading');
     startUploadTicker();
+    // 第四十八批：上传可以由两个地方发起——书名栏末尾那一格，或者它自己的上传栏。
+    // 从书名栏点进来的人此刻正看着页顶，而进度、结果、勾选框都在图表下方的上传区里，
+    // 不滚过去他看不到任何回音。从上传栏自己发起时人已经在那儿，这一滚是空操作。
+    scrollToSection(document.getElementById('upload-bar'));
 
     const formData = new FormData();
     formData.append('file', file);
@@ -1097,7 +1101,7 @@ async function proceedUpload(file) {
         const savedMsg = result.saved
             // 「只有这个浏览器能看到」必须说出来：书架是按浏览器里的一枚编号分开放的，
             // 不说的话，用户会以为别人也能看到、或者以为自己换个设备还找得回来。
-            ? '已存入「我的图书馆」（只有这个浏览器能看到），刷新后仍在，可点书名旁 ✕ 删除。'
+            ? '已存入书架（只有这个浏览器能看到），刷新后仍在，可点书名旁 ✕ 删除。'
             : (result.warning ? '' : '本次未勾选保存，刷新后不会保留。');
         // 书名跟用户以为的不一致时，必须说出来。三种情况，后果完全不同：
         //   1) renamedFrom   —— 撞了内置示例书，存成了《X（我的）》，谁都没被覆盖；
@@ -1210,8 +1214,8 @@ function openOverwriteModal(file) {
     const name = getBookDisplayName(String(file.name || '').replace(/\.txt$/i, ''));
     const lead = document.getElementById('overwrite-modal-lead');
     if (lead) {
-        lead.textContent = `「我的图书馆」里已经有一本《${name}》。`
-            + '这次上传的文件名和它一样，而你又勾了「存入我的图书馆」，'
+        lead.textContent = `书架上已经有一本《${name}》。`
+            + '这次上传的文件名和它一样，而你又勾了「存入书架」，'
             + '所以保存时会用这次的结果整份替换掉那一本。';
     }
 
@@ -1264,7 +1268,7 @@ function cancelOverwriteUpload() {
     setUploadStatus('已取消这次上传，书架上那一本没有改动。', '');
 }
 
-// 生成一个「书名 chip」：来自「我的图书馆」的书带 ✕ 删除钮
+// 生成一个「书名 chip」：来自书架的书带 ✕ 删除钮
 // （删除钮 stopPropagation，避免误触发选书）
 function buildBookGroup(book, { active = false, deletable = false, onClick } = {}) {
     const id = book.id;
@@ -1300,7 +1304,7 @@ function buildBookGroup(book, { active = false, deletable = false, onClick } = {
         const del = document.createElement('button');
         del.type = 'button';
         del.className = 'book-del';
-        del.title = '从「我的图书馆」删除这本书';
+        del.title = '从书架删除这本书';
         del.setAttribute('aria-label', `删除「${getBookDisplayName(book.name || id)}」`);
         del.textContent = '✕';
         del.addEventListener('click', (event) => {
@@ -1310,6 +1314,37 @@ function buildBookGroup(book, { active = false, deletable = false, onClick } = {
         wrap.appendChild(del);
     }
     return wrap;
+}
+
+// 「＋ 上传我的文本」：书名栏末尾那一格（第四十八批）。
+// 上传入口整条原来排在图表之后（.container 里的 order:8），首屏看不到——第一次来的人
+// 扫一眼只有四本不认识的书，很容易得出「这工具只能看它自带的书」。把它排在书名旁边，
+// 正好回答「选哪本书」这个问题里的另一半：也可以是你自己那一份。
+// 它不承载选中态，所以**不给** .book-btn 那个类——否则 syncBookButtonStates 会把它
+// 当一本书去同步，getBookButtonById 那一圈查询也会多出一个没有 data-id 的成员。
+function buildUploadChip() {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'upload-chip';
+    btn.className = 'book-upload-chip';
+    btn.textContent = '＋ 上传我的文本';
+    btn.title = '上传一份英文纯文本（.txt），和内置示例书一样参与分析';
+    btn.addEventListener('click', () => {
+        const input = document.getElementById('file-upload');
+        if (input && !input.disabled) input.click();
+    });
+    return btn;
+}
+
+// 书名栏一律以这一格收尾：新增书、删书、空态重建都会整块重写书名栏，所以每次写完都补一遍。
+// 先摘掉旧的再放——已有的那一格不摘的话，appendChild 会把它挪到末尾，位置看着一样，
+// 但它前面的兄弟节点变了，不值得依赖。
+function ensureUploadChip() {
+    const selector = document.getElementById('bookSelector');
+    if (!selector) return;
+    const existing = document.getElementById('upload-chip');
+    if (existing) existing.remove();
+    selector.appendChild(buildUploadChip());
 }
 
 // 将上传的书动态加入选择器，并保持选中态
@@ -1539,14 +1574,14 @@ function stripBooksFromUrl() {
 // 用一个 Set 做闸门：在途时直接忽略后续点击，并把该 chip 的 ✕ 临时禁用做视觉提示。
 const _deletingBooks = new Set();
 
-// 从「我的图书馆」删除：确认 → DELETE 接口 → 同步内存/选择/按钮/图表
+// 从书架删除：确认 → DELETE 接口 → 同步内存/选择/按钮/图表
 async function deleteLibraryBook(bookName) {
     if (_deletingBooks.has(bookName)) return;
     // 说具体（第四十七批）：原来只有一句「此操作不可撤销」，读者不知道有没有回收站、
     // 也不知道想留档该做什么。**不写「先抄书架编号」**——编号只回答「这是哪个书架」，
     // 删掉的那份数据不会因为编号还在就回得来（审查台账里那半句是错的，复现后不采纳）。
-    if (!window.confirm(`确定从「我的图书馆」删除《${getBookDisplayName(bookName)}》？`
-        + '删除后无法恢复，也没有回收站；要留档请先用上方「更多导出」导出数据表或摘要。')) return;
+    if (!window.confirm(`确定从书架删除《${getBookDisplayName(bookName)}》？`
+        + '删除后无法恢复，也没有回收站；要留档请先用「更多导出」导出数据表或摘要。')) return;
 
     _deletingBooks.add(bookName);
     setDeletingBookState(bookName, true);
@@ -1573,13 +1608,16 @@ async function deleteLibraryBook(bookName) {
         });
         syncUrlState();
 
-        setUploadStatus((result && result.message) || `已从「我的图书馆」删除《${getBookDisplayName(bookName)}》。`, 'success');
+        setUploadStatus((result && result.message) || `已从书架删除《${getBookDisplayName(bookName)}》。`, 'success');
         updateMetricHint();
 
         const remaining = Object.keys(realData || {}).length;
         if (remaining === 0) {
             const selector = document.getElementById('bookSelector');
-            if (selector) selector.innerHTML = '<p class="state-card empty">没有已加载的书籍了。上传一个 .txt 文本就能继续。</p>';
+            if (selector) {
+                selector.innerHTML = '<p class="state-card empty">没有已加载的书籍了。上传一个 .txt 文本就能继续。</p>';
+                ensureUploadChip();
+            }
             showNoDataMessage();
             return;
         }
@@ -1674,6 +1712,7 @@ function updateBookSelector(books) {
     if (!books || books.length === 0) {
         // 同上：data/raw 是服务器上的目录，用户在自己电脑上找不到它（第三十五批）。
         selector.innerHTML = '<p class="state-card empty">书架上还没有书。上传一个 .txt 文本就能开始分析。</p>';
+        ensureUploadChip();
         return;
     }
 
@@ -1683,6 +1722,7 @@ function updateBookSelector(books) {
             onClick: () => selectBook(book.id)
         }));
     });
+    ensureUploadChip();
 
     // 解读参照只用内置示例书：用户自己上传的书不该拿来当"基准"
     builtinBookNames = books.filter(book => book.source !== 'library').map(book => book.id);
@@ -1871,12 +1911,12 @@ async function loadRealData() {
                 // 任何一个页签上，而书选栏始终在页顶。改选书这件事本来也不需要方位词。
                 const autoPickNotice = `已替你选中差异最大的两本：《${picks.map(getBookDisplayName).join('》《')}》——`
                     + `它们的「${getMetricLabel(currentMetric)}」差距最大。如需比较其他组合，改选其它书籍即可。`;
-                if (droppedNotice) {
-                    // 链接里的书全没了（所以才会走到这里自动挑书）：两件事一条说完，且不自动收
-                    setGlobalStatus('notice', droppedNotice + autoPickNotice, { sticky: true });
-                } else {
-                    announceOrNotice(autoPickNotice);
-                }
+                // 两种来源合成同一条**常驻**提示（第四十八批）：只丢了一部分，上面那处就地发；
+                // 全丢了（所以才会走到这里自动挑书），接在自动选书前面一起发。
+                // 为什么不再 6 秒自收：它说的不是「刚才发生了什么」，而是「你现在看的这两本是谁挑的」。
+                // 第一次来的人正是在这几秒里读标题、认书名，等他想起要确认这件事时话已经没了——
+                // 实测 1.2 秒在、4.2 秒还在、8.2 秒清空。这与「链接里的书找不到」同类，所以同样常驻。
+                setGlobalStatus('notice', (droppedNotice || '') + autoPickNotice, { sticky: true });
             } else {
                 selectBook(availableBooks[0]); // 兜底：连一对都挑不出来时，照旧选第一本
             }
@@ -3613,7 +3653,7 @@ function getHeatmapLegend(metric) {
 // 就得记住用户最后碰过的是哪张：默认「整体水平对比」，碰过走势图就跟着变。
 const DASH_CHARTS = {
     'adv-mean': '整体水平对比',
-    'adv-line': '风格走势'
+    'adv-line': '逐段走势'
 };
 let lastDashChart = 'adv-mean';
 
@@ -3636,7 +3676,7 @@ function getExportTarget() {
         return { element: document.querySelector('#galaxy-container svg'), label: '风格星系' };
     }
     if (currentTab === 'view-dashboard') {
-        // 以前写死 #adv-mean：它恒存在，于是「风格走势」那张永远导不出来
+        // 以前写死 #adv-mean：它恒存在，于是「逐段走势」那张永远导不出来
         const element = document.querySelector(`#${lastDashChart} svg`)
             || document.querySelector('#adv-mean svg');
         return { element, label: `全书对比·${DASH_CHARTS[lastDashChart] || DASH_CHARTS['adv-mean']}` };
@@ -3725,7 +3765,7 @@ function collectExportLegend() {
     return { items: [], shape: 'rect' };
 }
 
-// 屏幕上的「风格走势」图例（第四十六批）。这一页三张图里原来只有这张没有一个书名，
+// 屏幕上的「逐段走势」图例（第四十六批）。这一页三张图里原来只有这张没有一个书名，
 // 而导出的 PNG/SVG 反而有图例——本末倒置。取法与 collectExportLegend 完全一样：
 // 颜色与线型直接读屏幕上已经渲染好的 path，不自己重算一遍（重算要复刻 dashForBook
 // 的槽位分配，很容易对不上）。线型要画出来：它是色盲读者唯一不靠颜色分辨的线索。
@@ -4264,6 +4304,25 @@ function exportSummary() {
 
     downloadBlob(lines.join('\n'), `文印_分析摘要_${exportTimestamp()}.txt`, 'text/plain;charset=utf-8');
     flashExportReceipt(document.getElementById('exportSummaryBtn'), '摘要已导出（.txt），在浏览器的「下载」列表里。');
+
+    // 结论两节缺了时，屏幕上也要说一句（第四十八批）。
+    // 原来只有导出的那份文件里写了「请先切到「全书对比」页……返回后再导出」——读者读到这句话时，
+    // 文件已经躺在下载目录里了，屏幕上一点痕迹都没有，而这份摘要正是要贴进论文的东西。
+    // 两处说明各有各的读者，都得留着：文件里那句是给「过几天才翻出这份摘要的人」看的
+    // （导出物必须自足），屏幕上这句是给「刚刚点了导出的人」看的，所以还带一个直接切过去的入口。
+    // 只做提示、不替用户切页签——屏幕上那个「复制结论」按钮遇到同样情况也是这么处理的，
+    // 两边保持一致（见 exportSummary 上方那段注释）。
+    if (!insightText && !anomalyText) {
+        setGlobalStatus('notice',
+            '这份摘要已经导出，但「一句话解读」「值得一看的片段」两节是空的——'
+            + '它们要先看一次「全书对比」页才会生成。', {
+                sticky: true,
+                action: {
+                    label: '去「全书对比」看看',
+                    onClick: () => { setGlobalStatus(null, ''); window.switchTab('view-dashboard'); }
+                }
+            });
+    }
 }
 
 // 「一句话解读」的纯文字版本。内容是页面内那段脚本渲染时存进 lastInsightLines 的，
@@ -4915,7 +4974,7 @@ function exportVectorChart() {
 // 于是切到「风格星系」「全书对比」之后，加载失败、分析失败、无数据全是静默的。
 let _globalStatusTimer = null;
 
-function setGlobalStatus(kind, message, { sticky = false } = {}) {
+function setGlobalStatus(kind, message, { sticky = false, action = null } = {}) {
     const el = document.getElementById('global-status');
     if (!el) return;
     if (_globalStatusTimer) { clearTimeout(_globalStatusTimer); _globalStatusTimer = null; }
@@ -4928,6 +4987,17 @@ function setGlobalStatus(kind, message, { sticky = false } = {}) {
     el.hidden = false;
     el.className = `global-status ${kind || ''}`.trim();
     el.textContent = message;
+    // action（第四十八批）：个别状态消息自带一个「下一步」按钮。文案里光写「请先切到「全书对比」页」
+    // 等于让读者自己去那一排页签里找，而这件事本来可以一步到位。textContent 先把旧的按钮清掉，
+    // 再补一个真按钮——读屏按普通按钮念它，键盘也够得到。
+    if (action && typeof action.onClick === 'function') {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'global-status-action';
+        btn.textContent = action.label;
+        btn.addEventListener('click', action.onClick);
+        el.appendChild(btn);
+    }
     // 「成功」「提示」过几秒自己收起，免得一条过期消息一直挂在页面上；
     // 「错误」「加载中」留在原地，等下一次状态更新来替换。
     // sticky（第四十七批）：加进来看的这一条不是「刚才发生了什么」，而是「这个网址本身缺东西」

@@ -101,7 +101,7 @@ def build_book_data(blocks, keywords_n=3, text=None, projection=None,
             metadata.projection.mode 会标成 "perBook"
         block_size / overlap (int | None): 滑窗参数，缺省时按块长推断
         include_vectors (bool): 是否附带逐块功能词向量。这是服务器内部字段
-            （只有「我的图书馆」落盘时才需要），HTTP 响应里会被剥掉
+            （只有书架落盘时才需要），HTTP 响应里会被剥掉
 
     Returns:
         dict | None: 与 all_books.json 单本书相同结构的数据；输入为空时返回 None

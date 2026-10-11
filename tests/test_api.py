@@ -1,5 +1,5 @@
 """
-「我的图书馆」API 单元测试
+书架 API 单元测试
 ==========================
 覆盖 api_server.py 中新增的书库能力：文件名清洗与命名去重、上传保存与替换、
 书目 source 标记、指纹数据合并、删除保护（内置不可删 / 404 / CJK 路径）。
@@ -1083,7 +1083,7 @@ class FingerprintConditionalTestCase(LibraryApiTestCase):
         self.assertNotEqual(fresh.headers["ETag"], etag)
 
     def test_library_change_invalidates_etag(self):
-        """「我的图书馆」也是语料的一部分：新增一本书同样要让 ETag 变。"""
+        """书架也是语料的一部分：新增一本书同样要让 ETag 变。"""
         etag = self._get().headers["ETag"]
         self._put_library("Alice")
         fresh = self._get(etag)
