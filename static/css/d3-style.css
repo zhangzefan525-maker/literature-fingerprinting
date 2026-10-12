@@ -743,11 +743,83 @@ button:hover {
 }
 
 /* ---------- 书籍选择器 ---------- */
+/* .book-bar 是书名栏的外壳（第四十九批），存在的唯一理由是回答「书架上的书多到放不下
+   怎么办」。书少时它是透明的：搜索行 hidden、书名栏不限高——4 本书时首屏与改动前
+   逐像素一致。真放不下时由 syncBookBarOverflow() 给它加 .is-capped，并把搜索行放出来。
+   限高值不写在这里：行高随书名长短、桌面/手机两档字号变（内置书还多一行「作者 · 年份」），
+   写死的数字迟早对不上其中一种，所以由 JS 量出来写内联。 */
+.book-bar { display: block; }
+
+.book-bar-controls {
+    display: flex;
+    margin-bottom: 10px;
+}
+
+#book-search {
+    width: 220px;
+    max-width: 100%;
+    padding: 7px 12px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink-100);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    transition: var(--transition-control);
+}
+
+#book-search:focus {
+    outline: none;
+    border-color: var(--vermilion);
+}
+
+#book-search::placeholder { color: var(--ink-70); opacity: 0.75; }
+
 .book-selector {
     display: flex;
     gap: 10px;
     margin-bottom: 20px;
     flex-wrap: wrap;
+}
+
+/* 限高状态：栏内可滚（滚动条细一点，别抢眼），末尾那格上传芯片钉在栏底——
+   书多到要滚的时候，滚到底才能看见「＋ 上传我的文本」等于把它藏了。
+   align-content 显式写 flex-start：多行 flex 容器默认 stretch，限高后会把行拉开摊平。 */
+.book-bar.is-capped .book-selector {
+    overflow-y: auto;
+    overflow-x: hidden;
+    align-content: flex-start;
+}
+
+.book-bar.is-capped .book-selector::-webkit-scrollbar { width: 8px; }
+.book-bar.is-capped .book-selector::-webkit-scrollbar-thumb {
+    background: #c9bda3;
+    border-radius: 4px;
+}
+.book-bar.is-capped .book-selector::-webkit-scrollbar-track {
+    background: rgba(166, 124, 61, 0.06);
+}
+
+/* 限高时把「＋ 上传我的文本」搬到可滚区**外面**，做成一整条通栏（由 placeUploadChip
+   决定它挂在哪）。试过钉在滚区底部（position:sticky），问题是它正好压住第二行书名
+   ——限高两行，实际只看得到一行，而且滚过去的书名被它从中间切断，看着像字被裁了。
+   搬到外面之后，两行书名一行不少，上传入口也一直看得见，各归各位。 */
+.book-bar.is-capped .book-selector { margin-bottom: 10px; }
+
+.book-bar.is-capped > .book-upload-chip {
+    display: block;
+    width: 100%;
+    margin-bottom: 20px;
+    text-align: center;
+    background: var(--card);
+}
+
+/* 搜到 0 本时的空态。芯片仍在行内（它就在这一格的后面），所以这句只说书。 */
+.book-search-empty {
+    margin: 0;
+    padding: 9px 2px;
+    color: var(--ink-70);
+    font-size: 13px;
 }
 
 .book-btn {
@@ -787,6 +859,15 @@ button:hover {
 .book-upload-chip:hover {
     border-color: var(--vermilion);
     color: var(--ink-100);
+}
+
+/* 正在分析上一份文本时（第四十九批）：这一格原来点了完全没反应，因为文件框被禁用了、
+   处理函数就静默返回。现在忙时它带人去看进度，所以**不能**真的 disabled——被禁用的按钮
+   点不动，也就没法带路了。只变暗 + 换成 progress 光标（.upload-btn.is-busy 那种
+   pointer-events: none 在这里是反的，别抄）。 */
+.book-upload-chip.is-busy {
+    opacity: 0.6;
+    cursor: progress;
 }
 
 /* 书名按钮里的第二行「作者 · 年份」（第四十六批）。只有内置示例书有这一行——
@@ -968,11 +1049,11 @@ button:hover {
 @media (hover: none) {
     .pointer-hint-hover { display: none; }
     .pointer-hint-touch { display: inline; }
-    /* 区域风格面板只由 mouseover 触发（见 d3-charts.js 里那个唯一的 .on("mouseover")）。
-       触屏上手指点下去走的是 click，直接弹出全屏原文，这块面板要么永远停在
-       「将鼠标移到任意圆点上」的占位语，要么在合成 mouseover 的一瞬间闪一下又被盖住。
-       与其留一块永远为空的说明，不如在触屏上收起来——原文弹窗里信息更全。 */
-    #galaxy-hud { display: none; }
+    /* 这里原来还有一条 #galaxy-hud { display: none; }：那时这块面板只由 mouseover 触发，
+       触屏上要么永远停在「将鼠标移到任意圆点上」的占位语，要么闪一下就没了，所以干脆收起来。
+       第四十九批把它撤了：手指点圆点现在也走同一段逻辑（d3-charts.js 里的 focusGalaxyNode），
+       面板填得出来，里面还多一个「看这一段的原文」——手机上第一次真的能读到「附近点的
+       共同特征」这件事。窄屏的覆盖规则（宽 auto、贴左右各 10px）照旧在下面那一档里。 */
 }
 
 .galaxy-legend {
@@ -1703,6 +1784,33 @@ button:hover {
     font-size: 12px;
 }
 
+/* 面板里的次入口「看这一段的原文」（第四十九批，只挂在触屏那条路上）。
+   整块面板是 pointer-events:none——它一直是块纯展示的浮层，悬停出来的东西不该拦住鼠标。
+   这一个按钮得单独把指针接回来，否则它看得见、点不动。 */
+.hud-action {
+    margin-top: 10px;
+    pointer-events: auto;
+}
+
+.hud-action-btn {
+    width: 100%;
+    padding: 7px 10px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--vermilion);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: var(--transition-control);
+}
+
+.hud-action-btn:hover,
+.hud-action-btn:focus-visible {
+    border-color: var(--vermilion);
+    background: rgba(181, 71, 47, 0.06);
+}
+
 .hud-label {
     color: var(--ink-50);
 }
@@ -1828,7 +1936,9 @@ button:hover {
    不会因为默认 order:0 跳到页首。 */
 .container > * { order: 20; }
 .header { order: 1; }
-#bookSelector { order: 2; }
+/* 书名栏现在是 .book-bar 这一层占第 2 位（#bookSelector 成了它的孩子，不再直接
+   参与这套排序）。 */
+.book-bar { order: 2; }
 .metric-bar { order: 3; }
 .tab-navigation { order: 4; }
 #global-status { order: 5; }
