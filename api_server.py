@@ -36,6 +36,10 @@ CORS(app, resources={r"/api/*": {"origins": [
 # 默认 0 = 不信任任何转发头，行为与以前完全一致。这个开关**只在该端口无法被绕过代理
 # 直连时**才安全：能直连的话，任何人都能自己伪造 X-Forwarded-For，限流就从「共用一个
 # 桶」变成「完全可绕过」——比不改更糟。所以默认关，要用先确认部署拓扑。
+#
+# 第五十一批起，**上传与认领书架的限流已不再依赖这个开关**：它们改成按访客编号
+# 分桶（见 _visitor_rate_key），跟前置了几层代理无关。这个开关保留，是因为
+# request.remote_addr 别处（日志等）仍以它为准。
 _TRUST_PROXY_COUNT = int(os.environ.get("TRUST_PROXY_COUNT", "0") or 0)
 if _TRUST_PROXY_COUNT > 0:
     from werkzeug.middleware.proxy_fix import ProxyFix
@@ -556,6 +560,28 @@ _RATE_REFILL_SECONDS = 30    # 每 30 秒补 1 次
 _rate_state = {}
 
 
+def _visitor_rate_key(prefix):
+    """
+    限流桶的键：**按访客算，不按地址算**。
+
+    以前这里传的是 request.remote_addr，而线上站在 nginx 后面——那边拿到的是
+    代理自己的地址，于是「按访客限流」退化成「全站共用一个桶」：第 11 次上传之后
+    所有人一起被挡，而报错写的是「请求太频繁了，请等半分钟再试」，明确指向本人。
+    一个人传得勤，其他人跟着挨饿。
+
+    访客编号是页面每次请求本来就带上的 cookie（lf_visitor，见 _identify_visitor），
+    天然按人分桶，而且**跟前置了几层代理毫无关系**——不用去猜 TRUST_PROXY_COUNT。
+
+    这一趟才拿到编号的（第一次来、还没带 cookie）退回按地址算：拿新编号当键的话，
+    每个不带 cookie 的请求都是一个全新的桶，等于没有限流。
+
+    prefix 用来把不同的限流场景分开（上传 / 认领书架），别让它们共用一个桶。
+    """
+    if not getattr(g, "visitor_cookie_new", True):
+        return f"{prefix}:v:{g.visitor_id}"
+    return f"{prefix}:ip:{request.remote_addr or 'unknown'}"
+
+
 def _rate_limited(client_ip):
     now = time.monotonic()
     if len(_rate_state) > 2000:  # 防止陌生人刷 IP 把内存撑大
@@ -888,7 +914,7 @@ def analyze_upload():
     from src.data_loader import get_blocks, detect_language, count_blocks, decode_upload
     from src.pipeline import build_book_data
 
-    if _rate_limited(request.remote_addr or "unknown"):
+    if _rate_limited(_visitor_rate_key("upload")):
         return jsonify({
             "status": "error",
             "message": "请求太频繁了，请等半分钟再试。"
@@ -1015,7 +1041,20 @@ def analyze_upload():
             "message": "文本分析失败，请确认这是一份英文纯文本后重试。"
         }), 422
 
-    final_name = _resolve_final_name(base_name)
+    # 用户在前端确认过「替换那一本」之后，前端会把要顶掉的书名放在 replace_target 里送回来。
+    # 为什么需要它：撞上内置示例书时，第一次上传会被存成《X（我的）》，第二次再传同一个
+    # 文件时 base_name 仍然是 X，既不在书架上、又撞内置名，_resolve_final_name 只能再
+    # 追加成《X（我的）(2)》——于是同一个文件传两次就多出一本，而界面上明明问过一回
+    # 「要不要替换」。带上这个字段，这一存才真的落在用户点头的那一本上。
+    #
+    # 只认「它确实在这个访客自己的书架上」的取值。不校验的话，前端就能指名道姓地
+    # 覆盖书架上任何一本（甚至靠路径穿越跑出这个访客的目录）。认不出就当作没传，
+    # 照旧走 _resolve_final_name 的默认优先级。
+    replace_target = sanitize_book_name(request.form.get("replace_target") or "")
+    if replace_target and replace_target in _library_keys():
+        final_name = replace_target
+    else:
+        final_name = _resolve_final_name(base_name)
     # 落盘之前先记住这个名字是不是已经有一本了：同名意味着这一存会把旧的整份换掉，
     # 必须让用户知道（以前是彻底静默的，用户以为自己在「新增」）。
     replaced_existing = final_name in _library_keys()
@@ -1245,7 +1284,7 @@ def claim_shelf():
             "message": "编号格式不对。请照抄那串字符（区分大小写，没有空格）。"
         }), 400
 
-    if _rate_limited("claim:" + (request.remote_addr or "unknown")):
+    if _rate_limited(_visitor_rate_key("claim")):
         return jsonify({
             "status": "error",
             "message": "尝试太频繁，请等半分钟再试。"

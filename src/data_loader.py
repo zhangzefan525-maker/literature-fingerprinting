@@ -1,6 +1,7 @@
 # 数据加载与清洗模块（支持多文件对比）
 import re
 import os
+import codecs
 
 # 常见英语缩写及其展开形式（用于论文 3.2 节的缩写还原）
 CONTRACTIONS = {
@@ -209,6 +210,28 @@ def detect_language(text):
 # 反过来也一样。挑哪一份交给语言闸门去判，见 decode_upload。
 _FALLBACK_ENCODINGS = ('gb18030', 'cp1252')
 
+# 带 BOM 的 UTF-16 / UTF-32：**先判它，再试 UTF-8**。
+# Word 的「另存为 → 纯文本」有两个编码档，其中一档叫「Unicode」，写出来的就是带
+# BOM 的 UTF-16LE。这种文件以前会被静默收下：它的正文是 `T\0h\0e\0`，而 cp1252
+# 把任何一个字节都解得开，于是它被当成一份「读得出来的文本」送进分析管线——
+# 状态报「分析完成」，三项指标全是 0，预览是 `ÿþT h e` 这样的乱码。
+# 用户拿到的是一句假话（「你这篇没有特征」），而真实原因只是存错了档。
+#
+# 只认 BOM，不做「NUL 字节多就是 UTF-16」这类启发式：那种判据在 GB18030 上会误伤，
+# 而 Word 的「Unicode」档一定写 BOM。代价是**没有 BOM 的 UTF-16 仍读不出来**，
+# 那种文件会落回老路、报「读不出文本内容」——宁可这样，也不拿启发式去赌。
+#
+# 顺序有讲究：UTF-32LE 的 BOM（FF FE 00 00）以 UTF-16LE 的 BOM（FF FE）开头，
+# 必须长的在前，否则 UTF-32 会被当成 UTF-16 解出一串夹着 NUL 的乱码。
+# 用 'utf-16' / 'utf-32' 这两个通用解码器而不是分别写 -le / -be：它们自己认 BOM
+# 并把 BOM 吃掉，不必再手写剥离。
+_BOM_ENCODINGS = (
+    (codecs.BOM_UTF32_LE, 'utf-32'),
+    (codecs.BOM_UTF32_BE, 'utf-32'),
+    (codecs.BOM_UTF16_LE, 'utf-16'),
+    (codecs.BOM_UTF16_BE, 'utf-16'),
+)
+
 # 挑编码时只看开头这么多字符。这一步的候选是「哪种读法更像英文」，
 # 不必扫全书——真去扫 20 MB 要 4 秒多（detect_language 的实测值）。
 # 最后的判官仍是完整的语言闸门，这里只是选一份交给它。
@@ -219,11 +242,25 @@ def decode_upload(raw):
     """
     把上传的字节解成文本。返回 (text, encoding)；都解不出来时返回 (None, None)。
 
-    UTF-8 单独优先：它是自校验的，解得开就不会解错（utf-8-sig 顺带吃掉 BOM）。
+    带 BOM 的 UTF-16 / UTF-32 先判（见 _BOM_ENCODINGS 上面那段：Word 的「Unicode」
+    档就写这个，以前会被静默解成对不上号的乱码），再试 UTF-8——它是自校验的，
+    解得开就不会解错（utf-8-sig 顺带吃掉 BOM）。
     解不开才轮到 GB18030 与 cp1252，并用语言闸门自己来挑：先选解得开
     （detect_language 通过）的那一份；都通不过就选非 ASCII 字符最少的那一份，
     这样接下来报错时引用的比例，是两种读法里更可信的那个。
     """
+    for bom, encoding in _BOM_ENCODINGS:
+        if not raw.startswith(bom):
+            continue
+        try:
+            # 'utf-16' / 'utf-32' 自己认 BOM 并把它吃掉，不必再手写剥离
+            return raw.decode(encoding), encoding
+        except (UnicodeDecodeError, LookupError):
+            # BOM 已经认死了编码，只是正文坏了（截断、字节数奇数、坏的代理对…）。
+            # 不再往下试：gb18030 / cp1252 几乎能把任意字节「解得开」，那正是这次
+            # 要修的毛病——一份坏文件会被解成乱码送进分析，报出一堆 0。当作读不出。
+            return None, None
+
     try:
         return raw.decode('utf-8-sig'), 'utf-8'
     except (UnicodeDecodeError, LookupError):

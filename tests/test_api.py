@@ -616,6 +616,24 @@ class ShelfClaimTestCase(LibraryApiTestCase):
             self._claim(f"nosuchvisitor0000000{i}")
         self.assertEqual(self._post_analyze("MyDoc.txt").status_code, 200)
 
+    def test_upload_quota_is_per_visitor_not_per_server(self):
+        """
+        上传限流按**访客**分桶，不按地址（第五十一批）。
+
+        线上站在 nginx 后面，request.remote_addr 拿到的是代理自己的地址。按地址分桶
+        等于全站共用一个容量 10 的桶：第 11 次上传之后所有人一起被挡，而弹出来的话
+        是「请求太频繁了」——指着本人说，实际是别人用掉的。这里钉住的是两个人的额度
+        互不占用：各传 10 次都该成功，各自的第 11 次才被挡。
+        """
+        other = self._another_visitor(self.OTHER_VISITOR)
+        mine = [self._post_analyze(f"mine{i}.txt").status_code for i in range(10)]
+        theirs = [self._post_analyze(f"theirs{i}.txt", client=other).status_code for i in range(10)]
+        self.assertEqual(set(mine), {200})
+        self.assertEqual(set(theirs), {200}, "乙这 10 次不该被甲用掉的额度拖累")
+        # 两边各自的桶分别数到 10 之后，各自的第 11 次才被挡
+        self.assertEqual(self._post_analyze("mine10.txt").status_code, 429)
+        self.assertEqual(self._post_analyze("theirs10.txt", client=other).status_code, 429)
+
     # ---- 空目录回收 ----
     def test_deleting_the_last_book_removes_the_empty_shelf_dir(self):
         self._put_library("Alice", dict(FAKE_BOOK, _deleteToken="tok-a"))

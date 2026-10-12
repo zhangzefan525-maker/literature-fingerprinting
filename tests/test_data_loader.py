@@ -13,6 +13,7 @@
 或：
     python -m unittest discover -s tests -v
 """
+import codecs
 import json
 import sys
 import unittest
@@ -115,6 +116,39 @@ class TestDecodeUpload(unittest.TestCase):
         text, encoding = decode_upload(b"\xef\xbb\xbf" + self.TEXT.encode("utf-8"))
         self.assertEqual(encoding, "utf-8")
         self.assertEqual(text, self.TEXT)
+
+    def test_utf16le_bom_is_read(self):
+        """
+        Word 的「另存为 → 纯文本」有两个编码档，其中一档叫「Unicode」，写出来的就是
+        带 BOM 的 UTF-16LE（第五十一批）。它的正文是 `T\\0h\\0e\\0`，而 cp1252 把任何
+        一个字节都解得开——所以它以前会被**静默收下**：状态报「分析完成」，三项指标
+        全是 0，预览是 `ÿþT h e` 这样的乱码。同内容存成 UTF-8 再传是 13.77 / 0.012 / 2157。
+
+        钉住的是「自动认出来，正常分析」：解出来与 UTF-8 那份**逐字相同**，
+        且正文里一个 NUL 都不剩（BOM 由 'utf-16' 自己吃掉）。
+        """
+        raw = codecs.BOM_UTF16_LE + self.TEXT.encode("utf-16-le")
+        text, encoding = decode_upload(raw)
+        self.assertEqual(encoding, "utf-16")
+        self.assertEqual(text, self.TEXT)
+        self.assertNotIn("\x00", text)
+
+    def test_utf16be_bom_is_read(self):
+        # 大端那一档少见但不是不存在（有的编辑器、有的导出工具写 BE）
+        raw = codecs.BOM_UTF16_BE + self.TEXT.encode("utf-16-be")
+        text, encoding = decode_upload(raw)
+        self.assertEqual(encoding, "utf-16")
+        self.assertEqual(text, self.TEXT)
+        self.assertNotIn("\x00", text)
+
+    def test_broken_utf16_reports_nothing_instead_of_mojibake(self):
+        """
+        BOM 已经认死了编码，只是正文坏了（这里是字节数为奇数，截断了）。
+        这种文件必须当作「读不出文本内容」——不能往下退给 gb18030 / cp1252，
+        那两个几乎能把任意字节「解得开」，正是这次要修的毛病：一份坏文件被解成乱码
+        送进分析，报出一堆 0，而用户以为自己的文本「没特征」。
+        """
+        self.assertEqual(decode_upload(codecs.BOM_UTF16_LE + b"\x41"), (None, None))
 
     def test_cp1252_english_is_read(self):
         text, encoding = decode_upload(self.TEXT.encode("cp1252"))
