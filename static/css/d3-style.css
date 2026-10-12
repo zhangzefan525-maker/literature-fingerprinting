@@ -768,8 +768,14 @@ button:hover {
     transition: var(--transition-control);
 }
 
-#book-search:focus {
+/* 拆两条，理由和上面 :392 那组一模一样（第五十一批）：原来是单写 `#book-search:focus`
+   { outline: none }，特异性（1,1,0）压过全局 `:focus-visible`（0,1,0），于是键盘 Tab 到这个
+   搜索框（书多到限高时才会出现）看不见任何焦点环——旁边的书名芯片却有 2px 朱砂环，用户会
+   以为焦点丢了。现在只有「鼠标点进来」才去掉外框，键盘那趟交给全局那条。 */
+#book-search:focus:not(:focus-visible) {
     outline: none;
+}
+#book-search:focus {
     border-color: var(--vermilion);
 }
 
@@ -822,7 +828,19 @@ button:hover {
     font-size: 13px;
 }
 
+/* 这两条是给**超长书名**兜底的（第五十一批）：上传的文件名可以任意长，而 .book-btn 是
+   .book-selector（flex 行）里的 flex 子项，默认 min-width:auto —— 一个不含空格的长串
+   就是它的最小宽度，撑不掉、只能顶出去，实测 390 宽视口下那一格 596px，
+   documentElement.scrollWidth 663，整页能横向拖。
+   overflow-wrap: anywhere 是**同时**修「换行」和「最小宽度」的那一个值：break-word 只
+   在排版时折行，flex 算最小宽度时仍按长串算；anywhere 会让它的 min-content 贡献按单字
+   符算，子项这才收缩得下来。max-width 兜住百分比解析失败的情况。
+   刻意**不**加 text-overflow:ellipsis：书名截断了就认不出是哪一本，换行后栏变高会自然
+   触发已有的 syncBookBarOverflow() 限高 + 搜索框（第四十九批那套），两个机制叠在一起
+   正合适。代价是极长书名的芯片会占好几行，要靠限高 + 滚动读全。 */
 .book-btn {
+    max-width: 100%;
+    overflow-wrap: anywhere;
     padding: 9px 18px;
     background: var(--card);
     border: 1px solid var(--border);

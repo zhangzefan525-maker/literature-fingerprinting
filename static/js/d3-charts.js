@@ -1062,6 +1062,12 @@ function updateChartTypeUI() {
     // 折线图的纵轴自带数字，这句反而会误导，所以只在热力图下显示。
     const scaleNote = document.getElementById('heatmap-scale-note');
     if (scaleNote) scaleNote.hidden = chartType !== 'heatmap';
+
+    // 「只切出一个片段」那句说明反过来只属于折线图（第五十一批）。内容由
+    // renderLineSoloNote 在画图时写，这里只负责切到热力图时收掉——热力图下这本书
+    // 就是普通的一格，再挂一句「图上用一个点标出」反倒成了假话。
+    const soloNote = document.getElementById('line-solo-note');
+    if (soloNote) soloNote.hidden = chartType !== 'line';
 }
 
 // 上传自定义文本并即时分析
@@ -1096,7 +1102,7 @@ async function handleFileUpload(event) {
 // 真正把文件发出去分析。
 // 从 handleFileUpload 里拆出来，是因为「同名覆盖」那条路要先去问一句、用户点了
 // 「替换」才走到这里——两条路共用同一段流程，以后改上传逻辑不会只改到其中一条。
-async function proceedUpload(file) {
+async function proceedUpload(file, { replaceTarget = null } = {}) {
     const input = document.getElementById('file-upload');
     setUploadBusy(true);
     setUploadStatus(`正在分析「${file.name}」（长文本可能需要一些时间），请勿关闭页面…`, 'loading');
@@ -1109,6 +1115,8 @@ async function proceedUpload(file) {
     const formData = new FormData();
     formData.append('file', file);
     if (isUploadSaveWanted()) formData.append('save', '1');
+    // 只有在用户于覆盖弹窗里点过「替换」时才有：见 confirmOverwriteUpload 的注释。
+    if (replaceTarget) formData.append('replace_target', replaceTarget);
 
     try {
         const resp = await fetch(`${API_BASE_URL}/api/analyze`, { method: 'POST', body: formData });
@@ -1214,6 +1222,7 @@ async function proceedUpload(file) {
 // ---------------------------------------------------------------------------
 let libraryBookNames = new Set();   // 这个书架上的书名（来自 /api/books 的 source==='library'）
 let pendingOverwriteFile = null;    // 等用户回答的那个文件
+let pendingOverwriteName = null;    // 那一问要顶掉的书名（服务端确认后用 replace_target 送回去）
 
 const _BOOK_NAME_FORBIDDEN_RE = /[<>:"/\\|?*\x00-\x1f\x7f]/g;
 const _BOOK_NAME_RESERVED_RE = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
@@ -1237,11 +1246,41 @@ function rememberLibraryBooks(books) {
     );
 }
 
+// 这一存会顶掉书架上**哪一本**？没有同族的书就返回 null（新书，一个字都不多问）。
+//
+// 判据不能写成「先算一遍服务端最终会落在哪个名字，再看那个名字在不在书架上」。
+// 撞内置示例书的时候，服务端（api_server.py 的 _resolve_final_name）发现《X（我的）》
+// 已经被占了，会再退一步算成《X（我的）(2)》——这个名字**不在**书架上，照它判就是
+// 「不是覆盖」，于是同一个文件传两次多出一本 (2)，而界面上明明承诺过保存前会再确认。
+// 实测：连传两遍 The call of the wild.txt，书架上并排出现《…（我的）》和《…（我的）(2)》。
+//
+// 所以要问的是另一个问题——**书架上有没有这份文件的同族书**，按用户看到的那一本找：
+//   1) 书名与文件词干完全相同 → 服务端本来就会原地替换（规则 1），问一句只是把承诺提前
+//   2) 《X（我的）》(n)        → 只可能由「这份文件词干撞内置名」生成（后缀是服务端加的），
+//                                数最小的一本 = 最早那份副本；连着传三次时不会越删越多
+// 同族书的判断用 startsWith + 纯数字尾巴，不做正则拼接——词干里可能有 . ( ) 这些字符，
+// 拼进正则就得先转义一遍，白添一处出错的地方。
+function findOverwriteFamily(stem) {
+    const base = sanitizeBookName(stem);
+    if (libraryBookNames.has(base)) return base;
+    const prefix = `${base}（我的）`;
+    if (libraryBookNames.has(prefix)) return prefix;
+    let best = null;
+    let bestN = Infinity;
+    libraryBookNames.forEach(name => {
+        if (!name.startsWith(prefix)) return;
+        const tail = name.slice(prefix.length);
+        if (!/^\(\d+\)$/.test(tail)) return;
+        const n = Number(tail.slice(1, -1));
+        if (n < bestN) { bestN = n; best = name; }
+    });
+    return best;
+}
+
 function isOverwriteCandidate(fileName) {
     // 没勾保存 = 不落盘 = 谁也不会被覆盖，不必打扰
     if (!isUploadSaveWanted()) return false;
-    const stem = String(fileName || '').replace(/\.txt$/i, '');
-    return libraryBookNames.has(sanitizeBookName(stem));
+    return findOverwriteFamily(String(fileName || '').replace(/\.txt$/i, '')) !== null;
 }
 
 function openOverwriteModal(file) {
@@ -1249,13 +1288,16 @@ function openOverwriteModal(file) {
     // 弹窗不在（旧页面缓存等）就照旧直接传：宁可退化成老行为，也不能把上传整个卡死
     if (!modal) { proceedUpload(file); return; }
 
+    // 要点名的是**书架上那一本**，也就是这一存会顶掉的那一本，不是用户手里的文件名。
+    // 两者常常不同：传 White Fang.txt、要替换的是《White Fang（我的）》。
+    // 照文件名说，用户会以为要替换的是内置示例书，反而不敢点。
     pendingOverwriteFile = file;
-    const name = getBookDisplayName(String(file.name || '').replace(/\.txt$/i, ''));
+    pendingOverwriteName = findOverwriteFamily(String(file.name || '').replace(/\.txt$/i, ''));
+    const name = getBookDisplayName(pendingOverwriteName);
     const lead = document.getElementById('overwrite-modal-lead');
     if (lead) {
         lead.textContent = `书架上已经有一本《${name}》。`
-            + '这次上传的文件名和它一样，而你又勾了「存入书架」，'
-            + '所以保存时会用这次的结果整份替换掉那一本。';
+            + '保存时会用这次的分析结果整份替换掉那一本。';
     }
 
     modal.setAttribute('aria-hidden', 'false');
@@ -1292,13 +1334,18 @@ function trapOverwriteModalFocus(event) {
 
 function confirmOverwriteUpload() {
     const file = pendingOverwriteFile;
+    const target = pendingOverwriteName;
     pendingOverwriteFile = null;
+    pendingOverwriteName = null;
     closeOverwriteModal({ returnFocus: false }); // 接下来整条上传流程自己管焦点
-    if (file) proceedUpload(file);
+    // 把「顶掉哪一本」明确告诉服务端。不带的话，服务端只会照 base_name 重新算一遍，
+    // 撞内置名的那种情形又会算成《X（我的）(2)》——用户点了「替换」，书架上却多出一本。
+    if (file) proceedUpload(file, { replaceTarget: target });
 }
 
 function cancelOverwriteUpload() {
     pendingOverwriteFile = null;
+    pendingOverwriteName = null;
     closeOverwriteModal();
     // 清掉 input.value：不清的话，用户点了取消、再重新选同一个文件时不会触发 change，
     // 看上去就是「选了文件没反应」。
@@ -1664,6 +1711,21 @@ function stripBooksFromUrl() {
 // 用一个 Set 做闸门：在途时直接忽略后续点击，并把该 chip 的 ✕ 临时禁用做视觉提示。
 const _deletingBooks = new Set();
 
+// 删掉一格之后，把键盘焦点交还给书名栏（第五十一批）。顺序：原位置**下一格**的 ✕ →
+// 上一格的 ✕ → 上传入口。交给相邻的那一格而不是固定的某处，是因为删完之后用户多半还想
+// 接着删、或接着看旁边那本；跳回整栏开头或整页顶部都得重新找一遍。
+// index 是那个 ✕ 删除前在**所有 ✕ 里**的位置——删掉之后，原本的下一格正好落在同一个下标上。
+// 必须用 ✕ 的位置，不能用书在书名栏里的格号：内置示例书没有 ✕，两套编号对不上，
+// 按格号取会指到不存在的第 N 个 ✕ 上（第五十一批第一版就是这么漏的，实测每次
+// 都退到上传入口——书架上有 4 本内置书时，被删的那本格号是 4，而 ✕ 只有 2 个）。
+function restoreBookBarFocus(index) {
+    const dels = Array.from(document.querySelectorAll('.book-del')).filter(el => !el.disabled);
+    const target = dels[index] || dels[index - 1];
+    if (target) { target.focus(); return; }
+    const chip = document.getElementById('upload-chip');
+    if (chip) chip.focus();
+}
+
 // 从书架删除：确认 → DELETE 接口 → 同步内存/选择/按钮/图表
 async function deleteLibraryBook(bookName) {
     if (_deletingBooks.has(bookName)) return;
@@ -1674,6 +1736,11 @@ async function deleteLibraryBook(bookName) {
         + '删除后无法恢复，也没有回收站；要留档请先用「更多导出」导出数据表或摘要。')) return;
 
     _deletingBooks.add(bookName);
+    // 焦点回收（第五十一批）要在**禁用之前**问一次「此刻焦点在不在这格里」：
+    // setDeletingBookState 会把那个 ✕ 设成 disabled，而浏览器会让失去焦点的按钮直接
+    // blur 到 <body>——等请求回来再读 document.activeElement，答案永远是「不在」，
+    // 回收那段就成了永远走不到的死代码（实测：焦点确实还掉到 body 上了）。
+    const focusBeforeDelete = document.activeElement;
     setDeletingBookState(bookName, true);
     // 按住上传入口，但**不冒充「正在分析」**（第五十批）：见 setUploadBusy 上面的注释。
     holdUploadLock();
@@ -1694,7 +1761,22 @@ async function deleteLibraryBook(bookName) {
         forgetDeleteToken(bookName);
         // 书架名单同步删掉：删完再传同名文件就是「新增」，不该再弹覆盖确认
         libraryBookNames.delete(bookName);
-        document.querySelectorAll('.book-group').forEach(group => {
+        // 焦点回收（第五十一批）：✕ 是我们**亲手删掉**的那个节点，浏览器这时会把焦点丢回
+        // <body>，下一次按 Tab 从整页最顶上重新数起——实测落在书名栏末尾的「＋ 上传我的
+        // 文本」上，中间隔了整整一页。这一步只回答「删除前那一刻，焦点在不在此格」，
+        // 用的是函数开头存下的 focusBeforeDelete（见那里为什么不能现在读 activeElement）；
+        // 用户用鼠标从别处触发的删除不该抢他的焦点，所以这里判一下再动手。
+        const bookGroups = Array.from(document.querySelectorAll('.book-group'));
+        const removedIndex = bookGroups.findIndex(group => group.dataset.bookId === bookName);
+        const groupHadFocus = removedIndex >= 0
+            && bookGroups[removedIndex].contains(focusBeforeDelete);
+        // 交给 restoreBookBarFocus 的是 ✕ 的下标（理由见那个函数），此刻这一格还在 DOM 里，
+        // 所以要在这里、动手移除之前算出来。
+        const delIndex = removedIndex >= 0
+            ? Array.from(document.querySelectorAll('.book-del'))
+                .findIndex(el => el.closest('.book-group') === bookGroups[removedIndex])
+            : -1;
+        bookGroups.forEach(group => {
             if (group.dataset.bookId === bookName) group.remove();
         });
         // 整份名单同步删掉：只拔 DOM 里的那一格的话，搜索框一敲它又回来了
@@ -1713,6 +1795,10 @@ async function deleteLibraryBook(bookName) {
                 ensureUploadChip();
                 syncBookBarOverflow(); // 书清空了，限高和「上传芯片搬出去」两件事都得跟着撤销
             }
+            // 书架空了，没有下一格可交，但**不能就这么把焦点丢在 body 上**：这条分支的
+            // 焦点回收必须放在 ensureUploadChip() 之后——上面那句 innerHTML 会把旧的上传
+            // 芯片一起冲掉，先聚焦再重建，焦点又没了。
+            if (groupHadFocus && delIndex >= 0) restoreBookBarFocus(delIndex);
             showNoDataMessage();
             return;
         }
@@ -1722,6 +1808,8 @@ async function deleteLibraryBook(bookName) {
         } else {
             refreshAllActiveCharts();
         }
+        // 放在这两条分支**之后**：selectBook 会重绘书名栏并自己挪焦点，先交还的话会被它盖掉。
+        if (groupHadFocus && delIndex >= 0) restoreBookBarFocus(delIndex);
         // 删掉的如果是面板里正列着的那本书，那块内容必须跟着换（或换成打回态）
         renderQuickPreviewIfIdle();
     } catch (e) {
@@ -2209,9 +2297,18 @@ function describeChartForScreenReader({ kind, booksArray }) {
             ? `横轴是第 1 主成分（解释了约 ${Math.round(ratios[0] * 100)}% 的差异），`
               + `纵轴是第 2 主成分（约 ${Math.round(ratios[1] * 100)}%），原点在内置语料的平均水平；`
             : '';
+        // 「越大表示 X 越高」这半句原来写死了「高」（第五十一批）。项目自己的口径是
+        // 「风格走向**没有高这个方向**」（见 :3202 那条，详情卡上「最高点」都为此改成了
+        // 「数值最大的一处」），而这里对四个指标一视同仁地说「越高」——切到风格走向时，
+        // 读屏用户会听到一个不存在的方向。改成「数值越大」对四个指标都成立。
+        // 风格走向还要多一层：那时圆点大小用的就是横向位置那个数（PCA 第一主成分，
+        // 见 updateGalaxySizeHint），不点明会让人以为是两套独立编码。
+        const sizeText = currentMetric === 'functionWords'
+            ? `圆点越大表示这一段的「${getMetricLabel(currentMetric)}」数值越大（与横向位置同源，不是另一个说法），`
+            : `圆点越大表示这一段的「${getMetricLabel(currentMetric)}」数值越大，`;
         return `风格星系图：${booksText}的每个片段各画成一个圆点，按高频小词用法排布，`
              + axisText
-             + `圆点越大表示「${getMetricLabel(currentMetric)}」越高，`
+             + sizeText
              + `每本书的点外面还圈着一块同色的浅色区域，就是这本书大致占据的范围，`
              + `靠得近说明用词习惯接近。`
              + `按 Tab 键可逐个片段查看，回车打开该片段的详情。`;
@@ -2225,11 +2322,27 @@ function describeChartForScreenReader({ kind, booksArray }) {
             : `，各书片段数不同（${Math.min(...counts)} 到 ${Math.max(...counts)} 个片段）`;
     }
 
+    // 热力图不是「一行一本书」：每本书各自排成一块 √n 的方格（见 drawMultiHeatmap 的
+    // cols = Math.ceil(Math.sqrt(n))），四本书实测分别是 8 / 11 / 5 / 8 列。照着一行一本
+    // 去听，读屏用户会把「第 3 行第 2 格」当成另一本书的片段，位置全对不上。
     const chartText = kind === 'heatmap'
-        ? '指纹热力图：颜色越深数值越大，一行是一本书，横向按阅读顺序排开'
+        ? '指纹热力图：颜色越深数值越大，每本书自己排成一块方格，'
+          + '方格按这本书的阅读顺序从左到右、从上到下铺开'
         : '折线趋势图：每本书一条曲线，横向是按阅读顺序排开的片段';
 
-    return `${chartText}，${booksText}的${getMetricLabel(currentMetric)}${blockText}。`
+    // 只切出一个片段的书在折线图上是退化的（见 drawMultiLineChart）：它那条线画不出来，
+    // 只有一个常亮的点。名字点出来，读屏用户才知道图上少了谁的走向。
+    const soloText = kind === 'line'
+        ? booksArray
+            .filter(b => getBookBlockCount(b) === 1)
+            .map(b => `《${getBookDisplayName(b)}》`)
+            .join('、')
+        : '';
+    const soloSentence = soloText
+        ? `${soloText}只切出 1 个片段，一条线至少要两个点才画得出走势，图上只能在它的位置看到一个点。`
+        : '';
+
+    return `${chartText}，${booksText}的${getMetricLabel(currentMetric)}${blockText}。${soloSentence}`
          + `按 Tab 键可逐个片段查看，回车打开该片段的详情。`;
 }
 
@@ -2266,12 +2379,31 @@ function initChart() {
 }
 
 function drawMultiLineChart(svg, booksArray) {
+    renderLineSoloNote([]); // 先收掉上一张图留下的那句，下面真需要时再挂
     const chartData = booksArray.map(bookId => ({
         book: bookId,
         values: getMetricValues(bookId, currentMetric)
     })).filter(d => d.values.length > 0);
 
     if (chartData.length === 0) { showNoDataMessage(); return; }
+
+    // 只切得出一个片段的书（约 1 万词出头，见 api_server 的 BLOCK_SIZE / OVERLAP）：
+    // d3.line() 在单个点上画出的是长度 ~0 的退化路径，画面上等于没有；而数据点平时
+    // 又是全透明的（悬停才现出来），于是这本书在折线图上彻底消失——用户会以为
+    // 上传失败了，而它其实算得好好的。
+    // 出路：让它那一个点常亮（比别处稍大），并在图下点一句名（syncLineSoloNote）。
+    const soloBookIds = new Set(
+        chartData.filter(d => d.values.length === 1).map(d => getBookSafeId(d.book))
+    );
+    const SOLO_RADIUS = 5;
+    // 把数据点收回「平时」的样子。只有单片段书是常亮的，其余保持透明。
+    // 原来这几处写的是 attr("r",3).style("opacity",0)，会把单片段书一起藏回去。
+    const restAllDataPoints = () => {
+        d3.selectAll(".data-point").each(function () {
+            const solo = this.getAttribute("data-solo") === "1";
+            d3.select(this).attr("r", solo ? SOLO_RADIUS : 3).style("opacity", solo ? 1 : 0);
+        });
+    };
 
     const containerWidth = svg.node().parentNode.getBoundingClientRect().width;
     const margin = { top: 40, right: 120, bottom: 50, left: 60 };
@@ -2370,22 +2502,24 @@ function drawMultiLineChart(svg, booksArray) {
             .on("mouseout", function() { d3.select(this).attr("stroke-width", 2.5); });
             
         const safeBookID = getBookSafeId(bookData.book);
+        const solo = soloBookIds.has(safeBookID);
 
         g.selectAll(`.point-${safeBookID}`)
-            .data(bookData.values) 
+            .data(bookData.values)
             .enter()
             .append("circle")
             .attr("class", `data-point point-${safeBookID}`)
+            .attr("data-solo", solo ? "1" : null)
             .attr("cx", (d, i) => xScale(i))
             .attr("cy", d => yScale(d.value))
-            .attr("r", 3) 
+            .attr("r", solo ? SOLO_RADIUS : 3)
             .attr("fill", colorForBook(bookData.book))
             .attr("stroke", "#fdfaf3")
             .attr("stroke-width", 1.5)
             .attr("role", "button")
             .attr("aria-label", d => `${getBookDisplayName(bookData.book)} 第 ${d.block + 1} 个片段，${getMetricLabel(currentMetric)} ${formatMetric(d.value)}`)
             .style("cursor", "pointer")
-            .style("opacity", 0) 
+            .style("opacity", solo ? 1 : 0)
             .on("mouseover", function(event, d) {
                 d3.select(this)
                     .style("opacity", 1)
@@ -2393,22 +2527,23 @@ function drawMultiLineChart(svg, booksArray) {
                     .attr("r", 6)
                     .attr("stroke", "#b5472f")
                     .attr("stroke-width", 2);
-                
+
                 showTooltip(event, d, bookData.book);
             })
             .on("mouseout", function(event, d) {
                 d3.select(this)
                     .transition().duration(motionDuration(200))
-                    .attr("r", 3)
+                    .attr("r", solo ? SOLO_RADIUS : 3)
                     .attr("stroke", "#fdfaf3")
                     .attr("stroke-width", 1.5)
-                    .style("opacity", 0); 
-                
+                    // 单片段书收起后也要看得见，否则悬停一下它就永远消失了
+                    .style("opacity", solo ? 1 : 0);
+
                 hideTooltip();
             })
             .on("click", function(event, d) {
                 event.stopPropagation();
-                d3.selectAll(".data-point").attr("r", 3).style("opacity", 0);
+                restAllDataPoints();
                 d3.select(this).style("opacity", 1).attr("r", 8).attr("stroke", "#b5472f");
                 // 同热力图：触屏点一下会留下一个没有 mouseout 的提示框，点开详情时收掉
                 hideTooltip();
@@ -2448,7 +2583,7 @@ function drawMultiLineChart(svg, booksArray) {
     // 透明接收层，按下去取离手指最近的那个点。只在触屏（pointer: coarse）下挂，
     // 桌面沿用原来的悬停 + 点击，行为一点不变。
     if (usesCoarsePointer()) {
-        attachTouchPointPicker(g, chartData, xScale, yScale, width, plotHeight);
+        attachTouchPointPicker(g, chartData, xScale, yScale, width, plotHeight, restAllDataPoints);
     }
 
     const legend = svg.append("g").attr("transform", `translate(${width + 20}, ${margin.top})`);
@@ -2474,12 +2609,34 @@ function drawMultiLineChart(svg, booksArray) {
         .style("font-weight", "bold")
         .style("fill", "#2f2a23")
         .text(`${getMetricLabel(currentMetric)} - 对比分析`);
+
+    // 图例画完了再挂这句：它点名的就是图上那几本书，先后反了会让读者拿这句话
+    // 去图例里找一本还没画出来的书。
+    renderLineSoloNote(chartData.filter(d => d.values.length === 1).map(d => d.book));
+}
+
+// 「这本书只切出一个片段」那句说明（第五十一批）。只在折线图下、且真有这种书时才出现。
+// 用 DOM 而不是 svg <text>：这句话要带书名、长度不可控，写进 viewBox 里窄屏一定被裁。
+function renderLineSoloNote(soloNames) {
+    const note = document.getElementById('line-solo-note');
+    if (!note) return;
+    if (!soloNames || soloNames.length === 0) {
+        note.hidden = true;
+        note.textContent = '';
+        return;
+    }
+    const list = soloNames.map(n => `《${getBookDisplayName(n)}》`).join('、');
+    // 不写「请上传更长的文本」：这不是用户的错，也不是他一定要改的事——
+    // 一本书只切出一段，是份量问题，不是操作问题。
+    note.textContent = `${list}只切出 1 个片段（约 1 万词出头），`
+        + '而一条线至少要两个点才画得出走势，所以图上用一个点标出了它在这一页的位置，看不出走向。';
+    note.hidden = false;
 }
 
 // 触屏专用：按一下 = 取离手指最近的那个数据点，容错半径按手指的接触面给
 // （约 9mm ≈ 34px）。桌面不挂这一层——鼠标本来就能精确悬停，多盖一层反而会把
 // 原来的悬停提示挡掉。
-function attachTouchPointPicker(g, chartData, xScale, yScale, width, plotHeight) {
+function attachTouchPointPicker(g, chartData, xScale, yScale, width, plotHeight, restAllDataPoints) {
     const TOLERANCE = 34;
     g.append("rect")
         .attr("class", "touch-picker")
@@ -2504,7 +2661,8 @@ function attachTouchPointPicker(g, chartData, xScale, yScale, width, plotHeight)
             });
             if (!best || bestD > TOLERANCE * TOLERANCE) return;
             // 和点本身的点击走同一套动作：其余点复位，点亮这一个，再打开它的详情
-            d3.selectAll(".data-point").attr("r", 3).style("opacity", 0);
+            // （复位交给调用方那份，它会照顾到单片段书的点该常亮）
+            restAllDataPoints();
             g.selectAll(`.point-${getBookSafeId(best.book)}`)
                 .filter(dd => dd === best.point)
                 .style("opacity", 1)
@@ -4104,7 +4262,15 @@ function collectExportAxisNote() {
     // 与上面 adv-mean-scope、下面 galaxy-guide-size 同一条规矩：屏幕上说了的话，
     // 跟着图走。折线图不需要这句（它纵轴自带数字），所以只在热力图下加。
     if (currentTab === 'view-main') {
-        if (chartType !== 'heatmap') return '';
+        // 折线图那张「只切出一个片段」的说明（第五十一批）同样长在 SVG 外面
+        // （#line-solo-note）：导出只序列化 SVG，导出的走势图上就会出现一个孤零零的点、
+        // 却没有任何解释——而那句话回答的正是这个疑问，且导出的图才是要贴进论文的那份。
+        // 与热力图那条同一条规矩：屏幕上说了的话，跟着图走。
+        if (chartType !== 'heatmap') {
+            const soloNote = document.getElementById('line-solo-note');
+            if (!soloNote || soloNote.hidden) return '';
+            return (soloNote.textContent || '').trim().replace(/\s+/g, ' ');
+        }
         const scaleNote = document.getElementById('heatmap-scale-note');
         if (!scaleNote || scaleNote.hidden) return '';
         return (scaleNote.textContent || '').trim().replace(/\s+/g, ' ');
@@ -6016,6 +6182,24 @@ function initStyleGalaxy() {
 
         hideTooltip();
     })
+    // 键盘走到这一格（第五十一批）：Tab 进来、方向键逐格挪，都做和悬停**同一件事**
+    // ——点亮这一片、把右上角面板填上。原来只有鼠标 / 触屏 / 点按层三条路调
+    // focusGalaxyNode，键盘这条路只搬 tabindex，于是键盘用户 Tab 进星系时圆点没有
+    // 任何变化、面板还停在「将鼠标移到任意圆点上」那句做不到的话上。
+    // 噪音比看着小：整片星系只有一个 Tab 停靠点（见下面 tabindex 那行），Tab 进来只触发
+    // 一次；方向键本来就是用户一格一格主动看的。这一格**不需要**在 keydown 里再写一次
+    // focusGalaxyNode——all[next].focus() 自己会先 blur 旧格、再 focus 新格，顺序天然正确，
+    // 手写一遍等于同一个点上挂两条同名过渡（d3 会冻住前一条，见 focusGalaxyNode 的注记）。
+    .on("focus", (event, d) => {
+        focusGalaxyNode(d);
+    })
+    // 离开这一格就撤回空闲态，与 mouseout 完全一致。它同样兜住了「方向键挪走」和
+    // 「Tab 离开星系」两条路——前者会先 blur 再 focus，下一格的 focusGalaxyNode 马上
+    // 把面板填回去，中间那一瞬的空闲文案来不及被听见。
+    .on("blur", () => {
+        resetGalaxyFocus();
+        setGalaxyIdleHint();
+    })
     .on("click", (event, d) => {
         event.stopPropagation();
         lastGalaxyTrigger = event.currentTarget;
@@ -6581,7 +6765,10 @@ function setGalaxyIdleHint() {
         content.innerHTML = '<p style="color:#6b6254; font-size:12px;">点按任意圆点，查看附近各点的共同特征。</p>';
     } else {
         title.innerText = "◎ 悬停查看附近点";
-        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看附近各点的共同特征。</p>';
+        // 第五十一批起键盘也能展开这块面板（圆点挂了 focus/blur），所以这句要把 Tab 这条
+        // 路也说出来。只提鼠标的话，键盘用户读到「悬停」只会以为自己用不了这个面板，
+        // 而那正是这一批要修掉的东西。触屏那份文案（点按）本来就不含鼠标，不受影响。
+        content.innerHTML = '<p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，或按 Tab 键选中一个点，查看附近各点的共同特征。</p>';
     }
 }
 

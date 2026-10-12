@@ -290,6 +290,13 @@
                          「一格（一个点）约对应 1 万词」就在同一屏的正上方，两个数字挨着印两遍。
                          前面「错开 1 千词、重叠 9 千词」已经把一格多长交代完了。 -->
                     <p id="heatmap-scale-note" class="chart-scale-note" hidden>色标范围由当前选中的这几本书决定（图上「统一色标」那一行就是它）：换一批书，同一个数值的颜色会跟着变。所以不同次选择下截的图，颜色不能直接对比。另有两点需要说明：相邻两格是错开约 1 千词、重叠约 9 千词的滑动窗口，同一段原文会在好几格里重复出现，所以连续一片偏高的格子说的是「这一段整体偏高」，不等于这里有十几个各自独立的高值；每本书的格子大小不一样（格子多的那本书格子小），两本书横向对齐看同一行没有意义，可以横向比较的只有颜色。</p>
+                    <!-- 「这本书只切出一个片段」（第五十一批）。只有折线图需要它：一条线至少要
+                         两个点才画得出来，1 个片段的书在图上是退化的、近乎看不见，而数据点平时
+                         又全透明（悬停才现出来），于是这本书彻底消失，用户会以为上传失败了。
+                         内容由 renderLineSoloNote() 按当前选中的书拼（切图型时由 updateChartTypeUI
+                         收放，导出走 collectExportAxisNote）；没有这种书时保持 hidden，不能无差别
+                         挂上——那句话点名了书名，挂错就是假话。 -->
+                    <p id="line-solo-note" class="chart-scale-note" hidden></p>
                 </div>
                 <div class="detail-panel" id="detailPanel" role="status" aria-live="polite">
                     <h3>▤ 数据详情</h3>
@@ -342,11 +349,17 @@
                     <!-- HUD 附近点分析面板。这段空闲态文案是给读屏和首屏兜底用的，
                          真正的文案由 setGalaxyIdleHint() 按输入方式重设（触屏上「悬停」
                          是个做不到的动作）。措辞说「附近的点」不说「区域」：那几十个点是
-                         按屏幕距离挑的，放大缩小会变（第三十六批）。 -->
-                    <div id="galaxy-hud" class="galaxy-hud">
+                         按屏幕距离挑的，放大缩小会变（第三十六批）。
+                         role="status" + aria-live="polite"（第五十一批）：这块面板是**纯视觉**
+                         的，键盘 Tab 到某个圆点会把内容从空闲态换成「附近的 N 个点」，
+                         不挂 live region 的话聚焦了也听不到面板变了（圆点自己那个
+                         aria-label 只报得出「第几段 · 哪本书 · 数值多少」）。role="status"
+                         隐含 aria-atomic=true，所以是一整块念完——面板不长，念比不念强。
+                         这是一处取舍：若日后面板内容变长，改成只念标题那一行。 -->
+                    <div id="galaxy-hud" class="galaxy-hud" role="status" aria-live="polite">
                         <div class="hud-title">◎ 悬停查看附近点</div>
                         <div class="hud-content">
-                            <p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，查看附近各点的共同特征。</p>
+                            <p style="color:#6b6254; font-size:12px;">将鼠标移到任意圆点上，或按 Tab 键选中一个点，查看附近各点的共同特征。</p>
                         </div>
                     </div>
                     <div id="galaxy-loading" style="color:#2f2a23; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">正在加载…</div>
@@ -374,7 +387,11 @@
                              （renderFilters 的注释里自己写着「和顶部的书名按钮是同一个动作」）。
                              两排相隔不到一屏，删掉本页这排、只留页顶那条（第四十三批，用户拍板）。
                              本页标题行因此只剩「重置视图」这一个本页独有的动作。 -->
-                        <button type="button" id="advResetBtn" class="adv-reset" onclick="advReset()" title="清空走势图上的框选，并让所有已加载的书都参与对比（刚打开时默认只选差异最大的一对，所以点击后书会变多，并非回到初始状态）">重置视图</button>
+                        <!-- 可见文字是「重置视图」，读屏念到这儿同样听不出重置的是什么（第五十一批）。
+                             aria-label 以可见文字开头（可访问名字必须包含可见文字），后面接这页
+                             **真正**会发生的事；不照抄 title——title 后半段「点击后书会变多，并非
+                             回到初始状态」是给眼睛看的人解围的括注，读屏里念一遍只会更难懂。 -->
+                        <button type="button" id="advResetBtn" class="adv-reset" onclick="advReset()" aria-label="重置视图：清空走势图上的框选，并让所有已加载的书都参与对比" title="清空走势图上的框选，并让所有已加载的书都参与对比（刚打开时默认只选差异最大的一对，所以点击后书会变多，并非回到初始状态）">重置视图</button>
                     </div>
                 </div>
 
@@ -391,8 +408,15 @@
                         <div class="dash-card">
                             <h4>
                                 ▤ 整体水平对比<span id="adv-mean-scope" class="adv-scope"></span>
+                                <!-- 可见文字只有「数值」两个字 + 一个箭头图标，读屏念出来就是
+                                     「数值，按钮」——不知道点了会发生什么（第五十一批）。说明写进
+                                     **按钮内容里**的 .visually-hidden span，不写成 aria-label：可访问
+                                     名字要包含可见文字，挂在内容里天然满足，而且 visible 的「数值」
+                                     仍跟着状态变。这段文字由 updateSortUI() 按当前排序状态重写，
+                                     说的不只是「现在是什么」，还有「再点一下会变成什么」。 -->
                                 <button type="button" class="sort-control" onclick="advCycleSort('mean')" title="点击切换：数值大小 / 书名首字母">
                                     <span id="sort-text-mean">数值</span>
+                                    <span class="visually-hidden" id="sort-hint-mean">切换排序方式：当前按数值从大到小排，点一下改成从小到大</span>
                                     <svg id="sort-icon-mean" class="icon" aria-hidden="true" focusable="false"><use href="#i-sort-amount-down"/></svg>
                                 </button>
                             </h4>
@@ -891,6 +915,23 @@
             const reports = books.map(() => null);
             lastAnomalyBooks = books;
             lastAnomalyReports = reports;
+            // 这一段从头到尾会写 #anomaly-content 三次以上：这里清一次，每本书的响应回来
+            // 各一次（成功和失败都写）。而那块是 aria-live="polite" 的，读屏会照着播三遍
+            // 半成品——第一遍还是「正在找…」，听的人以为只有一本书在算。视觉上「先回来的
+            // 先显示」是要留的，所以只把**播报**压成一次（第五十一批）：全程关掉直播状态，
+            // 等所有响应落定再开回来，并重绘一次让它播报最终那一版。
+            // 放在去重键早退之后：那个分支根本不发请求，在那里静音会把面板永久哑掉。
+            let remaining = books.length;
+            const oneAnomalySettled = () => {
+                if (requestId !== anomalyRequestId) return; // 这一代作废了，由新一代收尾
+                remaining -= 1;
+                if (remaining > 0) return;
+                unmuteAnomalyLive();
+                // 静音期间写进去的内容读屏不会播报（live region 只播「变化」），所以开回来
+                // 之后必须再碰一次 DOM：整体重绘一遍，播的就是最终那一版。
+                renderAnomalyPanel();
+            };
+            muteAnomalyLive();
             renderAnomalyPanel();
 
             books.forEach((entry, index) => {
@@ -930,7 +971,11 @@
                         // 导出的摘要里整段【值得一看的片段】被无声略过。现在两边都明说。
                         showAnomalyFailure(index, book, displayName, mLabel,
                             '没能连上分析服务，暂时取不到这本书的偏离片段。');
-                    });
+                    })
+                    // 挂在这一条链的**末尾**（而不是上面每个 return 前各写一次）：成功、失败、
+                    // 以及「这一代已作废」三条路都要走到这里，漏掉任何一条都会让 remaining
+                    // 永远到不了 0，那块 live region 就永久哑在 off 上。
+                    .then(oneAnomalySettled);
             });
         }
 
@@ -1624,6 +1669,30 @@
                 : '已清空框选，结论恢复为全书口径。');
         }
 
+        // 另一处同类静音（第五十一批）：一次「全书对比」要问服务端好几本书，每回来一本
+        // 就把 #anomaly-content 重写一遍（先「正在找…」、再逐本填）。两本书 = 写三次，
+        // 读屏连播三次。做法与上面键盘框选那套同源，但收尾方式不同：这边**不知道**什么时候
+        // 才算完（请求数不定），所以由 renderAnomalies 数着响应数，全部落定再开回来。
+        let anomalyLiveMuted = false;
+
+        function muteAnomalyLive() {
+            const el = document.getElementById('anomaly-content');
+            if (!el || anomalyLiveMuted) return;
+            anomalyLiveMuted = true;
+            el.setAttribute('aria-live', 'off');
+        }
+
+        function unmuteAnomalyLive() {
+            if (!anomalyLiveMuted) return;
+            anomalyLiveMuted = false;
+            // 键盘框选那条路会把这块一起开回来（endQuietConclusions 开的是两块）。
+            // 这里若抢先设回 polite，按住方向键时刚到的那批响应又会一条条念出来，
+            // 正是要修的毛病；交给它收尾即可。标志位照旧清掉，两边不会互相卡住。
+            if (conclusionsQuiet) return;
+            const el = document.getElementById('anomaly-content');
+            if (el) el.setAttribute('aria-live', 'polite');
+        }
+
         // options.announce === false：这一次重绘不要往 live region 里播报。
         // 悬停预览会走这条路——鼠标划过每一根柱子都播报一遍，读屏用户听到的是一串重复噪音。
         // 第一个参数是**可选**的已算好的数据（见 updateAdvCharts 的说明）。不传就自己算一份，
@@ -1780,11 +1849,27 @@
             if (typeof syncUrlState === 'function') syncUrlState();
         }
 
+        // 排序按钮读屏用的那句话（第五十一批）。四种状态与 advCycleSort 的循环、
+        // 下面那套图标一一对应：**改循环顺序时这三处要一起改**。措辞说「再点一下会
+        // 变成什么」而不只是「现在是什么」——按钮的用处是点它，读屏用户听完得知道
+        // 下一步会发生什么（与界面文案那套判据一致）。
+        const SORT_HINTS = {
+            'value:desc': '切换排序方式：当前按数值从大到小排，点一下改成从小到大',
+            'value:asc': '切换排序方式：当前按数值从小到大排，点一下改成按书名首字母',
+            'name:asc': '切换排序方式：当前按书名首字母从 A 到 Z 排，点一下改成从 Z 到 A',
+            'name:desc': '切换排序方式：当前按书名首字母从 Z 到 A 排，点一下改回按数值从大到小',
+        };
+
         function updateSortUI() {
             const config = advState.sortConfig.mean;
             const textEl = document.getElementById('sort-text-mean');
             const iconEl = document.getElementById('sort-icon-mean');
             if (textEl) textEl.innerText = config.mode === 'value' ? "数值" : "书名";
+            const hintEl = document.getElementById('sort-hint-mean');
+            if (hintEl) {
+                hintEl.innerText = SORT_HINTS[`${config.mode}:${config.order}`]
+                    || SORT_HINTS['value:desc'];
+            }
             // 图标是内联 sprite（<use>），切换的是引用的 symbol，不再是字体 class。
             // 四态与原来一一对应：数值+降序/升序、书名+升序/降序。
             if (iconEl) {
