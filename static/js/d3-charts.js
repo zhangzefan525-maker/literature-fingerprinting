@@ -377,16 +377,47 @@ function setUploadStatus(message, state = '') {
     statusEl.className = `upload-status${state ? ` ${state}` : ''}`;
 }
 
+// 「上传入口被按住」有两个来源，但**只有一个是「正在分析」**（第五十批审查发现）：
+//   1) 真的有一次分析在跑（proceedUpload）；
+//   2) 别的流程临时也要求把入口按住（删书——删的当下不希望有人再塞一个文件进来）。
+// 原来两者共用同一个布尔量，而删书结束时无条件把它关掉：上传还在跑，锁已经被放开了。
+// 后果是能同时发起第二次分析（秒表被后一个停掉、前一个跑完又写一句「分析完成」，
+// 文案张冠李戴），而且书名栏那一格会在删书期间谎报「正在分析上一份文本」。
+// 所以拆成两件事：
+//   uploadAnalyzing   —— 芯片文案与「忙」的判据（isUploadBusy 读的就是它）
+//   uploadLockHolders —— 只决定输入框能不能点，不决定说什么
+let uploadAnalyzing = false;
+let uploadLockHolders = 0;
+
 function setUploadBusy(isBusy) {
+    uploadAnalyzing = !!isBusy;
+    syncUploadLock();
+}
+
+// 其它流程（目前只有删书）临时按住上传入口。必须与 releaseUploadLock 配平，
+// 放在 try/finally 的 finally 里，否则一次异常就会把入口永久按死。
+function holdUploadLock() {
+    uploadLockHolders += 1;
+    syncUploadLock();
+}
+
+function releaseUploadLock() {
+    uploadLockHolders = Math.max(0, uploadLockHolders - 1);
+    syncUploadLock();
+}
+
+function syncUploadLock() {
     const bar = document.getElementById('upload-bar');
     const fileInput = document.getElementById('file-upload');
     const uploadBtn = document.getElementById('upload-btn');
-    if (bar) bar.setAttribute('aria-busy', String(isBusy));
+    if (bar) bar.setAttribute('aria-busy', String(uploadAnalyzing));
     // 忙时禁用 input 本身就够了：它既不可点也不在 Tab 序列里，
     // 屏幕阅读器读到的也是「不可用」。原来那句 aria-disabled 挂在 label 上，
     // 而 label 没有能承载它的角色，等于没用。
-    if (fileInput) fileInput.disabled = isBusy;
-    if (uploadBtn) uploadBtn.classList.toggle('is-busy', isBusy);
+    // 两种来源都按住输入框：删书在途时也不该再发起一次上传。
+    if (fileInput) fileInput.disabled = uploadAnalyzing || uploadLockHolders > 0;
+    // 这一条只跟「真的在分析」走：删书期间上传按钮不该显示成忙。
+    if (uploadBtn) uploadBtn.classList.toggle('is-busy', uploadAnalyzing);
     // 书名栏末尾那一格也在这条链上（第四十九批）：它原来是「input 被禁用就静默返回」，
     // 忙时点了没反应、外观也不变，看着像坏了。判据放在下面 syncUploadChipBusy 里，
     // 读的是 #upload-bar 上的 aria-busy——那是这件事唯一的事实来源，重建芯片也不会丢。
@@ -1644,7 +1675,8 @@ async function deleteLibraryBook(bookName) {
 
     _deletingBooks.add(bookName);
     setDeletingBookState(bookName, true);
-    setUploadBusy(true);
+    // 按住上传入口，但**不冒充「正在分析」**（第五十批）：见 setUploadBusy 上面的注释。
+    holdUploadLock();
     try {
         const headers = {};
         const token = getDeleteToken(bookName);
@@ -1698,7 +1730,7 @@ async function deleteLibraryBook(bookName) {
     } finally {
         _deletingBooks.delete(bookName);
         setDeletingBookState(bookName, false);
-        setUploadBusy(false);
+        releaseUploadLock();
     }
 }
 
@@ -2125,6 +2157,11 @@ async function loadRealData() {
             }
         } else {
             syncBookButtonStates(); // 链接还原 / 书籍变动后，把选中态落到按钮上
+            // 上面剔掉了服务器上没有的书，地址栏和本机记忆里那份却还带着它（第五十批审查）：
+            // 不清理的话，按一次刷新这句提示再来一次；从地址栏复制出去的链接也仍然带着
+            // 那本不存在的书，发给别人又是一遍同样的提示。全丢光那一支（自动挑书）本来
+            // 就调了 syncUrlState，只有「丢了一部分」这一支漏了。
+            syncUrlState();
             refreshAllActiveCharts();
         }
         // 右侧面板不再只剩一句「成功加载 N 本书籍的数据」——首屏就给出能点进去看的内容
@@ -3034,6 +3071,18 @@ function getMetricLabel(metric) {
     return labels[metric] || metric;
 }
 
+// 「最高点」这句对「风格走向」是错的（第五十批复现：详情卡上那一行是
+// 「#1 最高点: -0.014」——一个负数被标成了最高点）。风格走向是有符号的二维
+// 坐标，只有数值大小、没有「高」这个方向；另外三个指标越大确实越高，说法不变。
+// 两个函数对应两个语法位置：一个指「那一处」（卡片、悬停提示、读屏），
+// 一个指「那一个片段」（可复制的那份结论）。
+function peakPointLabel(metric) {
+    return (metric || currentMetric) === 'functionWords' ? '数值最大的一处' : '最高点';
+}
+function peakBlockLabel(metric) {
+    return (metric || currentMetric) === 'functionWords' ? '数值最大的片段' : '最高片段';
+}
+
 // 当前指标的大白话说明（面向非技术用户）
 function updateMetricHint() {
     const el = document.getElementById('metric-hint');
@@ -3557,7 +3606,7 @@ function getMetricContextLine(metric) {
             // 这句话会跟着「导出摘要 / 复制结论」离开屏幕（第四十二批），所以不能再用
             // 「上面的数字」「参照区间」这类指代——文件里没有「上面」，也没有那块界面。
             // 把因果说全：为什么两段范围一模一样，以及这不是数据出问题。
-            parts.push('所选这几本，正好是这批书里该指标最高和最低的那几本；所以它们自己的范围，和作为参照的那几本的范围是同一个——这是选书的必然结果，不是数据有问题。');
+            parts.push('所选这几本，正好是这批书里该指标数值最大和最小的那几本；所以它们自己的范围，和作为参照的那几本的范围是同一个——这是选书的必然结果，不是数据有问题。');
         } else {
             parts.push(`所选 ${selected.count} 本在 ${formatMetric(selected.min)} – ${formatMetric(selected.max)} 之间。`);
         }
@@ -3896,12 +3945,27 @@ function getExportTarget() {
     };
 }
 
+// 文件名里那一段书名。清掉文件系统不接受的字符：上传的书用的是用户自己的
+// 文件名，Windows 上 \ / : * ? " < > | 这八个字符会让下载直接失败（或者存成一个
+// 错名字），控制字符同理。首尾的点与下划线也去掉——Windows 会静默删掉结尾的点。
+function sanitizeFileLabel(name) {
+    return String(name)
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '')
+        .replace(/\s+/g, '_')
+        .replace(/^[._]+|[._]+$/g, '')
+        .slice(0, 48);
+}
+
 // 文件名里的书：多本时不再只写第一本的名字（导出的是对比图，不是单书图）
 function exportFileLabel() {
     const books = Array.from(getActiveBookSet());
     if (books.length === 0) return 'Comparison';
     if (books.length > 1) return '多书对比';
-    return books[0].replace(/\s+/g, '_');
+    // 用中文书名，不用内部英文 id（第五十批复现）：导出的 PNG/SVG 里图例、标题、
+    // 结论写的都是「哈克贝利·费恩历险记」，唯独文件名写成
+    // 「文印_The_Adventures_of_Huckleberry_Finn_…」——同一份文件里两套名字。
+    const label = sanitizeFileLabel(getBookDisplayName(books[0]));
+    return label || 'Book';
 }
 
 // 导出的按钮在三个页签下都看得到，但目标 svg 是各视图渲染时才建的。
@@ -4161,7 +4225,11 @@ function wrapAxisNote(axisNote, maxChars) {
     // 12 是「10 行 + 两行余量」。余量的意思不是可以随便加，而是：下一次再加内容时，
     // 会先在 12 行处出现「…」——那是个看得见的信号，比静默少印三句好得多。
     // 高度和画字都走这个函数，改了不会失配（exportLegendBandHeight 也是调它算的）。
-    const MAX_LINES = 12;
+    // 行数上限按字数预算缩放（第五十批）：12 这个数是给 46 字一行的桌面画布定的，
+    // 它管的是「图例带别无限长」，**不是**「窄画布可以少印几句」。预算一收小、
+    // 行数自然变多，上限若不跟着放大，手机上导出的那张图上说明又会被截断——
+    // 正是第三十八批把 7 提到 12 时修掉的那个毛病（屏幕上看得见、导出的图上没有）。
+    const MAX_LINES = Math.max(12, Math.ceil(12 * 46 / MAX));
     const lines = [];
     String(axisNote).split('；').forEach((seg, idx) => {
         // 分号被 split 吃掉了，除第一段外都要补回来
@@ -4186,13 +4254,20 @@ function wrapAxisNote(axisNote, maxChars) {
     return lines;
 }
 
+// 轴说明每行最多几个字。轴说明是 11px 的字（见 attachExportLegend 里的 addText），
+// 按画布实际宽度算，左右各留 24px 边距；下限 24 字——画布再窄也别折成一堆碎片。
+// 与署名那条 budget（10px 字）同一套算法，只是字号不同。
+function axisNoteBudget(maxWidth) {
+    return Math.max(24, Math.floor(((maxWidth || 800) - 48) / 11));
+}
+
 // 图例带的高度：每条图例一行，轴说明按 wrapAxisNote 的实际行数，署名行另算
-function exportLegendBandHeight(items, axisNote, provenanceLines) {
+function exportLegendBandHeight(items, axisNote, provenanceLines, maxWidth) {
     const sign = (provenanceLines || []).length;
     if (!items.length && !axisNote && !sign) return 0;
     const lineH = exportLegendLineHeight();
     let lines = items.length;
-    if (axisNote) lines += wrapAxisNote(axisNote).length;
+    if (axisNote) lines += wrapAxisNote(axisNote, axisNoteBudget(maxWidth)).length;
     if (sign) lines += sign;
     // 署名与上面那段之间空一行：一行 18px 的间距太大，取半个行高，够分开就行
     return lines * lineH + 16 + (sign ? lineH / 2 : 0);
@@ -4220,7 +4295,7 @@ function prepareExportSvg(svg, extraHeight) {
     return { clone, vbX, vbY, vbW, vbH, totalH };
 }
 
-function attachExportLegend(prep, items, axisNote, shape, provenanceLines) {
+function attachExportLegend(prep, items, axisNote, shape, provenanceLines, maxWidth) {
     if (!items.length && !axisNote && !(provenanceLines || []).length) return;
     const NS = 'http://www.w3.org/2000/svg';
     const g = document.createElementNS(NS, 'g');
@@ -4265,8 +4340,9 @@ function attachExportLegend(prep, items, axisNote, shape, provenanceLines) {
 
     if (axisNote) {
         // 轴说明是整句，折行免得一行横穿整张图；行数由 wrapAxisNote 决定，
-        // 与上面 exportLegendBandHeight 用的是同一个函数，不会对不上
-        wrapAxisNote(axisNote).forEach(line => {
+        // 与上面 exportLegendBandHeight 用的是同一个函数、同一个字数预算，
+        // 不会对不上（预算按画布宽度算，见 axisNoteBudget）。
+        wrapAxisNote(axisNote, axisNoteBudget(maxWidth)).forEach(line => {
             addText(x0, y, 11, '#5c5346', line);
             y += lineH;
         });
@@ -4298,9 +4374,12 @@ function buildExportSvg(svg) {
     // 署名行只算一次，算高和画字用同一份：分头各折一次行，一旦折出来的行数不同，
     // 图例带就会少一截或多一截（这条教训轴说明那里已经吃过一次）。
     const provenanceLines = exportProvenanceLines(probe.vbW);
-    const extra = exportLegendBandHeight(legend.items, axisNote, provenanceLines);
+    // 轴说明同理，而且它比署名更早出问题（第五十批）：原来折行写死 46 字，
+    // 画布窄到 340 时一行 46 字 ≈ 506px，右边大半截被 svg 的边界切掉。
+    // 宽度也传同一份 probe.vbW，算高与画字才会折出同样的行数。
+    const extra = exportLegendBandHeight(legend.items, axisNote, provenanceLines, probe.vbW);
     const prep = prepareExportSvg(svg, extra);
-    attachExportLegend(prep, legend.items, axisNote, legend.shape, provenanceLines);
+    attachExportLegend(prep, legend.items, axisNote, legend.shape, provenanceLines, probe.vbW);
     return prep;
 }
 
@@ -4477,17 +4556,17 @@ function exportSummary() {
         }
         if (values.length === 0) {
             // 这本书比框选的区段还短，一个片段都没落进来。不能继续往下算均值。
-            lines.push('- 框选范围内没有这本书的片段，本节的均值、最高片段均无法给出。');
+            lines.push(`- 框选范围内没有这本书的片段，本节的均值、${peakBlockLabel()}均无法给出。`);
             lines.push('');
             return;
         }
         const mean = d3.mean(values, d => d.value);
         const peak = values.reduce((best, current) => current.value > best.value ? current : best, values[0]);
         lines.push(`- 平均水平：${formatMetric(mean)}`);
-        lines.push(`- 最高片段：第 ${Number(peak.block) + 1} 个片段，数值 ${formatMetric(peak.value)}`);
+        lines.push(`- ${peakBlockLabel()}：第 ${Number(peak.block) + 1} 个片段，数值 ${formatMetric(peak.value)}`);
         lines.push(`- 片段位置：${formatBlockLocation(book, peak.block)}${formatWordCount(peak.wordCount)}`);
         if (Array.isArray(peak.keywords) && peak.keywords.length > 0) {
-            lines.push(`- 最高片段关键词：${peak.keywords.join('、')}`);
+            lines.push(`- ${peakBlockLabel()}关键词：${peak.keywords.join('、')}`);
         }
         if (peak.preview) {
             lines.push(`- 原文片段：${String(peak.preview).replace(/\r?\n/g, ' ').trim().substring(0, 240)}`);
@@ -5760,11 +5839,22 @@ function initStyleGalaxy() {
         // 负值等于把轴题钉进裁剪区：照抄过来实测包围盒落在 x=-29（容器左界之外），
         // 屏幕上一个字都看不到，而且不会报错。所以放在左留白的中间（0–margin.left）。
         // 这条也是本批的一个教训：**相邻图表里长得一样的写法，坐标系未必一样。**
+        // 纵轴轴题会被圆点压住（第五十批复现：390 宽下实测有 3 个圆点压在这行字上）。
+        // 原因是圆点**没有被裁**到绘图区里——力导向布局只把点往目标位置拉（strength 0.8），
+        // 碰撞力会把外圈的几个点推到左留白里去。所以这里做两件事：
+        //   1) 轴题往左挪一点，与绘图区左界多留约 8px；
+        //   2) 给字描一圈纸色边（先描边后填色，paint-order）。真被点压住时，
+        //      描边在字和点之间划出一道缝，字仍然读得出来——这是散点图的通行做法。
+        // 纸色取的是 #galaxy-container 底色的外圈值，轴题贴着左边缘，取它正合适。
         svg.append("text").attr("class", "axis-label")
             .attr("transform", "rotate(-90)")
             .attr("x", -(margin.top + plotH / 2))
-            .attr("y", margin.left / 2 + 4)
+            .attr("y", margin.left / 2 - 4)
             .attr("text-anchor", "middle")
+            .attr("paint-order", "stroke")
+            .attr("stroke", "#f2e7cd")
+            .attr("stroke-width", "3")
+            .attr("stroke-linejoin", "round")
             .text(pcCaption(1));
     }
 
