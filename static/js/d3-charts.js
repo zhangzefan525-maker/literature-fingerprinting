@@ -85,6 +85,7 @@ document.addEventListener('DOMContentLoaded', function() {
     updateMetricHint();
     syncShareLinkTitle();
     trackDashboardCharts();
+    initBookBar();
     loadBooksList();
 
     // 系统开了「减少动态效果」就不自动启动文本雨（按钮仍然可以手动打开）
@@ -386,6 +387,10 @@ function setUploadBusy(isBusy) {
     // 而 label 没有能承载它的角色，等于没用。
     if (fileInput) fileInput.disabled = isBusy;
     if (uploadBtn) uploadBtn.classList.toggle('is-busy', isBusy);
+    // 书名栏末尾那一格也在这条链上（第四十九批）：它原来是「input 被禁用就静默返回」，
+    // 忙时点了没反应、外观也不变，看着像坏了。判据放在下面 syncUploadChipBusy 里，
+    // 读的是 #upload-bar 上的 aria-busy——那是这件事唯一的事实来源，重建芯片也不会丢。
+    syncUploadChipBusy();
 }
 
 // 「已等待 X 秒」：长文分析动辄几十秒，只有一句「请勿关闭页面」没有任何时间感。
@@ -1095,6 +1100,9 @@ async function proceedUpload(file) {
         // 不更新的话，第二次上传会静默覆盖（名单还停在页面加载时那一份）——正是本批要挡的事。
         if (result.saved) libraryBookNames.add(result.book);
         addUploadedBookButton(result.book, { deletable: !!result.saved });
+        // 上传进来一本书 = 选中的书变了，那条自动挑书的提示同样不成立（第四十九批）。
+        // 这里不走 selectBook（上面直接往集合里加），所以得自己收一次。
+        clearAutoPickNotice();
         updateCompareButtonLabel();
         syncUrlState();
         const nBlocks = result.data && result.data.metadata ? result.data.metadata.totalBlocks : 0;
@@ -1322,17 +1330,55 @@ function buildBookGroup(book, { active = false, deletable = false, onClick } = {
 // 正好回答「选哪本书」这个问题里的另一半：也可以是你自己那一份。
 // 它不承载选中态，所以**不给** .book-btn 那个类——否则 syncBookButtonStates 会把它
 // 当一本书去同步，getBookButtonById 那一圈查询也会多出一个没有 data-id 的成员。
+const UPLOAD_CHIP_TEXT = '＋ 上传我的文本';
+const UPLOAD_CHIP_TITLE = '上传一份英文纯文本（.txt），和内置示例书一样参与分析';
+const UPLOAD_CHIP_BUSY_TITLE = '正在分析上一份文本，点这里查看进度';
+
+// 「现在是不是正在分析上一份」。只看 #upload-bar 上的 aria-busy：那是 setUploadBusy
+// 唯一写下的记号，也是上传这件事唯一的事实来源。芯片本身会被整块重建（换书、删书都会
+// 重写书名栏），所以不能把状态记在芯片自己身上。
+function isUploadBusy() {
+    const bar = document.getElementById('upload-bar');
+    return !!bar && bar.getAttribute('aria-busy') === 'true';
+}
+
+// 忙时这一格的两件事（第四十九批）：**变暗**（CSS 的 .is-busy），并把它自己说的话换成
+// 「点这里查看进度」。刻意**不**用 disabled——禁用的按钮点不动，也就没法把人带到进度那儿去。
+// 无障碍名跟着可见文字走（aria-label 以可见文字开头，语音控制喊「上传我的文本」仍能命中）。
+function syncUploadChipBusy(chip) {
+    const el = chip || document.getElementById('upload-chip');
+    if (!el) return;
+    const busy = isUploadBusy();
+    el.classList.toggle('is-busy', busy);
+    if (busy) {
+        el.setAttribute('aria-label', `${UPLOAD_CHIP_TEXT}（正在分析上一份文本，点这里查看进度）`);
+        el.title = UPLOAD_CHIP_BUSY_TITLE;
+    } else {
+        el.removeAttribute('aria-label');
+        el.title = UPLOAD_CHIP_TITLE;
+    }
+}
+
 function buildUploadChip() {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.id = 'upload-chip';
     btn.className = 'book-upload-chip';
-    btn.textContent = '＋ 上传我的文本';
-    btn.title = '上传一份英文纯文本（.txt），和内置示例书一样参与分析';
+    btn.textContent = UPLOAD_CHIP_TEXT;
+    btn.title = UPLOAD_CHIP_TITLE;
     btn.addEventListener('click', () => {
+        // 正在分析上一份时不再静默什么都不做，而是把人送到上传区——进度、秒表、
+        // 分析完的结果都在那儿，点一下就看到。**不在这里另说一句**：上传区自己那句
+        // 「正在分析「X」…请勿关闭页面」正在那儿等着，同屏说两遍是这一批要收的东西。
+        if (isUploadBusy()) {
+            scrollToSection(document.getElementById('upload-bar'));
+            return;
+        }
         const input = document.getElementById('file-upload');
         if (input && !input.disabled) input.click();
     });
+    // 整块重建时（换书、删书）可能正赶上分析在途，新造的这格要当场带上忙态
+    syncUploadChipBusy(btn);
     return btn;
 }
 
@@ -1351,6 +1397,19 @@ function ensureUploadChip() {
 function addUploadedBookButton(bookName, { deletable = false } = {}) {
     const selector = document.getElementById('bookSelector');
     if (!selector) return;
+    // 新书先登记进整份名单：只往 DOM 里塞一格的话，搜索框一敲就把它冲掉了
+    // （整份重建按 bookBarAllBooks 走），而它刚刚才被自动选中。
+    // 带上 source：整份重建时 buildBookGroup 靠它决定这一格要不要挂 ✕ 删除钮，
+    // 少了这一笔，存进书架的书一搜索就变成删不掉的（其实还在，只是钮没了）。
+    if (!bookBarAllBooks.some(book => book.id === bookName)) {
+        bookBarAllBooks.push({ id: bookName, name: bookName, source: deletable ? 'library' : '' });
+    }
+    // 正在搜书时不再走快路径：新书刚被选中，按「已选中的即使不匹配也留着」的规矩
+    // 它得在栏里，而快路径是 append，会把它落在过滤结果之外。
+    if (bookSearchQuery.trim()) {
+        renderBookChips();
+        return;
+    }
     const existing = getBookButtonById(bookName);
     if (existing) {
         // 此前是「未保存」瞬时 chip，这次真正落盘后需补上删除钮
@@ -1606,6 +1665,9 @@ async function deleteLibraryBook(bookName) {
         document.querySelectorAll('.book-group').forEach(group => {
             if (group.dataset.bookId === bookName) group.remove();
         });
+        // 整份名单同步删掉：只拔 DOM 里的那一格的话，搜索框一敲它又回来了
+        bookBarAllBooks = bookBarAllBooks.filter(book => book.id !== bookName);
+        syncBookBarOverflow();
         syncUrlState();
 
         setUploadStatus((result && result.message) || `已从书架删除《${getBookDisplayName(bookName)}》。`, 'success');
@@ -1617,6 +1679,7 @@ async function deleteLibraryBook(bookName) {
             if (selector) {
                 selector.innerHTML = '<p class="state-card empty">没有已加载的书籍了。上传一个 .txt 文本就能继续。</p>';
                 ensureUploadChip();
+                syncBookBarOverflow(); // 书清空了，限高和「上传芯片搬出去」两件事都得跟着撤销
             }
             showNoDataMessage();
             return;
@@ -1706,26 +1769,156 @@ async function loadBooksList() {
     }
 }
 
-function updateBookSelector(books) {
+// —— 书名栏：整份名单 ＋ 一层「找书」过滤（第四十九批）——
+//
+// 原来这里把后端给的顺序原样铺成一排，书一多就一路往下长：实测 20 本书时桌面 480px、
+// 手机 1317px，图表被推到几屏之外——而这一栏的全部职责只是「挑书」，它自己却成了
+// 首屏上最大的一块。现在给它一个高度上限（超出才出现），并在真放不下时补一个搜索框。
+//
+// 两条刻意的设计：
+//   1) 上限按实测行高算出来，不写死在 CSS 里。书名的长短、桌面/手机两档字号都会让
+//      行高变（内置书还多一行「作者 · 年份」），写死的数字迟早对不上其中一种。
+//   2) 上限只在**真的放不下**时才设。4 本书时这一栏与改动前逐像素一致——搜索框也不出现。
+let bookBarAllBooks = [];   // 整份名单（过滤只影响屏幕，不影响这里）
+let bookSearchQuery = '';
+
+const BOOK_BAR_MAX_ROWS_DESKTOP = 2;
+const BOOK_BAR_MAX_ROWS_NARROW = 3;
+
+// 按当前搜索词把 chips 重新铺一遍。整块重建（和原来一样），但这一回会带上 active 态——
+// 搜索框一敲就重建，不带的话已选中的书会当场「掉色」。
+function renderBookChips() {
     const selector = document.getElementById('bookSelector');
     if (!selector) return;
-    if (!books || books.length === 0) {
+    if (bookBarAllBooks.length === 0) {
         // 同上：data/raw 是服务器上的目录，用户在自己电脑上找不到它（第三十五批）。
         selector.innerHTML = '<p class="state-card empty">书架上还没有书。上传一个 .txt 文本就能开始分析。</p>';
         ensureUploadChip();
+        syncBookBarOverflow();
         return;
     }
 
+    const query = bookSearchQuery.trim().toLowerCase();
+    const matches = book => {
+        if (!query) return true;
+        const name = String(getBookDisplayName(book.name || book.id)).toLowerCase();
+        return name.includes(query) || String(book.id).toLowerCase().includes(query);
+    };
+    // 已选中的书即使不匹配也留在栏里：它从屏幕上消失会被读成「被取消选中了」，
+    // 而用户真正在做的事只是搜另一个书名。
+    const shown = bookBarAllBooks.filter(book => matches(book) || selectedBooks.has(book.id));
+
     selector.innerHTML = '';
-    books.forEach(book => {
+    shown.forEach(book => {
         selector.appendChild(buildBookGroup(book, {
+            active: selectedBooks.has(book.id),
             onClick: () => selectBook(book.id)
         }));
     });
+    // 一本都没搜到时还得说一句。判据是「有没有书真的匹配」，不是「栏里还剩几格」——
+    // 上面那条「已选中的留着」意味着栏里通常还剩着一两格，只看格数的话这句永远不说，
+    // 读者于是把留着的那两本当成了搜索结果。
+    if (query && !bookBarAllBooks.some(matches)) {
+        const empty = document.createElement('p');
+        empty.className = 'book-search-empty';
+        empty.textContent = shown.length > 0
+            ? '没有匹配的书名。上面留着的是你已经选中的书。'
+            : '没有匹配的书名。';
+        selector.appendChild(empty);
+    }
     ensureUploadChip();
+    syncBookBarOverflow();
+}
 
-    // 解读参照只用内置示例书：用户自己上传的书不该拿来当"基准"
-    builtinBookNames = books.filter(book => book.source !== 'library').map(book => book.id);
+// 这一栏放得下就一个像素都不动；放不下才限高、并让搜索行露面。
+// 上限取「第 N 行的下沿」而不是「行高 × N」：内置书两行、上传的书一行，混在一起时
+// 按行高乘出来的数字会允许第 N+1 行露半个身子，看着像坏了。
+function measureBookBarCap(rows) {
+    const selector = document.getElementById('bookSelector');
+    if (!selector) return Infinity;
+    const origin = selector.getBoundingClientRect().top;
+    const rowList = [];
+    selector.querySelectorAll('.book-group').forEach(el => {
+        const rect = el.getBoundingClientRect();
+        const top = rect.top - origin;
+        const last = rowList[rowList.length - 1];
+        if (last && top <= last.top + 1) {
+            last.bottom = Math.max(last.bottom, rect.bottom - origin);
+        } else {
+            rowList.push({ top, bottom: rect.bottom - origin });
+        }
+    });
+    if (rowList.length <= rows) return Infinity;
+    return Math.ceil(rowList[rows - 1].bottom);
+}
+
+function syncBookBarOverflow() {
+    const bar = document.getElementById('book-bar');
+    const selector = document.getElementById('bookSelector');
+    const controls = document.getElementById('book-bar-controls');
+    if (!bar || !selector) return;
+
+    // 先复原再量：限高会把 scrollHeight 一起压住，量出来的永远是「放得下」
+    bar.classList.remove('is-capped');
+    selector.style.maxHeight = '';
+    if (controls) controls.hidden = true;
+    placeUploadChip();
+
+    const rows = window.matchMedia('(max-width: 560px)').matches
+        ? BOOK_BAR_MAX_ROWS_NARROW : BOOK_BAR_MAX_ROWS_DESKTOP;
+    const cap = measureBookBarCap(rows);
+    if (isFinite(cap)) {
+        selector.style.maxHeight = `${cap}px`;
+        bar.classList.add('is-capped');
+    }
+    // 搜索框的露面条件不是「限高了」而是「限高了，或者你已经搜过东西」。少了后半句，
+    // 敲一个字把结果筛到只剩两本、栏不再需要限高时，搜索框会连同刚敲进去的字一起消失
+    // ——焦点还在里面。
+    if (controls) controls.hidden = !(isFinite(cap) || bookSearchQuery.trim());
+    placeUploadChip();
+}
+
+// 「＋ 上传我的文本」平时跟着书单走（就是最后一格），栏一限高就搬到滚区外面当一整条。
+// 判据只看 .book-bar.is-capped，而它由**书名行数**决定（measureBookBarCap 只数 .book-group）
+// ——所以这一搬一放不会反过来影响它自己的判断，不存在来回颠簸。
+function placeUploadChip() {
+    const bar = document.getElementById('book-bar');
+    const selector = document.getElementById('bookSelector');
+    const chip = document.getElementById('upload-chip');
+    if (!bar || !selector || !chip) return;
+    const host = bar.classList.contains('is-capped') ? bar : selector;
+    if (chip.parentElement !== host) host.appendChild(chip);
+}
+
+function setBookSearchQuery(value) {
+    bookSearchQuery = value == null ? '' : String(value);
+    renderBookChips();
+}
+
+function initBookBar() {
+    const search = document.getElementById('book-search');
+    if (search) {
+        search.addEventListener('input', () => setBookSearchQuery(search.value));
+        // type="search" 自带的那个 ✕ 在不同浏览器上触发的事件不一样，两个都听一遍
+        search.addEventListener('search', () => setBookSearchQuery(search.value));
+    }
+    let bookBarResizeTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(bookBarResizeTimer);
+        bookBarResizeTimer = setTimeout(syncBookBarOverflow, 150);
+    });
+    // 字体到位后行高还会再变一次，DOMContentLoaded 那会儿量的是回退字体的高度
+    window.addEventListener('load', () => syncBookBarOverflow());
+}
+
+function updateBookSelector(books) {
+    bookBarAllBooks = Array.isArray(books) ? books.slice() : [];
+
+    // 解读参照只用内置示例书：用户自己上传的书不该拿来当"基准"。
+    // 按**整份**名单算：搜索只影响屏幕上铺哪几格，不该把「这本书算不算内置书」也改掉。
+    builtinBookNames = bookBarAllBooks.filter(book => book.source !== 'library').map(book => book.id);
+
+    renderBookChips();
 
     if (pendingUrlBooks && pendingUrlBooks.length > 0) {
         // 链接里指定了选书：按它还原（不存在的书名会在数据加载后自动剔除）
@@ -1801,6 +1994,9 @@ function selectBook(bookId) {
         if (btn) btn.classList.add('active');
     }
 
+    // 选中变了，那条「已替你选中差异最大的两本」当场成了假话（第四十九批）。
+    // 位置刻意在「至少要保留一本书」那个提前返回之后：什么都没变就不该收。
+    clearAutoPickNotice();
     updateCompareButtonLabel();
     // 指标提示里有「你选中的 N 本在 X – X 之间」，选书一变就得跟着重算
     updateMetricHint();
@@ -1890,7 +2086,10 @@ async function loadRealData() {
               + '（可能已被删除，或这个链接来自另一台服务器）。'
             : '';
         if (droppedNotice && selectedBooks.size > 0) {
-            setGlobalStatus('notice', `${droppedNotice}下面显示的是现有的书。`, { sticky: true });
+            // 这一支没有自动选书的后半句，所以是一条纯「网址缺东西」的常驻提示：
+            // 记进 stickyDroppedTail，但它不归 clearAutoPickNotice 管（那句标志位没开）
+            stickyDroppedTail = `${droppedNotice}下面显示的是现有的书。`;
+            setGlobalStatus('notice', stickyDroppedTail, { sticky: true, tag: AUTO_PICK_STATUS_TAG });
         }
         if (selectedBooks.size === 0) {
             // 首屏默认：差别最明显的两本内置书（第一次来的用户打开就能看到「对比」
@@ -1916,7 +2115,11 @@ async function loadRealData() {
                 // 为什么不再 6 秒自收：它说的不是「刚才发生了什么」，而是「你现在看的这两本是谁挑的」。
                 // 第一次来的人正是在这几秒里读标题、认书名，等他想起要确认这件事时话已经没了——
                 // 实测 1.2 秒在、4.2 秒还在、8.2 秒清空。这与「链接里的书找不到」同类，所以同样常驻。
-                setGlobalStatus('notice', (droppedNotice || '') + autoPickNotice, { sticky: true });
+                // 只丢了一部分时，前半句同时被记下来：用户一动选书，后半句收掉，
+                // 前半句原地留下（收尾那句与上面 1893 那处逐字相同，两处口径一致）。
+                if (droppedNotice) stickyDroppedTail = `${droppedNotice}下面显示的是现有的书。`;
+                autoPickNoticeShown = true;
+                setGlobalStatus('notice', (droppedNotice || '') + autoPickNotice, { sticky: true, tag: AUTO_PICK_STATUS_TAG });
             } else {
                 selectBook(availableBooks[0]); // 兜底：连一对都挑不出来时，照旧选第一本
             }
@@ -4974,7 +5177,13 @@ function exportVectorChart() {
 // 于是切到「风格星系」「全书对比」之后，加载失败、分析失败、无数据全是静默的。
 let _globalStatusTimer = null;
 
-function setGlobalStatus(kind, message, { sticky = false, action = null } = {}) {
+// 状态条上「这条是谁写的」的记号（第四十九批）。只有那条自动选书的常驻提示用得上：
+// 它说的「已替你选中这两本」会在用户自己动过选书之后变成假话，那时必须收掉。判断
+// 「现在屏幕上这条还是不是我那条」不能靠对文字，所以写一个记号；任何不带 tag 的调用
+// 一律把记号清掉——复制成功、上传回执这些后来的消息于是天然免疫，不会被误收。
+const AUTO_PICK_STATUS_TAG = 'auto-pick';
+
+function setGlobalStatus(kind, message, { sticky = false, action = null, tag = null } = {}) {
     const el = document.getElementById('global-status');
     if (!el) return;
     if (_globalStatusTimer) { clearTimeout(_globalStatusTimer); _globalStatusTimer = null; }
@@ -4982,11 +5191,16 @@ function setGlobalStatus(kind, message, { sticky = false, action = null } = {}) 
         el.hidden = true;
         el.textContent = '';
         el.className = 'global-status';
+        if (el.dataset) delete el.dataset.statusTag;
         return;
     }
     el.hidden = false;
     el.className = `global-status ${kind || ''}`.trim();
     el.textContent = message;
+    if (el.dataset) {
+        if (tag) el.dataset.statusTag = tag;
+        else delete el.dataset.statusTag;
+    }
     // action（第四十八批）：个别状态消息自带一个「下一步」按钮。文案里光写「请先切到「全书对比」页」
     // 等于让读者自己去那一排页签里找，而这件事本来可以一步到位。textContent 先把旧的按钮清掉，
     // 再补一个真按钮——读屏按普通按钮念它，键盘也够得到。
@@ -5005,6 +5219,30 @@ function setGlobalStatus(kind, message, { sticky = false, action = null } = {}) 
     // 看图，看到的书会比分享的人少几本，而页面上一点痕迹都不留。只有「链接里的书找不到」用它。
     if ((kind === 'success' || kind === 'notice') && !sticky) {
         _globalStatusTimer = setTimeout(() => setGlobalStatus(null, ''), 6000);
+    }
+}
+
+// 「已替你选中差异最大的两本…」这条常驻提示何时该收（第四十九批）。
+//
+// 它当初是两句话合成的（见 loadRealData 末尾）：前半句「链接里的这几本书找不到」说的是
+// 这个网址本身缺东西，那几本书不会自己回来，所以必须一直留着（第四十七批定的）；
+// 后半句「已替你选中这两本」说的是**当时**那次自动挑书，用户自己一动选书就成了假话——
+// 而它偏偏是常驻的，于是会一直挂在页顶替一个已经不成立的结论背书。
+// 所以只收后一半：选书一变（或者上传进来一本书），后半句走，前半句原地留下。
+let autoPickNoticeShown = false;   // 后半句还在屏幕上
+let stickyDroppedTail = '';        // 前半句（只有前半句时它就是整条）
+
+function clearAutoPickNotice() {
+    if (!autoPickNoticeShown) return;
+    const el = document.getElementById('global-status');
+    // 屏幕上那条如果已经被别的消息换掉了（复制成功的回执、上传结果…），就不要去动它。
+    // 这里认的是记号不是文字：别人写的消息根本不带这个记号。
+    if (!el || !el.dataset || el.dataset.statusTag !== AUTO_PICK_STATUS_TAG) return;
+    autoPickNoticeShown = false;
+    if (stickyDroppedTail) {
+        setGlobalStatus('notice', stickyDroppedTail, { sticky: true, tag: AUTO_PICK_STATUS_TAG });
+    } else {
+        setGlobalStatus(null, '');
     }
 }
 
@@ -5587,16 +5825,17 @@ function initStyleGalaxy() {
     }
     updateGlyphs();
 
-    circles.on("mouseover", function(event, d) {
-        d3.select(this)
-            .transition().duration(motionDuration(100))
-            .attr("r", d.r * 1.5)
-            .style("filter", "url(#glow)")
-            .attr("stroke", "#2f2a23")
-            .attr("stroke-width", 2);
-        d.glyphScale = 1.5;
-        updateGlyphs();
-        
+    // 「聚焦这一个点」：放大它、点亮它周围的点、把右上角那块面板填上。
+    //
+    // 第四十九批把它从 mouseover 里整段抽出来。起因是一个**说得出口、做不到**的承诺：
+    // 面板的触屏文案写着「点按任意圆点，查看附近各点的共同特征」，而手指点下去走的是
+    // click，唯一的出口是弹原文——「附近点的共同特征」在手机上从来没有出现过。
+    // 抽出来之后两条路共用同一段逻辑（悬停 / 点按）。抽的过程中还查清一件事：
+    // 「悬停放大 1.5 倍」这个效果在鼠标上也早就没生效了（原因见下面那条注记），
+    // 本批一并把它改回设计的样子——只改了坏掉的地方，该有的效果一个不多一个不少。
+    function focusGalaxyNode(d) {
+        const el = circles.nodes().find(node => node.__data__ === d);
+
         const allCircles = g.selectAll("circle");
         const allNodeData = allCircles.data();
         // 邻域按「屏幕上 120px」算，所以要除以当前缩放倍数（第三十六批）。
@@ -5610,7 +5849,33 @@ function initStyleGalaxy() {
         // 逐个 includes 在「邻居多」时退化成 O(n²)，扫一圈圆点就是上万次线性查找。
         const neighborSet = new Set(neighbors);
 
-        allCircles.filter(node => neighborSet.has(node))
+        // 先把上一次的放大与高亮撤干净再点亮这一个。鼠标那条路本来不需要——
+        // 从 A 挪到 B 一定会先经过 mouseout(A)；但手指上没有 mouseout：
+        // 点 A 再点 B，A 会一直保持着放大和深色描边，看着像「选中了两个」。
+        // 焦点这一格要**排掉**（见下面 resetGalaxyFocus 的注释），不能先全复位再单独放大。
+        resetGalaxyFocus(d);
+
+        // 同一个元素上不能同时挂两条同名的过渡：后挂的那条会把先挂的那条**冻在半路**
+        // （d3 的规矩：同名过渡一开，旧的那条就地停下，不回弹）。所以焦点这一格
+        // 整段只挂这一条过渡，邻居那批里也把它排掉。第四十九批实测：不排的话，
+        // 悬停圆点「放大 1.5 倍、描边加深」这个效果一个都没发生——放大那条过渡
+        // 在它自己的第一帧就被后挂的邻居过渡冻在了原始半径上。
+        if (el) {
+            d3.select(el).interrupt();
+            d3.select(el)
+                .transition().duration(motionDuration(100))
+                .attr("r", d.r * 1.5)
+                .style("filter", "url(#glow)")
+                .attr("stroke", "#2f2a23")
+                .attr("stroke-width", 2)
+                .attr("stroke-opacity", 1);
+        }
+        d.glyphScale = 1.5;
+        updateGlyphs();
+
+        // 剩下的邻居上色。焦点那一格本来是它自己的邻居（距离 0），排掉——
+        // 它的深色描边比邻居的红圈更醒目，两个都挂只会互相碾压。
+        allCircles.filter(node => node !== d && neighborSet.has(node))
             .transition().duration(motionDuration(100))
             .attr("stroke", "#b5472f")
             .attr("stroke-width", 2)
@@ -5621,6 +5886,30 @@ function initStyleGalaxy() {
         // 带上全图点数：面板要报「这 50 个点占全图 30%」，否则读者会以为
         // 「附近」是一小撮，实际它是全图的三成（第三十六批）。
         updateHUD(analysis, label, allNodeData.length);
+        return el;
+    }
+
+    // 撤销上面那件事，回到空闲态（原来的 mouseout 就是这一套）。
+    // exceptNode 是给「马上就轮到你」的那一格留的：刚起动的复位过渡会同名冻住
+    // 紧接着那条放大过渡（见 focusGalaxyNode 里的实测注记），所以它得整格排掉。
+    function resetGalaxyFocus(exceptNode) {
+        // 原来是两条过渡：一条管圆点本身（半径、滤镜、描边），一条管 g 里全部圆点的描边。
+        // 两批选中的其实是同一组圆点，后一条会把前一条冻在半路——第四十九批实测：
+        // 悬停移开后那个点**一直没缩回去**，就冻在 1.5 倍上。并成一条，每格里只写一次。
+        const rest = exceptNode ? circles.filter(node => node !== exceptNode) : circles;
+        rest
+            .transition().duration(motionDuration(200))
+            .attr("r", d => d.r)
+            .style("filter", null)
+            .attr("stroke", PAPER_RIM)
+            .attr("stroke-width", 1)
+            .attr("stroke-opacity", 1);
+        circles.data().forEach(node => { node.glyphScale = 1; });
+        updateGlyphs();
+    }
+
+    circles.on("mouseover", function(event, d) {
+        focusGalaxyNode(d);
 
         // value 传原始数值，不在这里先格式化：showTooltip 统一走 formatMetric，
         // 否则这里传字符串进去会命中 formatMetric 的 !isFiniteNumber 分支显示「暂无」。
@@ -5631,22 +5920,8 @@ function initStyleGalaxy() {
             preview: d.preview
         }, d.book);
     })
-    .on("mouseout", function(event, d) {
-        d3.select(this)
-            .transition().duration(motionDuration(200))
-            .attr("r", d.r)
-            .style("filter", null)
-            .attr("stroke", PAPER_RIM)
-            .attr("stroke-width", 1);
-        d.glyphScale = 1;
-        updateGlyphs();
-
-        g.selectAll("circle")
-             .transition().duration(motionDuration(200))
-             .attr("stroke", PAPER_RIM)
-             .attr("stroke-width", 1)
-             .attr("stroke-opacity", 1);
-        
+    .on("mouseout", function() {
+        resetGalaxyFocus();
         setGalaxyIdleHint();
 
         hideTooltip();
@@ -5658,6 +5933,16 @@ function initStyleGalaxy() {
         // 却没有对应的 mouseout——那个提示框会一直挂在屏幕上。点开全屏详情之后
         // 它更没有存在的必要，直接收掉。
         hideTooltip();
+        // 手指分两条路：真正落在圆点上时走的是**这里**。点按层是垫在圆点底下的
+        // （见下面那段注释），所以手指按在圆点上，事件先到圆点自己、根本到不了那一层——
+        // 「点按看附近点」这条路必须从这儿分，光改那一层等于没改。
+        // 手指上先做和悬停同一件事（点亮这一片、填上右上角那块面板），原文改由面板里
+        // 那个按钮给；鼠标照旧：一下点开原文，不多一步。
+        if (usesCoarsePointer()) {
+            focusGalaxyNode(d);
+            setHudAction(d, event.currentTarget);
+            return;
+        }
         openGalaxyModal(d);
     })
     .on("keydown", (event, d) => {
@@ -5692,7 +5977,23 @@ function initStyleGalaxy() {
     // 触屏上没有「悬停」这一步，而圆点的直径只有 8–28px：手指按下去十有八九落空，
     // 按偏了也完全没有反应。这里在圆点底下垫一层透明接收层，按下去取离手指最近的点。
     if (usesCoarsePointer()) {
-        attachGalaxyTapPicker({ g: g, svg: svg, nodes: allNodes, circles: circles, width: width, height: height });
+        attachGalaxyTapPicker({
+            g: g, svg: svg, nodes: allNodes, circles: circles, width: width, height: height,
+            // 点到圆点：和悬停做同一件事（点亮这一片、填上右上角那块面板），
+            // 而不是像原来那样一步跳到原文弹窗。原文改由面板里那个按钮给（见 setHudAction）。
+            onPick: (node, circleEl) => {
+                lastGalaxyTrigger = circleEl || null;
+                hideTooltip();
+                focusGalaxyNode(node);
+                setHudAction(node, circleEl);
+            },
+            // 点空处 = 看完了，回到空闲态。原来这里什么都不做，那块面板会一直留着
+            // 上一次的结果，看起来像当前这一片就是这样。
+            onEmpty: () => {
+                resetGalaxyFocus();
+                setGalaxyIdleHint();
+            }
+        });
     }
 
     // 系统要求「减少动态效果」时，不播这场收敛动画：先把力导向在内存里算完，
@@ -5783,12 +6084,17 @@ function attachGalaxyTapPicker(opts) {
 
         // 容差按当前缩放折算：放大 5 倍时，同一个「44px 手指范围」在数据坐标里小得多
         const k = d3.zoomTransform(opts.svg.node()).k || 1;
-        if (!best || bestD2 > Math.pow(TOLERANCE / k, 2)) return;
+        if (!best || bestD2 > Math.pow(TOLERANCE / k, 2)) {
+            // 手指落在空处：这一层是透明的、盖住整个画布，所以这里也是「点空白」的唯一出口
+            if (typeof opts.onEmpty === 'function') opts.onEmpty();
+            return;
+        }
 
         // 关掉弹窗后焦点要回到刚才那个点，所以得找到它对应的圆点元素
-        lastGalaxyTrigger = opts.circles.nodes().find(node => node.__data__ === best) || null;
-        hideTooltip();
-        openGalaxyModal(best);
+        const circleEl = opts.circles.nodes().find(node => node.__data__ === best) || null;
+        // 交给外面决定点什么：第四十九批起不再是「直接弹原文」，
+        // 而是先做和悬停同一件事——面板里的「看这一段的原文」才是通往原文的那一步。
+        if (typeof opts.onPick === 'function') opts.onPick(best, circleEl);
     });
 }
 
@@ -6144,6 +6450,28 @@ function analyzeCluster(neighbors) {
         avgMetric: avgMetric,
         topKeywords: topKeywords
     };
+}
+
+// 面板里的次入口「看这一段的原文」（第四十九批）。只挂在手指那条路上：
+// 桌面是「悬停出面板、点击开原文」，本来就是两步两个动作；手指上这两步挤成了同一次点按，
+// 所以得在面板里把原文那一步补出来——不补的话，手机上点圆点就再也看不到原文了。
+// 面板本身是 pointer-events:none（一块纯展示的浮层，一直如此），所以这一格要单独接回手指。
+function setHudAction(node, circleEl) {
+    const content = document.querySelector('#galaxy-hud .hud-content');
+    if (!content || !node) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'hud-action';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hud-action-btn';
+    btn.textContent = '看这一段的原文';
+    btn.addEventListener('click', () => {
+        // 关了弹窗焦点要回到刚才那个点（和别处开弹窗的规矩一致）
+        lastGalaxyTrigger = circleEl || null;
+        openGalaxyModal(node);
+    });
+    wrap.appendChild(btn);
+    content.appendChild(wrap);
 }
 
 // 星系右上角那块说明的空闲态文案。触屏上「悬停」这个动作根本不存在，写着「移到圆点上」

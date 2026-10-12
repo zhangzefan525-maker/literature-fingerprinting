@@ -73,8 +73,19 @@
             <p class="header-subtitle">选一本书或上传英文全文，自动分析它的写作风格——句子长短、用词习惯、风格走向——再和其他书放在一起直观对比。</p>
         </div>
 
-        <!-- 全局书籍选择器 -->
-        <div class="book-selector" id="bookSelector"></div>
+        <!-- 全局书籍选择器。
+             第四十九批：外面套了一层 .book-bar，为的是回答「书架上的书多到放不下怎么办」。
+             书少时这一层什么都不做（搜索行 hidden、书名栏不限高，与原来逐像素一致）；
+             真放不下时由 syncBookBarOverflow() 给它限高，并把下面那行搜索框放出来。
+             搜索框不是常驻控件：一进来就摆一个找书框，会让「这几本书挑一本」这件简单的
+             事看起来像要先搜索。 -->
+        <div class="book-bar" id="book-bar">
+            <div class="book-bar-controls" id="book-bar-controls" hidden>
+                <input type="search" id="book-search" aria-label="在书名里查找"
+                       placeholder="在书名里找一个…" autocomplete="off">
+            </div>
+            <div class="book-selector" id="bookSelector"></div>
+        </div>
 
         <!-- 上传自定义文本（与示例书籍并列分析） -->
         <div class="upload-bar" id="upload-bar" aria-busy="false">
@@ -312,9 +323,13 @@
                          标题那句留着（它是完整句子，读得通）。 -->
                     <span>位置 = 高频小词的用法</span>
                     <!-- 手指没有滚轮，也没有「悬停」。触屏设备上写「滚轮缩放」是教用户
-                         做一个做不到的动作，所以两种指针对应两句，由 CSS 按 hover 能力选。 -->
+                         做一个做不到的动作，所以两种指针对应两句，由 CSS 按 hover 能力选。
+                         触屏那句在第四十九批改过：手指点圆点现在出的是右上角那块面板
+                         （附近点的共同特征），原文由面板里「看这一段的原文」那个按钮给。
+                         原来写「点按看原文」——那句话当时倒是真的，只是它同时在说「这块
+                         面板跟手机无关」，而那正是这一批要补上的那条路。 -->
                     <span class="pointer-hint-hover">滚轮缩放 · 拖动探索 · 点击看原文</span>
-                    <span class="pointer-hint-touch">双指缩放 · 拖动探索 · 点按看原文</span>
+                    <span class="pointer-hint-touch">双指缩放 · 拖动探索 · 点按看附近点</span>
                 </div>
                 <div class="galaxy-legend" id="galaxy-legend"></div>
                 <!-- 尺寸图例：气泡图必须给出「多大算大」的刻度，否则圆点大小这个编码
