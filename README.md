@@ -6531,3 +6531,9 @@ If-None-Match: 上面那串 → 304 ；If-None-Match: "deadbeef" → 200
 - **手机端仍未做的三条**（导出图说明被裁、星系纵轴标题被点压住、全书对比章节刻度被裁且字 9–10px）与无障碍那十来条可选级：只留档，不实施。
 - **顺带发现、本轮没动的一条**：切「全书对比」时如果这次一本书都没有，「还是同一批书」的早退分支会原样留着上次的记号，导致「清空选择 → 再选回同一批」时面板可能停在旧内容上。属本轮范围外，留档。
 - **本批未推送**：按老规矩等你说推；推的时候一并上服务器确认线上已更新。
+- **推送与上线（补记，2026-10-13 01:20 起）**：上一条「本批未推送」是这一节写下时的状态；当晚你让我推，已经推了、也上线了，记录如下。
+- **推送**：`04f9685..c2033f5`，推到 `github`（本仓库的远端名叫 `github`）。提交是 `c2033f5`，8 个文件、570 增 34 删。
+- **cron 这次没拉动，而且靠等不会好**：服务器上 `https://api.github.com/` 返回 200、而 `https://github.com/` 用满 25 秒后退出码 124（超时），日志里只有一行 `fatal: unable to access 'https://github.com/…': Empty reply from server`；当场还看到有一个 `git fetch` 正卡在 `timeout 90` 里——属「够不着 GitHub」那一类，不是 HTTP/2 那类、加 `http.version=HTTP/1.1` 也治不了。
+- **改走打包直送**（不依赖服务器出网）：本地 `git bundle create 04f9685..master` → `scp` 到服务器 `/tmp/` → `git fetch <bundle> master:refs/remotes/origin/master` → `git merge --ff-only origin/master` → `systemctl restart literature-fingerprinting`。服务器 `HEAD` 与 `origin/master` 都是 `c2033f5`，服务 active。这样 `origin/master` 仍指向 GitHub 上的同一个提交号，下次 `git pull` 不受影响。
+- **线上验活（实地看到，不是推断）**：`/` 与 `/visualization` 都返回 200；把 `d3-charts.js` 从公网取下来、去掉 CR 之后算 sha256，与服务器磁盘上那份**逐字相同**（都是 `c3c9f926…`），且这份线上文件里含本批新标识（覆盖确认、星系 Tab 那句提示、删书焦点回收）；首页含排序那处的读屏文字；服务器上 `api_server.py` 与 `src/data_loader.py` 也都是新版。
+- **顺带记一笔**：这一批的探针只改本地，没有在线上建过任何测试书；线上数据与上一批一致。
