@@ -2494,6 +2494,10 @@ button.copy-failed:hover {
        尤其不该让手指按偏。 */
     #advResetBtn,
     #smoothness,
+    /* 星系面板里那个「看这一段的原文」（第四十九批新加）：宽 100% 没问题，
+       高只有约 31px（12px 字 + 上下各 7px 内边距 + 两条 1px 边框），不够手指按。
+       它只在触屏上出现（面板里只有手指那条路会挂它），所以不必顾虑桌面变高。 */
+    .hud-action-btn,
     select {
         min-height: 44px;
     }

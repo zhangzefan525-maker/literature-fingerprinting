@@ -183,7 +183,7 @@
             <!-- title 是给鼠标用户的「这个页签里有什么」：三个名字（趋势/星系/对比）
                  都说得出口，但光看名字猜不到点进去会看到什么图。读屏用户不听 title
                  （面板内的 h2 已经是它们的名字），所以这几个 title 纯粹是锦上添花，不承载信息。 -->
-            <button id="tab-view-main" class="tab-btn active" role="tab" aria-selected="true" aria-controls="view-main" onclick="switchTab('view-main')" title="按全书进度看指标怎么变：指纹热力图 / 折线趋势图">
+            <button id="tab-view-main" class="tab-btn active" role="tab" aria-selected="true" aria-controls="view-main" onclick="switchTab('view-main')" title="按片段顺序看指标怎么变：指纹热力图 / 折线趋势图">
                 <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-line"/></svg> 基础趋势分析
             </button>
             <button id="tab-view-galaxy" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-galaxy" tabindex="-1" onclick="switchTab('view-galaxy')" title="把每个片段画成圆点，看几本书的用词习惯离得近不近">
@@ -247,7 +247,7 @@
             <div class="adv-header">
                 <div>
                     <h2 style="margin:0; color:#2f2a23; font-size: 18px;"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-line"/></svg> 基础趋势分析</h2>
-                    <small style="color:#6b6254">横轴是全书进度，纵轴是「观察角度」里选的这个指标；一格（一个点）约对应 1 万词。点击图中位置即可查看该片段详情。如需直接查看结论，可切换到上方的「全书对比」。</small>
+                    <small style="color:#6b6254">横轴是第几个片段（各书的总数不同），纵轴是「观察角度」里选的这个指标；一格约对应 1 万词。点击图中位置即可查看该片段详情。如需结论，可切换到上方的「全书对比」。</small>
                 </div>
                 <div>
                     <button type="button" id="demo-entry" class="demo-entry" hidden onclick="loadComparisonExample()" title="自动挑出当前观察角度下差异最大的一对书，并切换到「全书对比」查看结论">载入对比示例</button>
@@ -424,7 +424,7 @@
                                  自动铺开全部书）。原文案是「点击左侧图表中的书籍，或拖拽走势图
                                  查看段落详情」——后半句是假的，框选只改 brushRange，不展开任何一本。
                                  这份兜底只在脚本没跑起来时露脸，所以只说一句两边都成立的话。 -->
-                            <div class="empty-tip">每本书数值最高的几个片段会列在这里。</div>
+                            <div class="empty-tip">每本书数值最大的几个片段会列在这里。</div>
                         </div>
                         <div id="adv-drill-announce" class="visually-hidden" role="status" aria-live="polite"></div>
                     </div>
@@ -1266,7 +1266,7 @@
                 enter => enter.append("circle").attr("class", d => `peak-dot annotation-point book-el book-${d.id}`).attr("r", 4),
                 update => update.attr("cx", d=>x(d.peak.xPercent)).attr("cy", d=>y(d.peak.value)),
                 exit => exit.remove()
-            ).on("mouseover", (e, d) => showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>最高点: ${fmtMetric(d.peak.value)}`))
+            ).on("mouseover", (e, d) => showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>${peakPointLabel()}: ${fmtMetric(d.peak.value)}`))
              .on("mouseout", hideAdvTooltip);
 
             const brush = d3.brushX().extent([[0, 0], [w, h]]).on("end", advBrushed);
@@ -1347,12 +1347,29 @@
                 ? chaptersWithoutBlocks(bookName) : [];
             const tailNote = tail.length > 0 ? `；末尾 ${tail.length} 章没有对应片段，未标出` : '';
 
-            layer.append("text")
+            // 这一行说明窄屏放不下，**而且被裁掉的正好是后半句**（第五十批复现：
+            // 390 宽下这句话 467px、画布 322px、overflow 是 hidden，裁掉的是
+            // 「末尾 N 章没有对应片段」——那句话恰恰是读者最需要知道的一句）。
+            // 做法与热力图那条章节说明一致：放不下就换短说法。
+            // 完整句不删，挂成 <title>：鼠标悬停能看到、读屏能读到、导出文件里也在。
+            const fullNote = `︱ 底部刻度为章节分界（按《${getBookDisplayName(bookName)}》的章节标题换算）${tailNote}`;
+            const shortTail = tail.length > 0 ? `；末尾 ${tail.length} 章无片段` : '';
+            const note = layer.append("text")
                 .attr("x", 0).attr("y", -22)
                 .attr("text-anchor", "start")
                 .style("font-size", "10px")
                 .style("fill", "#6b6254")
-                .text(`︱ 底部刻度为章节分界（按《${getBookDisplayName(bookName)}》的章节标题换算）${tailNote}`);
+                .text(fullNote);
+            // 右边留 4px，别贴着画布边缘
+            if (note.node().getComputedTextLength() > w - 4) {
+                note.text(`︱ 刻度为章节分界${shortTail}`);
+                // 短说法也放不下（书名特别长时不会，但短说法本身也可能撞上极窄的画布）：
+                // 再退一档，只留「这些刻度是什么」，其余靠 <title> 兜
+                if (note.node().getComputedTextLength() > w - 4) {
+                    note.text('︱ 刻度为章节分界');
+                }
+                note.append("title").text(fullNote);
+            }
         }
 
         // 4. 交互核心
@@ -1628,7 +1645,7 @@
                 // 原来说的是「点击左侧图表中的书籍，或拖拽走势图查看段落详情」。后半句是假的：
                 // 框选只改 brushRange，会更新已展开卡片的内容，但不会展开任何一本。
                 panel.innerHTML = computedData.length === 0
-                    ? '<div class="empty-tip">上方还没有选中任何一本书。<br>先点书名，这里就会列出它数值最高的几个片段。</div>'
+                    ? '<div class="empty-tip">上方还没有选中任何一本书。<br>先点书名，这里就会列出它数值最大的几个片段。</div>'
                     : '<div class="empty-tip">已收起全部书籍。<br>点左侧任意一根柱子或折线，可以再展开。</div>';
                 if (!options || options.announce !== false) announceDrill('片段详情已收起。');
                 return;
@@ -1663,7 +1680,7 @@
                     const previewLang = b.preview ? ' lang="en"' : '';
                     bookHtml += `
                         <div class="drill-item" style="border-left-color:${book.color}; margin-bottom: 5px;">
-                            <strong>#${i+1} 最高点: ${fmtMetric(b.value)}</strong>
+                            <strong>#${i+1} ${peakPointLabel()}: ${fmtMetric(b.value)}</strong>
                             <div style="margin:2px 0;color:#6b6254;font-size:10px">📍 ${escapeHtml(loc)}</div>
                             <p${previewLang} style="margin:0;color:#6b6254;line-height:1.2;max-height:50px;overflow:hidden">${b.preview ? escapeHtml(b.preview.substring(0,60)) + '...' : '无预览'}</p>
                             ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:9px">※ <span lang="en">${escapeHtml(keywords)}</span></div>` : ''}
@@ -1685,7 +1702,7 @@
                 })
                 .filter(Boolean);
             if (!options || options.announce !== false) {
-                announceDrill(`已展开 ${names.length} 本书的片段详情：${names.join('、')}，每本列出数值最高的 3 个片段。`);
+                announceDrill(`已展开 ${names.length} 本书的片段详情：${names.join('、')}，每本列出数值最大的 3 个片段。`);
             }
         }
 
