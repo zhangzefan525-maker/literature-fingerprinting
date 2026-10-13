@@ -1,6 +1,5 @@
 # 数据加载与清洗模块（支持多文件对比）
 import re
-import os
 import codecs
 
 # 常见英语缩写及其展开形式（用于论文 3.2 节的缩写还原）
@@ -315,15 +314,6 @@ def count_blocks(n_words, block_size=BLOCK_SIZE, overlap=OVERLAP):
         return 0
     return (n_words - block_size) // step + 1
 
-def get_chapters(text):
-    """
-    根据正则匹配章节 (用于备选分析)
-    """
-    # 匹配 CHAPTER I, Chapter 1, CHAPTER ONE 等
-    chapters = re.split(r'CHAPTER\s+[IVXLCDM\d]+|Chapter\s+[IVXLCDM\d]+', text, flags=re.IGNORECASE)
-    # 去除空字符串
-    return [c.strip() for c in chapters if len(c.strip()) > 50]
-
 # ---------------------------------------------------------------------------
 # 章节识别：把「第几个片段」翻译成「第几章」
 # 只依赖章节标题的写法，不需要任何人工标注；识别不到就不给章节信息。
@@ -608,28 +598,3 @@ def get_chapter_spans(text, min_gap_words=_CHAPTER_MIN_GAP_WORDS):
             "wordEnd": end,
         })
     return chapters
-
-
-def load_multiple_files(paths_list):
-    """
-    任务 D：多文件对比加载系统
-    输入：多个路径的列表 ['data/book1.txt', 'data/book2.txt']
-    输出：字典 {文件名: 块列表}
-    """
-    all_books_dict = {}
-    
-    for path in paths_list:
-        if os.path.exists(path):
-            # 提取文件名（不含路径和后缀）作为 key
-            file_name = os.path.splitext(os.path.basename(path))[0]
-            
-            # 顺序调用原有逻辑
-            raw_text = load_clean_text(path)
-            blocks = get_blocks(raw_text)
-            
-            # 存储结果
-            all_books_dict[file_name] = blocks
-        else:
-            print(f"Warning: File not found at {path}")
-            
-    return all_books_dict

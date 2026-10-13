@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # 确保项目根目录在 sys.path 中，便于 from src.xxx import ...
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -90,6 +91,25 @@ class TestTopKeywords(unittest.TestCase):
         text = "the and of river"
         # the/and/of 为停用词，应被过滤，只剩 river
         self.assertEqual(get_top_keywords(text, n=5), ["river"])
+
+    def test_lookup_error_is_not_papered_over_by_a_download(self):
+        """停用词取不到时**不**在调用里现下（第五十二批）。
+
+        下载点全项目只有 pipeline._ensure_nltk_data() 一处，而它一定比这里先跑
+        （build_book_data 在本函数之前就调过它）。原来这里挂着
+        try/except: nltk.download('stopwords')——它并没有兜住任何东西
+        （下载失败照样抛 LookupError），却会在断网的机器上把一次用户请求
+        同步挂住几十秒去等网络。
+
+        这里故意让取词表失败：正确的行为是把 LookupError 直接抛出去（上层
+        _ensure_nltk_data 已经试过下载了），而不是在这里现下一把。
+        """
+        with mock.patch("nltk.corpus.stopwords.words", side_effect=LookupError("no data")), \
+             mock.patch("nltk.download") as download:
+            with self.assertRaises(LookupError):
+                get_top_keywords("river river blood", n=2)
+
+        download.assert_not_called()
 
 
 class TestGetBlocks(unittest.TestCase):
