@@ -5209,9 +5209,12 @@ function exportTableData() {
         return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     }).join(',')).join('\r\n');
 
-    // 表头前的注释行：滑动窗口是重叠切分，相邻片段共享 9000 个词，
+    // 注释行：滑动窗口是重叠切分，相邻片段共享 9000 个词，
     // 不写清楚的话，63 行很容易被当成 63 个互相独立的样本拿去做统计检验。
     // 以 # 开头是 CSV 的通行注释约定（pandas 用 comment='#'、R 用 comment.char='#' 即可跳过）。
+    // 位置在数据**之后**（第五十三批）：界面提示写明「可用 Excel 打开」，而 Excel 不认 #
+    // 注释——放在前面会让真表头掉到第 11 行、数据上方挂 10 行杂物，非技术读者会以为文件坏了。
+    // 挪到后面则 pandas / R 照旧跳过，Excel 打开第一行就是表头。注释一条不少、一字未改。
     const windowSpecs = Array.from(new Set(books.map(name => {
         const meta = normalizeBookMeta(name);
         return meta && isFiniteNumber(meta.blockSize) && isFiniteNumber(meta.overlap) && isFiniteNumber(meta.step)
@@ -5236,7 +5239,7 @@ function exportTableData() {
     ];
 
     // 带 BOM：Excel 打开中文 CSV 默认按本地编码解析，没有 BOM 会乱码
-    const csv = `${comments.join('\r\n')}\r\n${body}`;
+    const csv = `${body}\r\n${comments.join('\r\n')}`;
     downloadBlob('﻿' + csv, `文印_数据表_${exportTimestamp()}.csv`, 'text/csv;charset=utf-8');
     flashExportReceipt(document.getElementById('exportDataBtn'), '数据表已导出（.csv），可用 Excel 打开。');
 }
@@ -6553,9 +6556,14 @@ function openGalaxyModal(d) {
 function trapFocusWithin(modal, event) {
     if (!modal || event.key !== 'Tab') return;
 
+    // 禁用中的控件不在 Tab 序列里（浏览器会跳过它），这里必须一并排除。
+    // 否则它会当选「最后一个」：Shift+Tab 从第一个控件退回来时 .focus() 静默失效（卡住），
+    // 而 Tab 走到真正的末尾时 activeElement 永远等不到它，焦点直接跑出弹窗、落到背后的页面上
+    // ——aria-modal="true" 就成了假话。实测场景：点开片段详情后，长摘录还在取的那一瞬间，
+    // 底部「复制这段摘录」是可见但 disabled 的，而它正是最后一个可聚焦节点。
     const focusables = Array.from(
         modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
-    ).filter(el => !el.hidden && el.offsetParent !== null);
+    ).filter(el => !el.hidden && el.offsetParent !== null && !el.disabled);
     if (focusables.length === 0) return;
 
     const first = focusables[0];

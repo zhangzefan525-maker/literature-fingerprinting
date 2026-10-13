@@ -247,7 +247,11 @@
             <div class="adv-header">
                 <div>
                     <h2 style="margin:0; color:#2f2a23; font-size: 18px;"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-line"/></svg> 基础趋势分析</h2>
-                    <small style="color:#6b6254">横轴是第几个片段（各书的总数不同），纵轴是「观察角度」里选的这个指标；一格约对应 1 万词。点击图中位置即可查看该片段详情。如需结论，可切换到上方的「全书对比」。</small>
+                    <!-- 语序（第五十三批）：手机上这段说明被 CSS 截断成两行，原来是「先讲怎么读图、
+                         再讲怎么操作」，截断点正好落在「点…」，把「下一步怎么做」整句吃掉了。
+                         改成「先讲怎么操作、再讲怎么读图」——被截掉的就变成坐标轴的解释，
+                         而轴含义在图上本来就看得到。字数一字未改，桌面端读起来也更顺。 -->
+                    <small style="color:#6b6254">点击图中位置即可查看该片段详情。如需结论，可切换到上方的「全书对比」。横轴是第几个片段（各书的总数不同），纵轴是「观察角度」里选的这个指标；一格约对应 1 万词。</small>
                 </div>
                 <div>
                     <button type="button" id="demo-entry" class="demo-entry" hidden onclick="loadComparisonExample()" title="自动挑出当前观察角度下差异最大的一对书，并切换到「全书对比」查看结论">载入对比示例</button>
