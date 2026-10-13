@@ -6622,3 +6622,13 @@ If-None-Match: 上面那串 → 304 ；If-None-Match: "deadbeef" → 200
 - **顺带发现、本轮没动的一条**：汇总文件缺失、库里只剩一本书时，顶部那句自动挑书的提示仍写「已替你选中差异最大的**两本**：…**它们**的…」，实际只有一本。这句在正常情形（4 本以上）下是对的，只在那个降级态里读着别扭；属本轮范围外，留档。
 - **线上那本测试书 `visitor-d-sample` 本批没清**：它只存在于**服务器**上，按「不推送就不动服务器」这条硬约束，**推迟到推送时一并 `rm -rf`**。
 - **本批未推送**：按老规矩等你说推；推的时候一并上服务器确认线上已更新（含上面那本测试书）。
+
+- **推送与上线（补记，2026-10-13 11:09 起）**：上一条「本批未推送」是这一节写下时的状态；你让我推，已经推了、也上线了，记录如下。
+- **推送**：`599c66b..0bdd97a`，推到 `github`（本仓库的远端名叫 `github`）。提交是 `0bdd97a`，9 个文件、492 增 135 删，含新建的 `tests/test_analysis_utils.py`；`p10.json` 仍是未跟踪、没进这次提交。结课报告的两道守卫照旧都过：`git check-ignore -v` 命中 `.gitignore:29`，`git log --all --name-only -- '*.pdf'` 里「结课报告」出现 **0** 次。
+- **cron 又没拉动，而且属于「等也没用」那一类**：推送后上服务器看，HEAD 还停在 `599c66b`；当场分辨——`https://api.github.com/` 返回 **200**，而 `https://github.com/` 用满 25 秒退出码 **124**，`fuser -v /run/lock/literature-autodeploy.lock` 还看到一个 `git` 正卡在 `timeout` 里。按上面「够不着 GitHub 要分两种病」的判据，这属于网络到不了那一类，加 `http.version=HTTP/1.1` 也治不了，所以**没有继续等**，直接打包直送。
+- **打包直送**（不依赖服务器出网）：本地 `git bundle create 599c66b..master` → `scp` 到服务器 `/tmp/` → `git fetch <bundle> master:refs/remotes/origin/master` → `git merge --ff-only origin/master` → `systemctl restart literature-fingerprinting`。服务器 `HEAD` 与 `origin/master` 都是 `0bdd97a`，服务 active（重启时刻 `11:10:13`）。这样 `origin/master` 仍指向 GitHub 上的同一个提交号，下次 `git pull` 不受影响。
+- **线上验活（实地看到，不是推断）**：`/`、`/visualization`、`/api/fingerprint-data`、`/static/js/d3-charts.js` 都返回 **200**；把 `/visualization` 从线上取下来、去掉 CR 之后与服务器磁盘上那份**逐字相同**（各 141,283 字节，`sha256 500e2a97…`），且这份线上页面里含本批第九条的**新写法**、不含旧的那个参数（`advCycleSort('mean')` 命中数为 0）；公网地址 `http://39.96.194.197/visualization` 同样 200 且含新写法。
+- **改动过的分析模块在生产环境里真的跑通了**：`/api/analysis/<书名>` 返回 200、不存在的书名返回 404，响应里的异常片段结构与本批补齐的形状一致；用生产 venv 把改动过的几个 py 文件 `py_compile` 一遍全过。线上是 Python 3.10 + 9 月初那套依赖，和本地 3.13 不是一套，所以这一步是特意做的。
+- **第五条那个「删掉同步下载」的改动，专门去核了生产上会不会变成新的报错源**：`/root/nltk_data/corpora/stopwords` 存在、且在 nltk 的搜索路径首位，生产 venv 里 `stopwords.words('english')` 取到 **198** 个词——本来就不会走到下载那一步，删掉 try/except 在生产上不会把上传链路变成 500。
+- **顺手核了隔壁项目**：nginx 同一个 server 块里还挂着 `/thesis/`（另一个项目），这次部署后仍返回 200，没被碰坏。
+- **线上那本测试书 `visitor-d-sample`：不用清了，因为本来就不在**。上线后按老规矩去 `rm -rf` 它，结果发现服务器上 `data/library/` **本身就是空的**（目录时间戳 `2026-10-11 23:27`），全盘 `find / -xdev -name '*visitor*'` 也只捞到几个第三方库的文件、没有任何测试书的痕迹。**不需要我动手，也就没有动手**——所以本批在线上**没有删过任何东西**。本地 `data/library/` 同样为空。
