@@ -60,7 +60,17 @@ def linear_trend(values):
     data = _clean(values)
     count = len(data)
     if count < 3:
-        return {"slope": None, "strength": None, "direction": "unknown", "volatility": None}
+        # 键要和下面正常路径**完全一致**（第五十二批）：这里原来少 slopePercent 与
+        # turningPoints 两个。今天没有消费者所以谁也看不见，但下一个读
+        # trend["turningPoints"] 的人会拿到 KeyError——而且只会**在片段数不足 3 的书上**炸。
+        return {
+            "slope": None,
+            "slopePercent": None,
+            "strength": None,
+            "direction": "unknown",
+            "volatility": None,
+            "turningPoints": None,
+        }
 
     xs = list(range(count))
     mean_x = sum(xs) / count
@@ -108,7 +118,12 @@ def detect_anomalies(values, z_threshold=2.0, max_items=8):
     data = _clean(values)
     count = len(data)
     if count < 5:
-        return {"items": [], "zThreshold": z_threshold, "counts": {"z": 0, "iqr": 0}}
+        # counts 的键也要和下面正常路径一致（第五十二批）：这里原来少一个 total。
+        # 正常路径那句注释写明了 total 是给谁用的（「一共找出多少个」，前端读它才
+        # 说得出「这里列了 8 个、其实有 20 个」）——少一个键就会让读它的人拿到
+        # KeyError，而且只在片段不足 5 条时炸。
+        return {"items": [], "zThreshold": z_threshold,
+                "counts": {"z": 0, "iqr": 0, "total": 0}}
 
     mean = sum(data) / count
     variance = sum((value - mean) ** 2 for value in data) / count
@@ -160,39 +175,3 @@ def analyze_series(values):
         "trend": linear_trend(values),
         "anomalies": detect_anomalies(values),
     }
-
-
-def series_correlation(a, b, n_points=100):
-    """
-    两条长度不同的序列的皮尔逊相关系数：先各自等距重采样到同样长度。
-    常数序列的相关系数无定义，返回 0。
-    """
-    left = _clean(a)
-    right = _clean(b)
-    if len(left) < 2 or len(right) < 2:
-        return 0.0
-
-    def resample(data):
-        if len(data) == 1:
-            return [data[0]] * n_points
-        step = (len(data) - 1) / (n_points - 1)
-        sampled = []
-        for i in range(n_points):
-            position = i * step
-            low = int(math.floor(position))
-            high = min(low + 1, len(data) - 1)
-            weight = position - low
-            sampled.append(data[low] * (1 - weight) + data[high] * weight)
-        return sampled
-
-    xs = resample(left)
-    ys = resample(right)
-    count = len(xs)
-    mean_x = sum(xs) / count
-    mean_y = sum(ys) / count
-    sxx = sum((x - mean_x) ** 2 for x in xs)
-    syy = sum((y - mean_y) ** 2 for y in ys)
-    if sxx == 0 or syy == 0:
-        return 0.0
-    sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
-    return sxy / math.sqrt(sxx * syy)

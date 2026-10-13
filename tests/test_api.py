@@ -177,6 +177,9 @@ class LibraryApiTestCase(unittest.TestCase):
         self.client.set_cookie(api_server.VISITOR_COOKIE, TEST_VISITOR, domain=REMOTE_HOST)
         # 限流是进程级的：不清理的话，用例一多就会互相拖累（后跑的用例收到 429）
         api_server._rate_state.clear()
+        # 语料缓存同样是进程级的。它是按内容指纹分格的，换了内容自然落空，
+        # 但同一格里的旧值会在改过 all_books.json 的用例之间串门——统一清掉。
+        api_server._corpus_cache.clear()
 
     def _cleanup(self):
         for p in self._patches:
@@ -190,14 +193,21 @@ class LibraryApiTestCase(unittest.TestCase):
                           encoding="utf-8")
         return target
 
-    def _post_analyze(self, filename, content=b"content", save=True, client=None):
-        """带桩地走 /api/analyze：不做真实 NLTK 分析。"""
+    def _post_analyze(self, filename, content=b"content", save=True, client=None,
+                      replace_target=None):
+        """带桩地走 /api/analyze：不做真实 NLTK 分析。
+
+        replace_target 只在**显式传了**的时候才放进表单——「不带这个字段」
+        本身就是被测的一种情形（见 test_upload_without_replace_target_…）。
+        """
         with stub_block_count(2), \
              mock.patch("src.data_loader.get_blocks", return_value=["alpha", "beta"]), \
              mock.patch("src.pipeline.build_book_data", return_value=FAKE_BOOK):
             data = {"file": (io.BytesIO(content), filename)}
             if save:
                 data["save"] = "1"
+            if replace_target is not None:
+                data["replace_target"] = replace_target
             return (client or self.client).post("/api/analyze", data=data,
                                                 content_type="multipart/form-data")
 
@@ -1457,6 +1467,145 @@ class ExcerptEndpointTestCase(LibraryApiTestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.mimetype, "image/svg+xml")
         self.assertIn(b"<svg", resp.get_data())
+
+    # ---- 回归：第五十二批修掉的那几处（全量 code review 的产物）----
+
+    def test_upload_without_replace_target_leaves_a_book_named_book_alone(self):
+        """不带 replace_target 的上传，**不能**碰书架上那本叫 book 的书。
+
+        sanitize_book_name("") 的兜底是返回字面量 "book"，那是个真值。以前是先清洗
+        再判真假，于是「压根没传这个字段」被读成「用户点头要替换 book」——
+        而这次上传的文件根本不叫 book。
+        """
+        target = self._put_library("book")
+        before = target.read_bytes()
+
+        resp = self._post_analyze("NewBook.txt")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["book"], "NewBook")
+        self.assertEqual(target.read_bytes(), before, "书架上那本 book 被静默顶掉了")
+        self.assertTrue((self.shelf / "NewBook.json").exists())
+
+    def test_upload_with_replace_target_replaces_that_book(self):
+        """带合法 replace_target 时才真的替换——这是给上面那条做对照。"""
+        target = self._put_library("book")
+
+        resp = self._post_analyze("NewBook.txt", replace_target="book")
+
+        payload = resp.get_json()
+        self.assertEqual(payload["book"], "book")
+        self.assertTrue(payload.get("replacedExisting"))
+        self.assertFalse((self.shelf / "NewBook.json").exists(), "又多存了一本")
+        # 落盘那份带着新签发的删除令牌，说明它确实被重写过
+        self.assertIn("_deleteToken", json.loads(target.read_text(encoding="utf-8")))
+
+    def test_save_failure_does_not_claim_the_old_book_was_replaced(self):
+        """落盘失败时不能说「旧的那本已经替换掉了」——磁盘上它还好好躺着。"""
+        self._put_library("Alice")
+
+        with mock.patch.object(api_server, "_save_library_book",
+                               side_effect=OSError("disk full")):
+            resp = self._post_analyze("Alice.txt")
+
+        payload = resp.get_json()
+        self.assertFalse(payload["saved"])
+        self.assertIn("warning", payload)
+        self.assertNotIn("replacedExisting", payload)
+
+    def test_save_success_still_reports_the_replacement(self):
+        """落盘成功时那句提醒照旧要说——别把上面那条修过头了。"""
+        self._put_library("Alice")
+
+        payload = self._post_analyze("Alice.txt").get_json()
+
+        self.assertTrue(payload["saved"])
+        self.assertTrue(payload.get("replacedExisting"))
+        self.assertNotIn("warning", payload)
+
+    def test_rate_state_pruning_keeps_visitors_who_are_still_throttled(self):
+        """限流表溢出时只丢「早就攒满」的那些，不能把所有人的额度一起归零。
+
+        原来这里是 _rate_state.clear()：一个人刷爆键数，全站跟着被解封——
+        与「按访客分桶」是同一个方向上的漏。
+        """
+        api_server._rate_state.clear()
+        now = api_server.time.monotonic()
+        api_server._rate_state["upload:v:someone"] = (0.5, now)  # 额度没恢复，留着
+        for i in range(2001):
+            api_server._rate_state[f"filler:ip:10.0.0.{i}"] = (api_server._RATE_CAPACITY, now)
+
+        api_server._rate_limited("probe:ip:1.2.3.4")
+
+        self.assertIn("upload:v:someone", api_server._rate_state)
+        self.assertNotIn("filler:ip:10.0.0.0", api_server._rate_state)
+        self.assertLessEqual(len(api_server._rate_state), 3)
+
+    def test_corpus_fallback_wraps_the_single_book_in_a_mapping(self):
+        """汇总文件缺失时的兜底，返回的必须是 {书名: 书} 这层映射。
+
+        以前它直接把单书文件里那个裸 dict 交出去，整个库被当成「一本书」，
+        前端按书名取书全部落空。顺带：同一个目录里还躺着 pca_model.json，
+        按修改时间取最新的那一个会把它当成一本书——所以要从新到旧找第一本
+        **有 metadata 的**。
+        """
+        (self.processed / "all_books.json").unlink()
+        (self.processed / "Solo.json").write_text(json.dumps(FAKE_BOOK), encoding="utf-8")
+        (self.processed / "pca_model.json").write_text(json.dumps({"mean": [0.0]}),
+                                                       encoding="utf-8")
+        api_server._corpus_cache.clear()
+
+        data, message = api_server._load_corpus(TEST_VISITOR)
+
+        self.assertIsNotNone(data)
+        self.assertIn("Solo", data)
+        self.assertIn("metadata", data["Solo"])
+        self.assertNotIn("pca_model", data)
+        self.assertIn("Solo.json", message)
+
+    # ---- /api/analysis ----
+
+    def _put_corpus(self, books):
+        """把 all_books.json 换成给定的一份，并作废语料缓存。"""
+        (self.processed / "all_books.json").write_text(
+            json.dumps(books, ensure_ascii=False), encoding="utf-8")
+        api_server._corpus_cache.clear()
+
+    def test_analysis_rejects_unknown_metric(self):
+        resp = self.client.get(f"/api/analysis/{quote(BUILTIN_NAME)}?metric=没有这个角度")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.get_json()["status"], "error")
+
+    def test_analysis_unknown_book_is_404(self):
+        resp = self.client.get("/api/analysis/NoSuchBookHere")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_analysis_too_few_blocks_is_404(self):
+        """片段不足 5 条时明确说「做不了」，不是给一堆空数组让人以为没异常。"""
+        resp = self.client.get(f"/api/analysis/{quote(BUILTIN_NAME)}")
+        self.assertEqual(resp.status_code, 404)
+        self.assertIn("片段", resp.get_json()["message"])
+
+    def test_analysis_returns_summary_trend_and_anomalies(self):
+        """正常一本书：统计量、趋势、异常片段三块都要有，且片段号能对回去。"""
+        series = [{"block": i, "value": 10.0 + (i % 3) * 0.1} for i in range(6)]
+        series.append({"block": 6, "value": 60.0})
+        self._put_corpus({"Big": {"sentenceLength": series,
+                                  "metadata": {"totalBlocks": 7}}})
+
+        resp = self.client.get("/api/analysis/Big?metric=sentenceLength")
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["book"], "Big")
+        self.assertEqual(payload["metric"], "sentenceLength")
+        self.assertEqual(payload["summary"]["count"], 7)
+        self.assertEqual(payload["trend"]["direction"], "up")
+        # 那个 60 是第 7 个片段（block 6），异常条目的 block 号必须指回它
+        self.assertEqual([item["block"] for item in payload["anomalies"]], [6])
+        self.assertEqual(payload["anomalyCounts"]["total"], 1)
+        self.assertEqual(payload["totalBlocks"], 7)
 
 
 if __name__ == "__main__":

@@ -524,12 +524,24 @@ def _load_corpus(visitor=None):
     # 找不到汇总文件时，退回「最新的单书文件」（保持原有后备逻辑）
     processed_dir = target_file.parent
     if processed_dir.exists():
-        data_files = sorted(processed_dir.glob("*.json"), key=os.path.getctime)
-        if data_files:
-            latest = data_files[-1]
-            with open(latest, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data, f"未找到汇总文件，加载了最新的单书文件: {latest.name}"
+        # 从新到旧扫，取第一本**看起来真是书**的。同一个目录里还躺着
+        # pca_model.json（generate_data.py 写的投影模型），按修改时间取最新的那一个
+        # 会把它当成一本书。判定沿用上面合并书架时那条：有 metadata 才算书。
+        data_files = sorted(processed_dir.glob("*.json"), key=os.path.getctime, reverse=True)
+        for latest in data_files:
+            try:
+                with open(latest, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            if not isinstance(data, dict) or "metadata" not in data:
+                continue
+            # 单书文件里是**一本书自己的 dict**，而下面所有调用方要的都是
+            # {书名: 书} 这层映射（正常路径也是这么返回的，见上面
+            # data[lib_file.stem] = ...）。以前这里直接把裸 dict 交出去，
+            # 于是整个库被当成「一本书」，前端按书名去取全部落空（第五十二批）。
+            # 键用文件名 stem，与 generate_data.py 写单书文件的口径一致。
+            return {latest.stem: data}, f"未找到汇总文件，加载了最新的单书文件: {latest.name}"
 
     return None, None
 
@@ -583,9 +595,14 @@ def _visitor_rate_key(prefix):
 
 
 def _rate_limited(client_ip):
+    global _rate_state
     now = time.monotonic()
-    if len(_rate_state) > 2000:  # 防止陌生人刷 IP 把内存撑大
-        _rate_state.clear()
+    if len(_rate_state) > 2000:
+        # 防止陌生人刷 IP 把内存撑大。**别用 clear()**（第五十二批）：那会把每个访客的
+        # 桶一起归零，等于「一个人刷爆键数，全站跟着被解封」——与上一批刚改好的
+        # 「按访客分桶」是同一个方向上的漏。只丢掉**早就攒满**的那些：攒满说明他
+        # 早已恢复额度，丢掉零损失。（桶容量只有 10，正常访客根本到不了 2000 个键。）
+        _rate_state = {k: v for k, v in _rate_state.items() if v[0] < _RATE_CAPACITY - 1}
     tokens, last = _rate_state.get(client_ip, (_RATE_CAPACITY, now))
     tokens = min(_RATE_CAPACITY, tokens + (now - last) / _RATE_REFILL_SECONDS)
     _rate_state[client_ip] = (tokens - 1 if tokens >= 1 else tokens, now)
@@ -649,11 +666,17 @@ def _ensure_demo_data():
 
 
 def _serve_visualization():
-    """返回 D3.js 可视化页面（优先项目根目录，其次 static 目录）。"""
-    try:
-        return send_file('d3_visualization.html')
-    except Exception:
-        return send_from_directory('static', 'd3_visualization.html')
+    """返回 D3.js 可视化页面。
+
+    相对文件名在 Flask 里是按**应用根目录**（current_app.root_path，也就是本文件
+    所在那一层）解析的，不是按当前工作目录——所以从哪个目录启动都找得到，不需要
+    「先试根目录、再试 static」那套。
+
+    两条路由（/ 与 /visualization）共用这一处（第五十二批合并）。原先各写了一遍，
+    /visualization 那份还挂着一条指向 static/d3_visualization.html 的兜底——
+    那个路径根本不存在，它唯一的作用是把「页面文件真的没了」翻译成 404。
+    """
+    return send_file('d3_visualization.html')
 
 
 @app.route('/')
@@ -666,18 +689,15 @@ def index():
 @app.route('/visualization')
 def visualization():
     """
-    提供 D3.js 可视化页面
+    提供 D3.js 可视化页面（这条路由独有的那条错误文案留在这里）
     """
     try:
-        # 尝试从根目录发送文件
-        return send_file('d3_visualization.html')
-    except:
-        try:
-            # 如果不在根目录，尝试从static目录发送
-            return send_from_directory('static', 'd3_visualization.html')
-        except Exception:
-            app.logger.exception("找不到可视化页面文件")
-            return "错误: 找不到可视化页面文件。请确保 d3_visualization.html 在项目根目录或 static 文件夹中。", 404
+        return _serve_visualization()
+    except Exception:
+        # 以前这里是**裸 except:**（第五十二批改掉）——它连 KeyboardInterrupt /
+        # SystemExit 一起吞，Ctrl-C 停服务时会被记成「找不到页面」。
+        app.logger.exception("找不到可视化页面文件")
+        return "错误: 找不到可视化页面文件。请确保 d3_visualization.html 在项目根目录。", 404
 
 @app.route('/favicon.ico')
 def favicon():
@@ -1050,7 +1070,14 @@ def analyze_upload():
     # 只认「它确实在这个访客自己的书架上」的取值。不校验的话，前端就能指名道姓地
     # 覆盖书架上任何一本（甚至靠路径穿越跑出这个访客的目录）。认不出就当作没传，
     # 照旧走 _resolve_final_name 的默认优先级。
-    replace_target = sanitize_book_name(request.form.get("replace_target") or "")
+    #
+    # 「没传」必须先判原值、再清洗（第五十二批）：sanitize_book_name("") 的兜底是返回
+    # 字面量 "book"（见它自己的注释——空文件名也得有个名字），那是个真值。所以
+    # 任何**不带**这个字段的上传都会拿到 replace_target="book"；只要该访客书架上
+    # 恰好有一本叫 book 的书（传一个 .txt 就会叫这个名），这一次上传就把那一本
+    # 整份顶掉了，而用户从没表达过要替换任何东西。
+    _replace_raw = (request.form.get("replace_target") or "").strip()
+    replace_target = sanitize_book_name(_replace_raw) if _replace_raw else ""
     if replace_target and replace_target in _library_keys():
         final_name = replace_target
     else:
@@ -1101,7 +1128,10 @@ def analyze_upload():
         resp["renamedFrom"] = sanitize_book_name(base_name)
     # 覆盖也要说出来，而且要说得比改名更重：这次保存把同名旧书整份换掉了，
     # 上一版的分析已经不存在，用户可能正指望它。
-    if want_save and replaced_existing:
+    # 「没落盘」就不是替换（第五十二批）：save_error 有值时磁盘上那本**原封不动**，
+    # 而这一句会和下面的 warning 同批下发，前端于是同时说「旧的那本已经被替换掉了」
+    # 和「没能存进书架」——两句话互相打脸，用户以为旧书没了。
+    if want_save and replaced_existing and not save_error:
         resp["replacedExisting"] = True
     # 反向的那个坑：这次没勾选保存，但书名和书库里已有的一本重名。屏幕上显示的是
     # 这一次的分析结果，磁盘上留着的还是那一本旧的——两个「同一本书」不同内容，

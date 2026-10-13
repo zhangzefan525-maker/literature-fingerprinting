@@ -1,4 +1,3 @@
-import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 from collections import Counter
@@ -180,32 +179,6 @@ def project_blocks(matrix, model):
     components = np.asarray(model["components"], dtype=float)
     return (data - mean) @ components.T
 
-
-def get_pca_coordinates(all_blocks, model=None):
-    """
-    4. 计算 PCA 投影 (Function Words Analysis) - 升级版 (2D)
-
-    保留为兼容入口。不传 model 时按「单本书自己拟合」处理，
-    这种情况下坐标不可与其它书直接比较（仅在共享模型缺失时才会走到）。
-
-    Args:
-        all_blocks (List[str]): 整本书的所有文本块列表
-        model (dict | None): 共享投影模型，见 src/projection.py
-
-    Returns:
-        List[{"x": float, "y": float}]
-    """
-    matrix, _ = function_word_matrix(all_blocks)
-    if matrix is None:
-        return [{"x": 0.0, "y": 0.0} for _ in all_blocks]
-
-    if model is None:
-        model = fit_pca_projection(matrix)
-
-    coords = project_blocks(matrix, model)
-    # x 用于热力图（第一主成分），x、y 联合用于风格星系
-    return [{"x": float(v[0]), "y": float(v[1])} for v in coords]
-
     
 # ---------------------------------------------------------
 # 任务 E：高频关键词提取 (Keyword Extraction)
@@ -224,13 +197,13 @@ def get_top_keywords(text_block, n=5):
     # 2. 复用之前的清洗逻辑拿到单词列表
     words = _clean_tokens(text_block)
     
-    # 3. 获取停用词表 (确保数据已下载)
-    try:
-        stop_words = set(stopwords.words('english'))
-    except LookupError:
-        nltk.download('stopwords')
-        stop_words = set(stopwords.words('english'))
-    
+    # 3. 获取停用词表
+    # 下载点全项目只有 src/pipeline.py 的 _ensure_nltk_data() 一处，而且它一定比这里先跑
+    # （build_book_data 在本函数之前就调过它）。所以这里**不**再兜一层下载（第五十二批）：
+    # 那样写并没有兜住任何东西——下载失败照样抛 LookupError——反而会在断网的机器上
+    # 把一次用户请求同步挂住几十秒去等网络。同文件的 function_word_matrix 也是直接取。
+    stop_words = set(stopwords.words('english'))
+
     # 4. 过滤：只保留不在停用词表里的词
     content_words = [w for w in words if w not in stop_words]
     
