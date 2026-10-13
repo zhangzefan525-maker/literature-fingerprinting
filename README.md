@@ -6686,3 +6686,24 @@ If-None-Match: 上面那串 → 304 ；If-None-Match: "deadbeef" → 200
   - **标题层级倒挂**：`.detail-panel h3` 没写字号，吃浏览器默认 18.72px，比它父级的 h2（内联写死 18px）还大；同一层的 h4 有 13 / 14 / 16 三种大小。三个视图大标题是同一段内联样式**抄了三遍**，图标一半是内联 SVG 符号、一半是 emoji。没有 `meta description` / 分享卡片 / `theme-color`，也不跟随系统深色模式。
 - **`truncateText` 少 2 个字符、`literature-autodeploy.sh` 失败时记 `rc=0`**：上一批已留档，本批不动，理由照旧。
 - **本批先不推送**：按老规矩等你说推；推的时候一并上服务器确认线上已更新。
+
+
+- **推送与上线（补记，2026-10-13 15:32 起）**：上一条「本批先不推送」是这一节写下时的状态；你让我「改完直接推送」，已经推了、也上线了，记录如下。
+
+- **推送**：`69aada2..348373e`，推到 `github`（本仓库的远端名叫 `github`）。提交是 `348373e`，4 个文件、73 增 5 删（`d3_visualization.html`、`static/css/d3-style.css`、`static/js/d3-charts.js`、`README.md`）；`p10.json` 仍是未跟踪、没进这次提交。结课报告的两道守卫照旧都过：`git check-ignore -v` 命中 `.gitignore:29`，`git log --all --name-only -- '*.pdf'` 里「结课报告」出现 **0** 次。
+
+- **这一批的 cron 自己拉动了——不是每次都拉不动**。上服务器第一眼看 HEAD 还停在 `69aada2`，隔了一两分钟再看已经是 `348373e`：自动部署在 `15:32:03` 记下 `69aada2… -> 348373e…`，`15:32:07` 记下 `[ok] restarted, HEAD=348373e, serving`。所以**没有走打包直送**，`origin/master` 与服务器 HEAD 都是 `348373e`。日志里紧挨着的几行 `fatal: unable to access … Empty reply from server` 是同一时段内的偶发失败——同一台机器、同一个地址，重试几次就过去了；这与这份 README 里记过的「GnuTLS recv error / 443 连不通」是同一类间歇故障。
+
+- **顺手纠正上一批留档里的一个说法**：上一批把「cron 拉不动」记成两种病（HTTP/2 framing vs 网络到不了）。这次现场看到一个第三类：`curl https://github.com/` 返回 **200**、`api.github.com` 也是 **200**，而 `git fetch` 报的是 `Empty reply from server`——**能连上、但握不上手**，属于间歇性失败而不是「够不着」。这类不用改配置、也不用改脚本，隔一次就成。
+
+- **我自己摆的一个乌龙（记下来免得再犯）**：上服务器第一次用的是 `git ls-remote github master`，报 `'github' does not appear to be a git repository`、rc=128——**那是我敲错了远端名**，服务器上只有 `origin`（指向 `https://github.com/zhangzefan525-maker/literature-fingerprinting.git`）。差点当成「服务器的 GitHub 权限坏了」。以后在服务器上一律用 `origin`。
+
+- **线上验活（实地看到，不是推断）**：`/`、`/visualization`、`/thesis/`（nginx 同 server 块下的另一个项目）都返回 **200**；服务 `active`、`NRestarts=0`。把 `/` 从线上取下来、去掉 CR 之后与服务器磁盘上那份 `d3_visualization.html` **逐字相同**（各 141,798 字节，`sha256 d415768f4830…`）；`/static/js/d3-charts.js` 与 `/static/css/d3-style.css` 同样线上等于磁盘。
+
+- **三处改动逐条在线上核了，且都验了「旧写法已不在」**：页面含新语序「点击图中位置即可查看该片段详情。如需结论…」、不含旧语序（「…一格约对应 1 万词。点击…」命中 **False**）；脚本含 `offsetParent !== null && !el.disabled`，导出那一行也已经是「数据在前、注释在后」的拼接，而旧的「注释在先」写法在线上搜不到；样式表含本批新写的注释。**每一条都是「新的在、旧的没了」，不是只看新的在。**
+
+- **本批没有 Python 改动**，所以严格说不需要重启；但自动部署的流程自己重启了一次（`15:32:07`），服务照常起来、`NRestarts=0`。
+
+- **服务器上 `requirements.server.txt` 仍是未跟踪**（`git status --porcelain` 只列出它一行）——这是它本来的状态，**没有动**。
+
+- **本批没有在服务器上删过任何东西**：清单只有 `git fetch` + `git merge --ff-only` + 自动部署脚本自己的重启，没有 `rm`。
