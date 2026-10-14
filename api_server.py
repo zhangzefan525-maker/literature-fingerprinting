@@ -13,6 +13,7 @@ import math
 import os
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 
@@ -763,6 +764,93 @@ def get_fingerprint_data():
             "status": "error",
             "message": "服务器读取分析数据时出错，请稍后重试。"
         }), 500
+
+# ---------------------------------------------------------------------------
+# 作者归属（第五十五批）。这个页签的数据是**现算**的，不走 data/processed/。
+#
+# 为什么不跟着 generate_data.py 一起算好、存进 data/processed/ ——两条都是真会踩的坑：
+#   1) generate_data.py 重算时，会把 data/processed/ 里不在它 keep 集合里的 *.json
+#      **直接删掉**，新文件下次重算就没了；
+#   2) _load_corpus() 在没有汇总文件时按修改时间扫 data/processed/*.json，
+#      挑「第一个含 metadata 的」当成一本书——多一个文件就多一分被误认成书的风险。
+# 所以宁可现算。这也保证了一件更要紧的事：**它碰不到既有三个指标与任何投影坐标。**
+#
+# 代价是第一次要十几秒（要把四本书全文按六套词表各向量化一遍）。所以结果按
+# data/raw 的指纹缓存在内存里：每个进程的第一个请求慢，之后的请求是瞬时的。
+# 前端在**页面加载时**就取这份数据（而不是等读者点开这个页签才取），
+# 于是掏这笔钱的通常是「还在看别的页签」的那个人。
+# ---------------------------------------------------------------------------
+_AUTHORSHIP_CACHE = {}
+_AUTHORSHIP_CACHE_MAX = 4
+_AUTHORSHIP_LOCK = threading.Lock()
+
+
+def _raw_stamp():
+    """data/raw 下所有 .txt 的指纹（文件名 + 修改时间 + 大小）；增删改都会让它变。"""
+    stamp = []
+    if DATA_DIR.exists():
+        for path in sorted(DATA_DIR.glob("*.txt")):
+            item = _file_stamp(path)
+            if item is None:
+                continue
+            stamp.append((path.name,) + item)
+    return tuple(stamp)
+
+
+def _authorship_payload():
+    """
+    算好（或直接给出缓存里的）作者归属结果；没有原文可算时返回 None。
+
+    加锁是因为第一次要跑十几秒：不加的话两个请求同时进来会各算一遍，
+    等于让服务器在最忙的时候干双份活。锁住之后第二个请求等第一个算完、直接拿缓存。
+    """
+    from src.authorship import analyze  # 放在函数里：用不到这个页签时不必为它付出导入成本
+
+    stamp = _raw_stamp()
+    if not stamp:
+        return None
+    cached = _AUTHORSHIP_CACHE.get(stamp)
+    if cached is not None:
+        return cached
+
+    with _AUTHORSHIP_LOCK:
+        cached = _AUTHORSHIP_CACHE.get(stamp)   # 等锁期间可能已经有人算完了
+        if cached is not None:
+            return cached
+        if len(_AUTHORSHIP_CACHE) >= _AUTHORSHIP_CACHE_MAX:
+            _AUTHORSHIP_CACHE.clear()           # 实际上只会有一个键；防的是万一
+        result = analyze(DATA_DIR)
+        _AUTHORSHIP_CACHE[stamp] = result
+        return result
+
+
+@app.route('/api/authorship', methods=['GET'])
+def get_authorship():
+    """
+    作者归属分析：距离矩阵 / 聚类树 / 留一书验证 / 词表敏感性。
+
+    只读 data/raw/，不参与 /api/fingerprint-data 那条链路，也不改任何既有数值。
+    """
+    try:
+        payload = _authorship_payload()
+        if payload is None or not payload.get("enough"):
+            # 说人话：这句话会原样显示在界面上，判据是「读者能不能知道发生了什么」。
+            # 这里**不能**写「上传一本书就能用」——上传的书没有作者，本来就不参与这项分析。
+            message = (payload or {}).get("message") or \
+                "这台服务器上还没有可供分析的原文，作者归属暂时算不出来。"
+            return jsonify({"status": "error", "message": message}), 404
+        return jsonify({
+            "status": "success",
+            "message": "作者归属分析完成",
+            "data": payload,
+        })
+    except Exception:
+        app.logger.exception("作者归属分析失败")
+        return jsonify({
+            "status": "error",
+            "message": "服务器计算作者归属时出错，请稍后重试。"
+        }), 500
+
 
 @app.route('/api/book/<book_name>', methods=['GET'])
 def get_book_data(book_name):

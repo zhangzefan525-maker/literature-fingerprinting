@@ -1629,6 +1629,229 @@ button:hover {
     color: var(--vermilion);
 }
 
+/* ---------- 作者归属（第四个页签） ---------- */
+/* 这一页的内容全部由 renderAuthorship() 生成，所以样式都在这里，HTML 里只有两个
+   写死的东西：页头那句说明、和一个空容器。色值一律走既有的纸墨变量，不新造颜色——
+   它和另外三个页签并排，长得必须是一家人。 */
+
+.auth-state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--vermilion);
+    border-radius: 8px;
+    padding: 16px 18px;
+    color: var(--ink-70);
+    font-size: 13px;
+    line-height: 1.75;
+}
+
+.auth-state b { color: var(--ink-100); font-size: 14px; }
+.auth-state span { max-width: 70ch; }
+.auth-state-error { border-left-color: var(--err); }
+
+.auth-retry {
+    margin-top: 4px;
+    padding: 5px 14px;
+    font-size: 12px;
+}
+
+.auth-hero {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--vermilion);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+}
+
+.auth-hero h3 {
+    margin: 0 0 6px 0;
+    font-size: 15px;
+    line-height: 1.75;
+    color: var(--ink-100);
+    font-family: var(--font-display);
+}
+
+.auth-note {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.75;
+    color: var(--ink-50);
+}
+
+.auth-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+    align-items: start;
+}
+
+.auth-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+}
+
+.auth-grid-2 .auth-card { margin-bottom: 0; }
+
+.auth-card h4 {
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    color: var(--ink-70);
+    border-bottom: 1px solid var(--border-soft);
+    padding-bottom: 6px;
+    font-family: var(--font-display);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.auth-hint {
+    flex: none;
+    font-size: 10px;
+    font-weight: normal;
+    color: var(--ink-50);
+}
+
+/* 距离矩阵。
+   这里必须是 separate：collapse 下 td 的 border-radius 不生效，而这套底色是靠
+   「圆角小方块之间有缝」才看得成一张矩阵的。缝由 border-spacing 给。 */
+.auth-matrix {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 3px;
+    font-size: 12px;
+    color: var(--ink-100);
+}
+
+.auth-matrix caption {
+    caption-side: top;
+    text-align: left;
+    font-size: 11px;
+    line-height: 1.75;
+    color: var(--ink-50);
+    padding-bottom: 8px;
+}
+
+.auth-matrix th,
+.auth-matrix td { text-align: center; padding: 8px 6px; }
+
+/* 这里不设 nowrap。列头是「作者 年份」，允许在中间折行，表格的最小宽度就
+   掉到「最长的一段不断行文字」那么小；否则四个列头各自的整宽会把表格撑到
+   比卡片还宽——卡片是 overflow-x:auto，代价就是矩阵底下多出一条横向滚动条，
+   而它滚出来的只有 3 个像素。折行的代价是多一行字，比一条假滚动条诚实。 */
+.auth-matrix thead th {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-70);
+    white-space: normal;
+}
+
+.auth-matrix .auth-corner { border: none; padding: 0; }
+
+.auth-matrix tbody th {
+    text-align: left;
+    font-weight: 400;
+    padding: 4px 10px 4px 0;
+    min-width: 96px;
+}
+
+.auth-row-title {
+    display: block;
+    font-size: 12px;
+    color: var(--ink-100);
+    white-space: nowrap;
+}
+
+.auth-row-meta {
+    display: block;
+    font-size: 10px;
+    color: var(--ink-50);
+    white-space: nowrap;
+}
+
+.auth-matrix tbody td {
+    border-radius: 6px;
+    min-width: 46px;
+    font-variant-numeric: tabular-nums;
+}
+
+.auth-diagonal { background: var(--elev); color: var(--ink-50); }
+
+/* 三张结果表 */
+.auth-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    color: var(--ink-100);
+}
+
+.auth-table caption {
+    caption-side: top;
+    text-align: left;
+    font-size: 11px;
+    line-height: 1.75;
+    color: var(--ink-50);
+    padding-bottom: 8px;
+}
+
+.auth-table th,
+.auth-table td {
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border-soft);
+    vertical-align: top;
+    line-height: 1.75;
+}
+
+.auth-table thead th {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-70);
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border);
+}
+
+.auth-table tbody th { font-weight: 600; white-space: nowrap; }
+.auth-table tbody tr:last-child th,
+.auth-table tbody tr:last-child td { border-bottom: none; }
+
+/* 不设 nowrap：「✓ 判对，判给马克·吐温的《哈克贝利·费恩历险记》」这一句不换行时
+   一个人就有 300px 宽，在手机上是它把右边两列整个顶出屏幕的。 */
+.auth-verdict { min-width: 190px; }
+
+.auth-dist {
+    color: var(--ink-50);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* 判错的行整体染一层淡朱砂。这份数据里四本全判对，所以这条平时不出现——
+   留着是因为语料一换它就可能出现，而「有一本判错了」必须一眼看得见。 */
+.auth-miss { background: var(--vermilion-soft); }
+
+.auth-bar-cell { width: 34%; min-width: 90px; padding-top: 14px !important; }
+
+.auth-bar {
+    display: block;
+    height: 8px;
+    min-width: 2px;
+    border-radius: 4px;
+    background: var(--ok);
+}
+
+.auth-dendro { width: 100%; }
+.auth-dendro svg { display: block; }
+
 /* ---------- 模态框（原文深读） ---------- */
 .galaxy-modal-overlay {
     position: fixed;
@@ -1929,6 +2152,10 @@ button:hover {
     .charts-area { grid-template-rows: auto auto; }
     .dash-card { min-height: 320px; }
     .drill-panel { min-height: 280px; }
+    /* 作者归属那两张并排的卡片（距离矩阵、聚类树）：宽度不够时竖过来。
+       聚类树的宽度是画的时候量下来的，所以窗口一变必须重画——见
+       refreshAllActiveCharts 里那句注释。 */
+    .auth-grid-2 { grid-template-columns: 1fr; }
     .galaxy-modal-content { width: 88%; padding: 24px; }
     .galaxy-hud { width: 220px; }
 }
@@ -1960,7 +2187,7 @@ button:hover {
 .metric-bar { order: 3; }
 .tab-navigation { order: 4; }
 #global-status { order: 5; }
-#view-main, #view-galaxy, #view-dashboard { order: 6; }
+#view-main, #view-galaxy, #view-dashboard, #view-authorship { order: 6; }
 .global-toolbar { order: 7; margin: 10px 0 18px; }
 .upload-bar { order: 8; }
 #quickstart { order: 9; }
@@ -2063,6 +2290,80 @@ button:hover {
     .dash-card { min-height: 280px; padding: 8px; }
     .drill-panel { min-height: 260px; }
     .insight-panel { padding: 12px 14px; }
+
+    /* 作者归属：手机上把留白与字号各收一档。
+       这三个页签里，只有这一页是「表格里才有答案」——留一书那张表的第四列
+       「有多拿得准」正是结论本身，横向可滚等于把它藏在屏幕外（读者多半不会
+       想到去横滑）。所以手机上一律改成竖排卡片：每个单元格自己带列名（列名
+       由 JS 写成 data-label，见 d3-charts.js 的 authorshipLooHtml 等）。
+       距离矩阵例外，它是矩阵不是记录——行列位置本身就是信息，拆成卡片就读不
+       懂谁和谁了。矩阵改成压缩显示：缝收窄、字号一小档、书名的两行允许换行。 */
+    .auth-grid-2 { gap: 12px; margin-bottom: 12px; }
+    .auth-card { padding: 10px 12px; margin-bottom: 12px; }
+    .auth-hero { padding: 12px 14px; margin-bottom: 12px; }
+    .auth-hero h3 { font-size: 14px; }
+
+    .auth-table { font-size: 12px; }
+    .auth-table thead { display: none; }
+    /* 表格一旦变成 display:block，<caption> 就落进一个匿名表盒里、被缩成
+       「最窄能放下一列」的宽度——那两行说明文字会一个字一行地竖下来，
+       比原来的问题还难看。caption 必须跟着一起变 block、拿回整幅宽度。
+       （.auth-matrix 没这问题：它还留着 display:table。） */
+    .auth-table caption { display: block; }
+    .auth-table,
+    .auth-table tbody,
+    .auth-table tr,
+    .auth-table th,
+    .auth-table td { display: block; width: auto; }
+    .auth-table tr {
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border-soft);
+    }
+    .auth-table tbody tr:last-child { border-bottom: none; }
+    .auth-table tbody th,
+    .auth-table tbody th .auth-row-title { white-space: normal; }
+    .auth-table tbody th {
+        padding: 0 0 4px 0;
+        border-bottom: none;
+    }
+    .auth-table td {
+        padding: 2px 0;
+        border-bottom: none;
+        display: flex;
+        gap: 8px;
+    }
+    .auth-table td::before {
+        content: attr(data-label) "：";
+        flex: none;
+        /* 10em 是按最长的那个列名算的：「到其它几本的距离」／「实际参与比较的词」
+           都是 8 个字 + 全角冒号，11px 下约 99px。窄一格就会折成两行，值跟着
+           第一行跑，读起来像是错位的。 */
+        width: 10em;
+        color: var(--ink-50);
+        font-size: 11px;
+    }
+    /* 条形图那一格没有列名可报（它画的就是上一格那个数），整格交给色条。
+       选择器必须带 .auth-table 和 td：上面那条「每个单元格都挂列名」写的是
+       .auth-table td::before，权重比 .auth-bar-cell::before 高一档——写轻了
+       不但消不掉列名，还会让这里多出一个孤零零的全角冒号，并把它那 10em
+       的宽度从色条手里抢走（色条于是全被压到同一个长度，看着像四本一样准）。 */
+    .auth-table td.auth-bar-cell { width: auto; padding-top: 4px !important; }
+    .auth-table td.auth-bar-cell::before { content: none; }
+    .auth-verdict { min-width: 0; }
+
+    /* 距离矩阵：这是唯一一张不能改成卡片的表，所以只压缩、不重排。
+       缝从 3px 收到 2px、字号收到 10px，书名的两行放开换行（手机上一行放不下
+       「《哈克贝利·费恩历险记》」）——否则最后一列会被挤出屏幕，而屏幕上没有
+       任何东西提示右边还有内容。 */
+    .auth-matrix { font-size: 10px; border-spacing: 2px; }
+    .auth-matrix caption { font-size: 10px; padding-bottom: 6px; }
+    .auth-matrix th, .auth-matrix td { padding: 5px 3px; }
+    .auth-matrix thead th { font-size: 10px; white-space: normal; }
+    .auth-matrix tbody th { min-width: 0; padding: 3px 6px 3px 0; }
+    .auth-matrix tbody td { min-width: 0; }
+    .auth-row-title, .auth-row-meta { white-space: normal; }
+    .auth-row-title { font-size: 11px; }
+    .auth-row-meta { font-size: 9px; }
 
     .galaxy-hud {
         width: auto;
@@ -2737,6 +3038,7 @@ button.copy-failed:hover {
     .adv-header,
     .detail-panel,
     .dash-card,
+    .auth-card,
     .galaxy-section,
     .footer {
         break-inside: avoid;

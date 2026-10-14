@@ -4,7 +4,10 @@
 const API_BASE_URL = '';
 const API_ENDPOINTS = {
     fingerprintData: `${API_BASE_URL}/api/fingerprint-data`,
-    books: `${API_BASE_URL}/api/books`
+    books: `${API_BASE_URL}/api/books`,
+    // 作者归属（第四个页签）。它读的是 data/raw/ 下的原文，跟上面两条不是同一份数据，
+    // 也算得慢得多（服务器上第一次约十几秒），所以是单独一个端点、单独一次请求。
+    authorship: `${API_BASE_URL}/api/authorship`
 };
 
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
@@ -58,7 +61,7 @@ let lastAnomalyReports = [];
 let lastAnomalyBooks = [];
 
 const METRIC_KEYS = ['sentenceLength', 'simpsonIndex', 'hapaxLegomena', 'functionWords'];
-const VIEW_IDS = ['view-main', 'view-galaxy', 'view-dashboard'];
+const VIEW_IDS = ['view-main', 'view-galaxy', 'view-dashboard', 'view-authorship'];
 const DEFAULT_SMOOTHNESS = 3;
 
 // 「全书对比」页那排柱子（整体水平对比）的排序，四个状态由 advCycleSort 循环产生。
@@ -87,6 +90,10 @@ document.addEventListener('DOMContentLoaded', function() {
     trackDashboardCharts();
     initBookBar();
     loadBooksList();
+    // 作者归属（第四个页签）在这里就发出去，不等用户点开。它是全站最慢的一次请求
+    // （服务端第一次要算十几秒），等点开再发的话读者会先看到一个空页签。
+    // 它和上面两条互不依赖，所以不 await——慢的那条不该拖住首屏出图。
+    loadAuthorship();
 
     // 系统开了「减少动态效果」就不自动启动文本雨（按钮仍然可以手动打开）
     setMatrixRain(!prefersReducedMotion());
@@ -784,6 +791,11 @@ window.switchTab = function(tabId, options) {
                 initStyleGalaxy();
             } else if (tabId === 'view-dashboard' && realData) {
                 if (window.initAdvancedData) window.initAdvancedData();
+            } else if (tabId === 'view-authorship') {
+                // 这一页不看 realData（它读的是原文，不是已经算好的指标），所以没有
+                // 「等数据加载完」这个前提。画的是手上已有的状态：还没算完就显示在算，
+                // 算完了就画出来。请求早在这之前就发出去了，切过来通常只剩等待。
+                renderAuthorship();
             }
         }, 50);
     }
@@ -1847,6 +1859,9 @@ function refreshAllActiveCharts() {
     if (currentTab === 'view-main') initChart();
     if (currentTab === 'view-galaxy') initStyleGalaxy();
     if (currentTab === 'view-dashboard' && window.initAdvancedData) window.initAdvancedData();
+    // 作者归属的矩阵和表格是 HTML，宽度自己会跟着容器走，不用重画；只有聚类树是真
+    // SVG，它的宽度是画的那一刻量下来写死的（viewBox），窗口变了得重新量一次。
+    if (currentTab === 'view-authorship') renderAuthorship();
 }
 
 // 响应式：窗口尺寸变化时防抖重绘当前图表，保证手机横竖屏切换后图表尺寸正确
@@ -4104,6 +4119,13 @@ function getExportTarget() {
     if (currentTab === 'view-galaxy') {
         return { element: document.querySelector('#galaxy-container svg'), label: '风格星系' };
     }
+    if (currentTab === 'view-authorship') {
+        // 这一页有两张「图」：距离矩阵是 HTML 表格（刻意不做成图片——4×4 的矩阵，
+        // 读者要的是能读到的准确数字，表格对读屏和复制都更友好），聚类树是真 SVG。
+        // 导出拿同一张会更好吗？不会：表格转 SVG 要重画一遍，而聚类树本来就是图上那张。
+        // 所以导出的是聚类树，标签写清楚是哪一张，不要让人以为导出的是整页。
+        return { element: document.querySelector('#auth-dendrogram svg'), label: '作者归属·聚类树' };
+    }
     if (currentTab === 'view-dashboard') {
         // 以前写死 #adv-mean：它恒存在，于是「逐段走势」那张永远导不出来
         const element = document.querySelector(`#${lastDashChart} svg`)
@@ -4148,7 +4170,15 @@ function exportFileLabel() {
 // 导出的按钮在三个页签下都看得到，但目标 svg 是各视图渲染时才建的。
 // 拿不到时给一句能自处的话，别只说「找不到图表元素」。
 function getNoChartMessage() {
-    const where = currentTab === 'view-galaxy' ? '风格星系' : (currentTab === 'view-dashboard' ? '全书对比' : '基础趋势分析');
+    // 作者归属那一页的下一步和另外三页不是一回事：另外三页的图是「点了书才画」，
+    // 所以「请先点击有数据的书」是条真能执行的路；这一页跟选书无关，照抄这句
+    // 就是在指一条走不通的路，而它真正要等的是那次分析算完。
+    if (currentTab === 'view-authorship') {
+        return '「作者归属」这张聚类树还没画出来，暂时没有可导出的内容。'
+            + '它要先把几本书的用词差异算一遍（第一次约十几秒），稍等片刻再试。';
+    }
+    const where = currentTab === 'view-galaxy' ? '风格星系'
+        : (currentTab === 'view-dashboard' ? '全书对比' : '基础趋势分析');
     return `「${where}」这张图还没画出来，暂时没有可导出的内容。`
         + '请先点击有数据的书，或稍等图表渲染完成后再试。';
 }
@@ -4337,6 +4367,15 @@ function exportLegendLineHeight() { return 18; }
 // wrapAxisNote 的 MAX_LINES 上限（星系正好 6 行），再挂一句进去会有被尾部
 // 截成「…」的风险——一行署名被截掉半句比没有更糟。这里单独折行、单独计高。
 function exportProvenanceLines(maxWidth) {
+    // 作者归属的署名要单独写一行（下面提前返回）：它的落款里不能有「观察角度」——
+    // 这一页算的是虚词用法的距离，跟顶上选的「观察角度」毫无关系，照模板盖上去
+    // 就是在图上写了一个不成立的坐标说明。
+    if (currentTab === 'view-authorship') {
+        const budget = Math.max(24, Math.floor(((maxWidth || 800) - 48) / 10));
+        return wrapProvenance(
+            `文印·文学指纹　作者归属·聚类树　距离口径：Burrows' Delta（虚词使用习惯）　`
+            + `${new Date().toLocaleString('zh-CN')} 生成`, budget);
+    }
     const where = currentTab === 'view-galaxy'
         ? '风格星系'
         : (currentTab === 'view-dashboard' ? '全书对比' : (chartType === 'line' ? '折线趋势图' : '指纹热力图'));
@@ -4638,6 +4677,16 @@ function crossMetricNote(metric = currentMetric) {
 }
 
 function exportSummary() {
+    // 作者归属那一页走自己的一份摘要（下面这段）。理由不是「另写一套更省事」，
+    // 而是底下那份摘要的每一行都建立在这句话上：「这份结果来自所选的书、以及顶上
+    // 那个观察角度」。这一页两条都不成立——它算的是服务器上全部原文的虚词距离，
+    // 跟选了哪几本、选了什么角度都没有关系。套用模板会导出一份通篇说着无关信息的
+    // 文件，而摘要是要贴进论文的。
+    if (currentTab === 'view-authorship') {
+        exportAuthorshipSummary();
+        return;
+    }
+
     // 用 getExportBooks() 而不是直接读 selectedBooks：「全书对比」页上的书籍筛选
     // 也要算数，否则点掉的书仍会在摘要里占一整节
     const books = getExportBooks();
@@ -7138,4 +7187,552 @@ function prefersReducedMotion() {
 
 function motionDuration(ms) {
     return prefersReducedMotion() ? 0 : ms;
+}
+
+// ============================================================================
+// 🖋 作者归属（第四个页签）
+// ============================================================================
+//
+// 这一页回答一个问题：光看「虚词是怎么用的」，能不能判出一本书是谁写的。
+//
+// 数据来自 /api/authorship（服务端在 src/authorship.py 里），一次请求带回全部内容：
+// 距离矩阵、聚类树、留一书验证、逐窗判定、词表敏感性。前端只呈现、不重算——
+// 屏幕上任何一个数字都能在接口返回的 JSON 里原样找到，不会出现「图上和摘要不一致」。
+//
+// 三个刻意的选择：
+//
+//   1. **请求在页面载入时就发出去，不等用户点开这个页签。** 服务端第一次要算十几秒，
+//      等点开再发，读者会先撞上一个空页签。早点发，多数情况下点过来时已经算好了。
+//
+//   2. **距离矩阵画成 HTML 表格，不是 SVG 热力图。** 4×4 的矩阵，读者要的是能读到、
+//      能选中的准确数字；表格对读屏（逐格念出「行头、列头、数值」）和复制也更友好。
+//      聚类树才是真 SVG——它没有别的表现形式。
+//
+//   3. **这一页不受页顶书名栏影响。** 它算的是这台服务器上的全部原文。页面上写明了
+//      这一点，否则读者会以为结果是按他选的那两本算的。
+//
+// 三个状态变量是一条线：idle → loading → ready，中途任何一步出问题都落到 unavailable。
+// 没有「部分成功」这一档——要么四块都有数，要么一句话说清为什么没有。
+
+let authorshipData = null;
+let authorshipStatus = 'idle';      // idle | loading | ready | unavailable
+let authorshipMessage = '';
+let authorshipRequested = false;
+
+async function loadAuthorship() {
+    if (authorshipRequested) return;
+    authorshipRequested = true;
+    authorshipStatus = 'loading';
+    renderAuthorship();
+
+    try {
+        const response = await fetch(API_ENDPOINTS.authorship);
+        const contentType = response.headers.get('content-type') || '';
+        const body = contentType.includes('application/json') ? await response.json() : null;
+
+        if (response.ok && body && body.status === 'success' && body.data && body.data.enough) {
+            authorshipData = body.data;
+            authorshipStatus = 'ready';
+        } else {
+            // 「算不出来」的两种来源分开说：服务端 404 给的那句话本来就是面向读者的
+            // （「这台服务器上还没有可供分析的原文…」），它说得比这里准，照用；
+            // 拿不到就补一句不涉及任何内部细节的兜底。
+            authorshipStatus = 'unavailable';
+            authorshipMessage = (body && body.message)
+                || '这台服务器上还没有可供分析的原文，作者归属暂时算不出来。';
+        }
+    } catch (err) {
+        console.error('作者归属分析失败:', err);
+        authorshipStatus = 'unavailable';
+        authorshipMessage = '连不上服务器，作者归属暂时算不出来。稍后再试一次。';
+    }
+
+    renderAuthorship();
+}
+
+// 「重新算一次」是给 500 和网络抖动留的出口。点了之后回到「没请求过」的状态再来一遍，
+// 而不是在原来的失败上再叠一层——所以三个状态变量都要清干净。
+window.retryAuthorship = function() {
+    authorshipRequested = false;
+    authorshipData = null;
+    authorshipMessage = '';
+    loadAuthorship();
+};
+
+function renderAuthorship() {
+    const root = document.getElementById('authorship-root');
+    if (!root) return;
+
+    // 面板是 hidden 时量不到宽度（clientWidth 为 0），聚类树会被画成一根竖线。
+    // 所以只在它可见时才画；切过来时 switchTab 会再叫一次这个函数。
+    // 上面那两处 renderAuthorship() 里有一次是在数据刚到、页签还没打开时调的——
+    // 这个提前返回正是为它准备的。
+    if (currentTab !== 'view-authorship') return;
+
+    if (authorshipStatus === 'ready' && authorshipData) {
+        renderAuthorshipContent(root, authorshipData);
+        return;
+    }
+
+    if (authorshipStatus === 'idle' || authorshipStatus === 'loading') {
+        root.innerHTML = `
+            <div class="auth-state" role="status">
+                <b>正在分析这几本书的用词差异…</b>
+                <span>要把每本书切成 1 万词的片段、逐段统计虚词用法，再两两比一遍，还要换 5 套词表各重算一次。第一次大约十几秒；算完就留在服务器上，之后再来看是现成的。</span>
+            </div>`;
+        return;
+    }
+
+    root.innerHTML = `
+        <div class="auth-state auth-state-error" role="status">
+            <b>暂时算不出作者归属</b>
+            <span>${escapeHtml(authorshipMessage)}</span>
+            <button type="button" class="auth-retry" onclick="retryAuthorship()">重新算一次</button>
+        </div>`;
+}
+
+function renderAuthorshipContent(root, data) {
+    const order = (data.clustering.leafOrder || []).slice();
+    const names = data.distance.names;
+    const indexOf = {};
+    names.forEach((name, i) => { indexOf[name] = i; });
+
+    root.innerHTML = `
+        <div class="auth-hero">
+            <h3>${escapeHtml(authorshipHeadline(data))}</h3>
+            <p class="auth-note">下面四块各回答一件事：像不像（距离矩阵）、分不分得开（聚类树）、判得准不准（留一书、逐窗）、结论是不是挑参数挑出来的（换词表）。</p>
+        </div>
+        <div class="auth-grid-2">
+            <div class="auth-card">
+                <h4>▦ 谁和谁更像<span class="auth-hint">颜色越深＝越不像</span></h4>
+                ${authorshipMatrixHtml(data, order, indexOf)}
+            </div>
+            <div class="auth-card">
+                <h4>⑂ 分成几支<span class="auth-hint">横轴＝用词距离</span></h4>
+                <div id="auth-dendrogram" class="auth-dendro"></div>
+            </div>
+        </div>
+        <div class="auth-card">
+            <h4>✓ 藏起一本，还认不认得出来</h4>
+            ${authorshipLooHtml(data)}
+        </div>
+        <div class="auth-card">
+            <h4>⧉ 只给一段文字，认不认得出来</h4>
+            ${authorshipBlocksHtml(data)}
+        </div>
+        <div class="auth-card">
+            <h4>⇄ 换一套词表，结论还站得住吗</h4>
+            ${authorshipSensitivityHtml(data)}
+        </div>
+    `;
+
+    const dendro = document.getElementById('auth-dendrogram');
+    if (dendro) renderAuthorshipTree(dendro, data);
+}
+
+// 一句话结论。所有数字都从返回的数据里现取，不写死——语料变了（多一本、少一位作者），
+// 这句话跟着变，不会变成一句过了期的好话。
+function authorshipHeadline(data) {
+    const loo = data.leaveOneOut;
+    const groups = data.authors.map(a => `${a.nameZh}的 ${a.books.length} 部`).join('、');
+    const judged = loo.total > 0
+        ? `藏起任意一本、只用剩下几本来判，判对 ${loo.correct} / ${loo.total}。`
+        : '语料太少，做不了留一书验证。';
+    return `只凭虚词使用习惯，${data.books.length} 本书聚成了 ${data.authors.length} 支：`
+        + `${groups}。${judged}`;
+}
+
+// 「作者 年份」这一串在矩阵里出现两次（列头、行头的副标题），放在一个函数里
+// 两处不会漂。查不到原著信息时（用户自己传的书）退回书名本身，不硬凑一个空年份。
+function authorshipAuthorLabel(name) {
+    const source = getBuiltinBookSource(name);
+    if (source && source.authorZh) {
+        return source.year ? `${source.authorZh} ${source.year}` : source.authorZh;
+    }
+    return getBookDisplayName(name);
+}
+
+// 底色深浅按这一格的数值占最大值的比例走：越大越接近「很不一样」的那一端。
+// 色阶从卡片底（0）走到朱砂（1），中间经过赭石，都是本项目既有的纸墨色。
+const AUTHORSHIP_RAMP = ['#fdf9ef', '#efe0bd', '#d8c08a', '#b8873f', '#9c3a25'];
+
+function authorshipCellStyle(value, max) {
+    const t = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
+    const rgb = d3.rgb(d3.interpolateRgbBasis(AUTHORSHIP_RAMP)(t));
+    // 字色按这块底实际有多亮来定，不是按 t 拍一个阈值。这条色阶横跨了从近白到深朱砂
+    // 两个极端，两个极端上「浅底配白字」和「深底配墨字」都读不出来。
+    const channels = [rgb.r, rgb.g, rgb.b].map(v => {
+        const c = v / 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    // 白色的相对亮度是 1，#2f2a23（松烟墨）约 0.0238；取对比度更高的那个当字色，
+    // 交点算下来在 0.228 附近。
+    return { color: rgb.toString(), ink: luminance < 0.228 ? '#fdfaf3' : '#2f2a23' };
+}
+
+function authorshipMatrixHtml(data, order, indexOf) {
+    const matrix = data.distance.matrix;
+    let max = 0;
+    order.forEach(a => order.forEach(b => {
+        if (a !== b && indexOf[a] !== undefined && indexOf[b] !== undefined) {
+            max = Math.max(max, matrix[indexOf[a]][indexOf[b]]);
+        }
+    }));
+
+    // 行与列都按聚类树的叶子顺序排。这不是随手一选：排过之后同作者的两本在表上挨在
+    // 一起，从左上到右下会浮出两个 2×2 的方块——读者不必先看懂树，也能看出「这两对
+    // 各自更近」。树和表用同一个顺序，两张图讲的才是同一件事。
+    let html = `<table class="auth-matrix">
+        <caption>每两本书之间的用词距离（数字越小越像）。列头是作者与首次出版年；行头的第二行是同一串字，方便对照。</caption>
+        <thead><tr><td class="auth-corner"></td>`;
+    order.forEach(name => {
+        html += `<th scope="col">${escapeHtml(authorshipAuthorLabel(name))}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+
+    order.forEach(rowName => {
+        html += '<tr><th scope="row">'
+            + `<span class="auth-row-title">${escapeHtml(getBookDisplayName(rowName))}</span>`
+            + `<span class="auth-row-meta">${escapeHtml(authorshipAuthorLabel(rowName))}</span>`
+            + '</th>';
+        order.forEach(colName => {
+            if (rowName === colName) {
+                html += '<td class="auth-diagonal" title="自己和自己比，距离当然是 0">—</td>';
+                return;
+            }
+            const value = matrix[indexOf[rowName]][indexOf[colName]];
+            const style = authorshipCellStyle(value, max);
+            const full = `${getBookDisplayName(rowName)} ↔ ${getBookDisplayName(colName)}：${value.toFixed(3)}`;
+            html += `<td style="background:${style.color}; color:${style.ink}" `
+                + `title="${escapeHtml(full)}">${value.toFixed(2)}</td>`;
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+}
+
+// 聚类树。叶子在左（距离 0），合并点往右长，横轴是用词距离。
+//
+// 同一作者的两本背后铺一条淡色底带，作者名写在左侧空白里、底带的正上方——
+// 这样「分成两支」就不是一句我们下的结论，而是读者一眼看得见的东西。
+function renderAuthorshipTree(container, data) {
+    const names = data.distance.names;
+    const leafOrder = data.clustering.leafOrder || [];
+    const merges = data.clustering.merges || [];
+    if (leafOrder.length === 0 || merges.length === 0) return;
+
+    const authorOfBook = {};
+    data.books.forEach(b => { authorOfBook[b.name] = b.author; });
+    const authorZh = {};
+    data.authors.forEach(a => { authorZh[a.name] = a.nameZh; });
+
+    // 按作者把叶子连成组。叶子顺序由中序遍历给出，同一支天然相邻——
+    // 不假设这一点的话，底带会被切成一堆碎条。
+    const groups = [];
+    leafOrder.forEach(name => {
+        const author = authorOfBook[name];
+        const last = groups[groups.length - 1];
+        if (last && last.author === author) last.names.push(name);
+        else groups.push({ author, names: [name] });
+    });
+
+    // 宽度取容器的实测宽度，不留下限余量——留了就会出现「SVG 比卡片宽、右边被切掉」，
+    // 而切掉的恰好是树冠（最后一次合并）和横轴右端。宁可把树画窄一点。
+    const width = Math.max(240, container.clientWidth || 640);
+    const narrow = width < 460;
+    const labelFont = narrow ? 11 : 12;
+    const authorFont = narrow ? 10 : 11;
+    // 左边留给书名的宽度按最长的一条现算，不写死：这套书名的长度是语料给的，
+    // 写死之后换一套语料，长书名就会压到树上。中文近似全宽，所以「字数 × 字号」够用了。
+    const longest = d3.max(leafOrder, n => getBookDisplayName(n).length) || 4;
+    const swatch = 9;
+    const margin = {
+        top: 10,
+        right: narrow ? 12 : 18,
+        bottom: 36,
+        left: Math.round(longest * labelFont + swatch + 26)
+    };
+    const rowH = narrow ? 28 : 30;
+    const groupGap = 20;                     // 组与组之间留一条缝，作者名写在缝里
+    const plotW = Math.max(120, width - margin.left - margin.right);
+    const plotH = leafOrder.length * rowH + groups.length * groupGap;
+    const height = margin.top + margin.bottom + plotH;
+
+    const maxHeight = d3.max(merges, m => m.height) || 1;
+    const x = d3.scaleLinear().domain([0, maxHeight]).range([0, plotW]);
+
+    const yOf = {};                          // 节点 id（叶子是下标，内部节点是服务端给的 id）→ y
+    const rowY = {};
+    let cursor = margin.top + groupGap / 2;
+    groups.forEach(group => {
+        group.y0 = cursor;
+        group.names.forEach(name => {
+            const id = names.indexOf(name);
+            yOf[id] = cursor;
+            rowY[name] = cursor;
+            cursor += rowH;
+        });
+        group.y1 = cursor - rowH;
+        cursor += groupGap / 2;
+    });
+
+    // 合并点：x 取它的高度，y 取两个子簇的中点。按发生顺序遍历就行，
+    // 每次合并的两个子簇一定已经算过了（服务端就是按这个顺序生成的）。
+    const xOf = {};
+    names.forEach((_name, i) => { xOf[i] = 0; });
+    merges.forEach(merge => {
+        xOf[merge.id] = x(merge.height);
+        yOf[merge.id] = (yOf[merge.left] + yOf[merge.right]) / 2;
+    });
+
+    const svg = d3.select(container).append('svg')
+        .attr('viewBox', `0 0 ${width} ${height}`)
+        .attr('width', width)
+        .attr('height', height)
+        .attr('role', 'img')
+        .attr('aria-label', describeAuthorshipTree(data));
+    const g = svg.append('g').attr('transform', `translate(${margin.left},0)`);
+
+    // 作者底带：横穿整幅画布，把「哪两本是一支」变成一个看得见的事实
+    groups.forEach(group => {
+        const color = colorForBook(group.names[0]);
+        g.append('rect')
+            .attr('x', -margin.left + 4).attr('y', group.y0 - rowH / 2 - 2)
+            .attr('width', width - 8).attr('height', group.y1 - group.y0 + rowH + 4)
+            .attr('rx', 6)
+            .attr('fill', color).attr('opacity', 0.09);
+    });
+
+    // 树本身：每一次合并画三条线（两条水平到合并点、一条竖直把两边连起来）
+    const linkColor = '#8a7a63';
+    merges.forEach(merge => {
+        const xm = xOf[merge.id];
+        [[merge.left, yOf[merge.left]], [merge.right, yOf[merge.right]]].forEach(([id, yChild]) => {
+            g.append('line')
+                .attr('x1', xOf[id]).attr('y1', yChild)
+                .attr('x2', xm).attr('y2', yChild)
+                .attr('stroke', linkColor).attr('stroke-width', 1.4);
+        });
+        g.append('line')
+            .attr('x1', xm).attr('y1', yOf[merge.left])
+            .attr('x2', xm).attr('y2', yOf[merge.right])
+            .attr('stroke', linkColor).attr('stroke-width', 1.4);
+    });
+
+    // 叶子：作者名写在组的上方，和下面的书名左对齐——它是一条分组标题，
+    // 不是一句贴在树边上的注释，靠右飘着反而看不出它在管哪两行。
+    groups.forEach(group => {
+        const color = colorForBook(group.names[0]);
+        g.append('text')
+            .attr('x', -(margin.left - 2)).attr('y', group.y0 - 8)
+            .attr('text-anchor', 'start')
+            .attr('font-size', authorFont).attr('font-weight', 600)
+            .attr('fill', color)
+            .text(authorZh[group.author] || group.author || '');
+        group.names.forEach(name => {
+            const y = rowY[name];
+            g.append('rect')
+                .attr('x', -(margin.left - 2)).attr('y', y - swatch / 2)
+                .attr('width', swatch).attr('height', swatch)
+                .attr('rx', 2).attr('fill', color);
+            g.append('text')
+                .attr('x', -(margin.left - 14)).attr('y', y + 4)
+                .attr('font-size', labelFont).attr('fill', '#2f2a23')
+                .text(getBookDisplayName(name));
+        });
+    });
+
+    // 横轴：距离越大越往右
+    const axisY = margin.top + plotH + 2;
+    g.append('line')
+        .attr('x1', 0).attr('y1', axisY).attr('x2', plotW).attr('y2', axisY)
+        .attr('stroke', '#a89a82').attr('stroke-width', 1);
+    x.ticks(4).forEach(tick => {
+        g.append('line')
+            .attr('x1', x(tick)).attr('y1', axisY).attr('x2', x(tick)).attr('y2', axisY + 5)
+            .attr('stroke', '#a89a82').attr('stroke-width', 1);
+        g.append('text')
+            .attr('x', x(tick)).attr('y', axisY + 17)
+            .attr('text-anchor', 'middle').attr('font-size', 10).attr('fill', '#6b6254')
+            .text(tick.toFixed(2));
+    });
+    g.append('text')
+        .attr('x', plotW).attr('y', axisY + 30)
+        .attr('text-anchor', 'end').attr('font-size', 10).attr('fill', '#6b6254')
+        .text('用词距离（越大越不像）→');
+}
+
+// 聚类树的文字版。闭着眼听得懂这句，就不必盯着图看。
+function describeAuthorshipTree(data) {
+    const merges = data.clustering.merges || [];
+    const authorZh = {};
+    data.authors.forEach(a => { authorZh[a.name] = a.nameZh; });
+    const paragraphs = merges.filter(m => m.size === 2).map(m => {
+        const author = (data.books.find(b => b.name === m.leaves[0]) || {}).author;
+        const who = authorZh[author] ? `（${authorZh[author]}）` : '';
+        return `${m.leaves.map(getBookDisplayName).join('和')}${who}在 ${m.height.toFixed(2)} 处合成一支`;
+    });
+    const last = merges[merges.length - 1];
+    const tail = last && last.size > 2 ? `最后两支在 ${last.height.toFixed(2)} 处才合到一起。` : '';
+    return `聚类树：${paragraphs.join('；')}。${tail}横轴是用词距离，越大越不像。`;
+}
+
+function authorshipLooHtml(data) {
+    const loo = data.leaveOneOut;
+    const rows = loo.rows.map(row => {
+        const distances = Object.keys(row.distances || {})
+            .map(name => `${getBookDisplayName(name)} ${row.distances[name].toFixed(2)}`)
+            .join('、');
+        // 领先幅度是这一页里最该被看见的一个数：四本全判对，可是《汤姆·索亚历险记》
+        // 只领先第二名 0.06。只说「全对」等于把一场险胜说成了完胜。
+        const margin = row.margin === null || row.margin === undefined
+            ? '—'
+            : (row.margin < 0.1 ? `领先 ${row.margin.toFixed(2)}（很接近）` : `领先 ${row.margin.toFixed(2)}`);
+        const mark = row.correct ? '✓ 判对' : '✗ 判错';
+        return `<tr class="${row.correct ? '' : 'auth-miss'}">
+            <th scope="row">
+                <span class="auth-row-title">${escapeHtml(getBookDisplayName(row.book))}</span>
+                <span class="auth-row-meta">${escapeHtml(row.authorZh || row.author || '—')}</span>
+            </th>
+            <td class="auth-verdict" data-label="判给了谁">${mark}，判给${escapeHtml(row.predictedAuthorZh || '')}的《${escapeHtml(getBookDisplayName(row.predictedBook))}》</td>
+            <td data-label="有多拿得准">${margin}</td>
+            <td class="auth-dist" data-label="到其它几本的距离">${escapeHtml(distances)}</td>
+        </tr>`;
+    }).join('');
+
+    // 表头只有 4 列：真实作者并进了第一格（书名下面那行小字）。5 列在手机上一屏放不下，
+    // 而被挤出去的恰好是最右边的「有多拿得准」——那正是这张表最该被看到的一列。
+    return `<table class="auth-table">
+        <caption>每次藏起一本，只用剩下几本当参照，看藏起来这本离谁最近、那位是不是它的作者。判 ${loo.correct} / ${loo.total}。<br>
+        这一列的距离和上面矩阵里的不是同一把尺子：留一书时参照系换成另外几本，被藏起来的那本没有参与定标（否则就是拿答案对答案）。所以看排序，别跨表比大小。</caption>
+        <thead><tr>
+            <th scope="col">藏起来的书</th>
+            <th scope="col">判给了谁</th><th scope="col">有多拿得准</th>
+            <th scope="col">到其它几本的距离</th>
+        </tr></thead>
+        <tbody>${rows}</tbody></table>`;
+}
+
+function authorshipBlocksHtml(data) {
+    const blocks = data.blockAttribution;
+    const rows = blocks.perBook.map(item => {
+        const rate = item.total > 0 ? item.correct / item.total : 0;
+        return `<tr>
+            <th scope="row"><span class="auth-row-title">${escapeHtml(getBookDisplayName(item.book))}</span></th>
+            <td data-label="判对">${item.correct} / ${item.total}</td>
+            <td data-label="正确率">${item.total > 0 ? (rate * 100).toFixed(1) + '%' : '—'}</td>
+            <td class="auth-bar-cell"><span class="auth-bar" style="width:${(rate * 100).toFixed(1)}%"></span></td>
+        </tr>`;
+    }).join('');
+
+    // 最后一列的表头不能空着：空表头单元格读屏会念成「空白」，而且这一格是有内容的
+    // （一条表示正确率长短的色条），只是没有文字。给一个只给读屏看的列名。
+    return `<table class="auth-table">
+        <caption>把每本书切成约 1 万词的片段，每个片段单独判一次作者。取的只是互不重叠的那些片段（共 ${blocks.total} 段）：相邻片段重叠 90%，全算进去等于把同一批文字数了十遍。判 ${blocks.correct} / ${blocks.total}（${((blocks.accuracy || 0) * 100).toFixed(1)}%）。</caption>
+        <thead><tr>
+            <th scope="col">书</th><th scope="col">判对</th><th scope="col">正确率</th>
+            <th scope="col"><span class="visually-hidden">正确率图示</span></th>
+        </tr></thead>
+        <tbody>${rows}</tbody></table>`;
+}
+
+function authorshipSensitivityHtml(data) {
+    const rows = data.sensitivity.map(row => {
+        const loo = `${row.leaveOneOutCorrect} / ${row.leaveOneOutTotal}`;
+        const rate = row.blockTotal > 0 ? row.blockCorrect / row.blockTotal : 0;
+        return `<tr>
+            <th scope="row"><span class="auth-row-title">${escapeHtml(row.label)}</span></th>
+            <td data-label="实际参与比较的词">${row.comparableWords} / ${row.vocabSize}</td>
+            <td data-label="留一书">${loo}</td>
+            <td data-label="逐窗判定">${(rate * 100).toFixed(1)}%</td>
+        </tr>`;
+    }).join('');
+
+    return `<table class="auth-table">
+        <caption>换一套词表把前面的事重算一遍。如果结论跟着词表变，那前面几块说的就不是「这本书的用词特点」，而是「我挑的这个参数」。留一书那一列应当全是满分。</caption>
+        <thead><tr>
+            <th scope="col">词表</th><th scope="col">实际参与比较的词</th>
+            <th scope="col">留一书</th><th scope="col">逐窗判定</th>
+        </tr></thead>
+        <tbody>${rows}</tbody></table>`;
+}
+
+// 这一页的摘要走自己的一份。底下的通用摘要每一行都建立在「结果来自所选的书、以及
+// 顶上那个观察角度」上，而这一页两条都不成立：它算的是全部原文的虚词距离，
+// 跟选了哪几本、选了什么角度都没有关系。套模板会导出一份通篇说着无关信息的文件，
+// 而摘要是要贴进论文的。
+function exportAuthorshipSummary() {
+    const data = authorshipData;
+    if (authorshipStatus !== 'ready' || !data) {
+        showError(authorshipStatus === 'unavailable'
+            ? (authorshipMessage || '作者归属还没算出来，暂时导不出摘要。')
+            : '作者归属还在计算中，算完之后再导出摘要。');
+        return;
+    }
+
+    const loo = data.leaveOneOut;
+    const blocks = data.blockAttribution;
+    const lines = [
+        '文印·文学指纹分析摘要 · 作者归属',
+        '════════════════════════════════════════',
+        '',
+        `- 生成时间：${new Date().toLocaleString('zh-CN')}`,
+        '- 当前视图：作者归属',
+        "- 距离口径：Burrows' Delta（先算出每本书的虚词用法画像，再两两比较标准化之后的差异）",
+        `- 词表：${data.meta.vocabulary}，${data.meta.vocabSize} 词，其中 ${data.meta.comparableWords} 词在各书中确有差异、参与比较`,
+        `- 片段口径：每个片段 ${data.meta.blockSize} 词，相邻片段重叠 ${data.meta.overlap} 词`,
+        `- 参与比较：${data.books.map(b => `《${getBookDisplayName(b.name)}》（${authorshipAuthorLabel(b.name)}，${b.blocks} 个片段）`).join('、')}`,
+        ''
+    ];
+
+    lines.push('【结论】');
+    lines.push(authorshipHeadline(data));
+    lines.push('');
+
+    lines.push('【每两本之间的用词距离】');
+    const names = data.distance.names;
+    names.forEach((a, i) => {
+        const parts = names
+            .map((b, j) => (i === j ? null : `${getBookDisplayName(b)} ${data.distance.matrix[i][j].toFixed(3)}`))
+            .filter(Boolean);
+        lines.push(`- 《${getBookDisplayName(a)}》离：${parts.join('、')}`);
+    });
+    lines.push('');
+
+    lines.push('【留一书验证】');
+    lines.push(`判 ${loo.correct} / ${loo.total}。`);
+    loo.rows.forEach(row => {
+        const margin = (row.margin === null || row.margin === undefined) ? '' : `，领先 ${row.margin.toFixed(3)}`;
+        lines.push(`- 藏起《${getBookDisplayName(row.book)}》（${row.authorZh}）→ 判给《${getBookDisplayName(row.predictedBook)}》`
+            + `，${row.correct ? '判对' : '判错'}${margin}`);
+    });
+    lines.push('');
+
+    lines.push('【逐窗判定】');
+    lines.push('把每本书切成约 1 万词的片段，只取互不重叠的那些（每 10 个取 1 个），'
+        + `每个片段单独判一次作者：判 ${blocks.correct} / ${blocks.total}（${((blocks.accuracy || 0) * 100).toFixed(1)}%）。`);
+    blocks.perBook.forEach(item => {
+        lines.push(`- 《${getBookDisplayName(item.book)}》：${item.correct} / ${item.total}`);
+    });
+    lines.push('');
+
+    lines.push('【换一套词表】');
+    lines.push('同样的两件事换 5 套词表各重算一遍，看结论会不会跟着词表变。');
+    lines.push('- 词表 / 实际参与比较的词 / 留一书 / 逐窗判定');
+    data.sensitivity.forEach(row => {
+        const rate = row.blockTotal > 0 ? (row.blockCorrect / row.blockTotal * 100).toFixed(1) + '%' : '—';
+        lines.push(`- ${row.label} / ${row.comparableWords} / ${row.leaveOneOutCorrect} / ${row.leaveOneOutTotal} / ${rate}`);
+    });
+    lines.push('');
+
+    lines.push('说明：这一页算的是这台服务器上的全部原文，与导出时选了哪几本书、哪个观察角度无关。'
+        + '作者归属靠的是虚词的使用习惯（不依赖题材、人物、情节），样本越小越不可靠：'
+        + '这里每本都有数万词，四本又正好两两同作者，才判得这么干净；'
+        + '片段层面的判定（逐窗）明显比整本更难，这个差距本身就是方法的可靠性边界。');
+    lines.push('本摘要中的数字只是用词习惯方面的统计结果，请结合作品原文与史料判断，不宜单独当作作者身份的定论。');
+
+    downloadBlob(lines.join('\n'), `文印_作者归属摘要_${exportTimestamp()}.txt`, 'text/plain;charset=utf-8');
+    flashExportReceipt(document.getElementById('exportSummaryBtn'), '摘要已导出（.txt），在浏览器的「下载」列表里。');
 }
