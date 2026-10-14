@@ -487,6 +487,21 @@
                         <div id="adv-drill-announce" class="visually-hidden" role="status" aria-live="polite"></div>
                     </div>
                 </div>
+
+                <!-- 柱子上那条深色带子是什么（第五十七批）。
+                     为什么它长在**卡片外面**——这一条不是排版偏好，是量出来的：
+                     .dash-chart-body 是 `flex: 1`，柱区的高度 = 卡片高度 − 卡里别的东西。
+                     把这句说明放进卡片（哪怕放在图下面），它就是从柱子上抠走的 60px，
+                     实测柱区 288 → 234，横轴的旋转书名开始被 overflow:hidden 切掉。
+                     放进 .dashboard-grid 自己的第二行则是零代价：那一行是 auto 行，
+                     只把网格撑高，第一行的两栏高度（也就是柱区高度）一个像素都不动。
+                     实测放这儿之后柱区仍是 288、柱子坐标与改动前逐字节相同。
+                     位置放在图上：容器必须在 #adv-mean **外面**——initD3Structures()
+                     会清空图表容器里的所有子元素。内容由 renderAdvMean 按「这次到底画出来
+                     几条带子」收放（一条都没有时必须藏起来，那句话点名了柱子上的带子，
+                     屏幕上没有就是假话）；导出走 collectExportAxisNote()，与
+                     #adv-mean-scope 同一条规矩：屏幕上说了的话，跟着图走。 -->
+                <p id="adv-mean-band-note" class="chart-scale-note dash-band-note" hidden>柱子上那条深色带子：把这本书的各个片段按数值排队，从第 25% 名到第 75% 名就落在这一段里——说的是这本书自己从头到尾的起伏有多大（不是抽样误差，也不是置信区间）。</p>
             </div>
         </div>
 
@@ -1116,6 +1131,66 @@
             return `约是这批书里最大差距的 ${tenths} 成。`;
         }
 
+        // 「这个差算不算大」——用每本书**自己内部**的起伏当尺子（第五十七批）。
+        //
+        // 上面那句 describeGapScale 用的是**跨书**的尺子（这批书里最大差距的几成），
+        // 它回答的是「在这几本里算不算大」；这一句回答的是另一个问题，而且是研究者
+        // 真正要的那个：**这个差有没有超过这本书自己从头到尾的起伏。** 没超过的话，
+        // 换一段文本再算就可能反过来——那就不该写进结论。
+        //
+        // 三条设计上的取舍，都是量出来的，不是拍脑袋：
+        //
+        // 1) **不新增任何统计口径**。用的 currentStd 就是同一次渲染里已经算好的那个
+        //    （getAdvComputed 里 d3.deviation），和在场的平均数是同一个口径——框选生效时
+        //    两边一起收窄到同一段。所以这里**不需要** describeGapScale 那道口径 guard。
+        //    这一批也正因此能不碰 src/ 一个字节：现有三个指标与所有投影坐标一个数没动。
+        //
+        // 2) **尺子取「较大」的那一本**。差距连较大的那份内部起伏都没超过，就一定也没
+        //    超过另一本；超过了再报倍率，报的也是保守的那一个。宁可少说，不多说。
+        //
+        // 3) **样本太少的一本不参与**：d3.deviation 对 1 个点返回 undefined、被上一层的
+        //    `|| 0` 兜成 0，于是「差距是起伏的 0 倍」会算成无穷大——一条完全反向的结论。
+        //    门槛（>= 5 个片段）与下面「起伏最小」那句一致，不另立一套。
+        // `relist`：这句话要不要**自己把起伏的数报一遍**。
+        //   - 两本那一支传 true（默认）：上面没有别的地方列过起伏，句子得自己站得住
+        //     ——这几行会被「复制结论」和导出摘要一行一行带走，在文件里没有上下文。
+        //   - 三本以上那一支传 false：上面「每本各自的起伏幅度」那句刚把每本的起伏
+        //     列全（连括号里的说法都一样），再列一遍就是同一件事说两次，而且只挑两本
+        //     报还会让人以为另外两本没有起伏。所以那一支只给结论。
+        function judgeGapAgainstSpread(gap, books, relist) {
+            if (!(gap > 0)) return '';
+            const usable = (books || []).filter(b =>
+                isFiniteNumber(b.currentStd) && b.currentStd > 0
+                && (b.activeSegment || []).length >= 5);
+            if (usable.length === 0) return '';
+
+            const worst = usable.reduce((a, b) => (b.currentStd > a.currentStd ? b : a));
+            const consequence = '换一段文本再算，这个高下很可能就反过来。';
+            const ratio = gap / worst.currentStd;
+            // 十位以上再写小数点没有意义（0.1 倍的精度落不到任何一位真实的信息上）
+            const ratioText = ratio >= 10 ? String(Math.round(ratio)) : ratio.toFixed(1);
+            const tooSmall = gap < worst.currentStd;
+
+            // 「这一对」指的是上面刚点名的那两本（最高 / 最低）——故意不重述书名：
+            // 三本以上时读者眼前已经挂着四行书名，再补两行只是噪音。
+            // 差值本身照报：上一句只给了两个平均数，减法是这一句替读者做的，
+            // 不报出来读者就没法核那个倍率（4.33 ÷ 1.97 ≈ 2.2）。
+            if (relist === false) {
+                const gapText = fmtMetric(gap);
+                return tooSmall
+                    ? `这一对的差是 ${gapText}，比它们各自的内部起伏都小——${consequence}`
+                    : `这一对的差是 ${gapText}，约是它们中起伏较大的那一本的 ${ratioText} 倍。`;
+            }
+
+            const listed = usable
+                .map(b => `《${b.displayName || b.name}》${fmtMetric(b.currentStd)}`)
+                .join('、');
+            const head = `作为对照，它们的内部起伏（同一本书内各片段之间的标准差）是${listed}——`;
+            return tooSmall
+                ? head + `这个差比它们都小：${consequence}`
+                : head + `这个差约是其中较大那个的 ${ratioText} 倍。`;
+        }
+
         function renderInsight(data) {
             const panel = document.getElementById('insight-content');
             if (!panel) return;
@@ -1157,6 +1232,14 @@
                         + '（仅描述差距大小，不作好坏判断）');
                     const scale = describeGapScale(gap, currentMetric, brushScope);
                     if (scale) lines.push(scale);
+                    // describeGapScale 那把尺子是**跨书**的（这批书里最大差距的几成），
+                    // 换一批书就换一个分母；紧接着这句是**书内**的尺子，回答的是
+                    // 「这个差有没有超过这本书自己从头到尾的起伏」（第五十七批）。
+                    // 两把尺子并排放在一起，读者才判得动。
+                    // 第三个参数传 true：两本这一支上面没有别的地方列过起伏，句子要自己
+                    // 把两个数报出来，否则「这个差比它们都小」里的「它们」在导出稿里没有着落。
+                    const spreadLine = judgeGapAgainstSpread(gap, [highest, lowest], true);
+                    if (spreadLine) lines.push(spreadLine);
                 } else {
                     // 「最长 / 最短」是在用户勾的这几本里排出来的。不加限定，读者会写成
                     // 「A 是所有作家里句子最长的」——而它只是这次选中的几本里那个。
@@ -1170,6 +1253,15 @@
                     if (spread) {
                         lines.push(`每本各自的起伏幅度（同一本书内各片段之间的标准差）：${spread}。可与该差值对照，再决定这个差距是否值得写入结论。`);
                     }
+                    // 上一句把「差值」和「每本自己的起伏」并排放好，请读者自己去比——
+                    // 这一步是个减法，界面能替读者做掉（第五十七批）。这一支原先**根本没算过
+                    // gap**（只有两本那一支算），所以这里就地补一个。
+                    //
+                    // 第三个参数传 false：上一句刚把每本的起伏列全了，这一句只接结论，
+                    // 不重列数字（重列会出现「同一本书内各片段之间的标准差」连着说两遍）。
+                    const gap = Math.abs(highest.currentMean - lowest.currentMean);
+                    const spreadLine = judgeGapAgainstSpread(gap, [highest, lowest], false);
+                    if (spreadLine) lines.push(spreadLine);
                 }
             } else if (data.length === 1) {
                 lines.push(`《${data[0].displayName || data[0].name}》的「${mLabel}」${brushScope ? '在框选区段内平均' : '整体水平'}为 ${fmtMetric(data[0].currentMean)}。`);
@@ -1318,11 +1410,91 @@
                     .attr("x", d=>x(d.displayName || d.name)).attr("y", barY).attr("width", x.bandwidth()).attr("height", barH),
                 exit => exit.transition().duration(animMs(500)).attr("height", 0).remove()
             )
-            .on("mouseover", (e, d) => { advHighlight(d); showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>${advMeanLabel()}: ${fmtMetric(d.currentMean)}`); })
+            .on("mouseover", (e, d) => {
+                // 悬停里多一句带子的数值（第五十七批）：图上那条深色带子只有悬停才
+                // 读得出具体范围。没有带子（框选后片段太少、或整段落在轴外）时这句不出现。
+                const band = spreadBandText(d);
+                advHighlight(d);
+                showAdvTooltip(e, `<b>${escapeHtml(d.displayName || d.name)}</b><br>${advMeanLabel()}: ${fmtMetric(d.currentMean)}`
+                    + (band ? `<br>${band}` : ''));
+            })
             .on("mouseout", () => { advUnhighlight(); hideAdvTooltip(); })
             .on("click", (e, d) => advDrillDown(d));
 
-            attachDrillKeyboard(barsMerged);
+            attachDrillKeyboard(barsMerged, { withBand: true });
+
+            // 第五十七批：柱子上叠一条深色的纵向带子——这本书的**中间一半**片段落在
+            // 这一段的范围内（q1 到 q3）。它回答的是「这个平均数是踩在什么起伏上的」。
+            //
+            // 三条讲究，每条都对着一个具体的坑：
+            //
+            // 1) 用 <line> + stroke-width，**不用 <rect>**。上面那个柱子选择器是
+            //    `selectAll("rect")`——**后代全选**，再加一类 rect 会被当成柱子绑走数据、
+            //    被 .join() 改掉 y/height。用 line 则 rect 与 line.zero-line 两个选择器
+            //    一个字都不用动。
+            // 2) 两端 clamp 到 [0, h]。纵轴的定义域只由各书**均值**的极值定，某本书的 q3
+            //    完全可能落在轴外（两本均值 5 与 1，而这本书 q3=9，上界只有 5.5）。全仓库
+            //    没有 clip-path，不夹住带子就画到图外面去了。夹成一点长（两端重合）时
+            //    这条线不渲染——「画不出来」比「画到别处」诚实。
+            // 3) 颜色写成**行内属性**。导出矢量图只内联少数几个类（EXPORT_SVG_STYLE），
+            //    柱子靠 .attr("fill") 才活得下来；带子若靠 CSS 类上色，导出的 PNG/SVG 上
+            //    它整条消失——而导出的那张才是要贴进论文的。
+            //
+            // 颜色取深色而不是浅色：这套色板（#b5472f / #4f7a8c / #6b8f5a …）都是中等
+            // 偏深的调子，叠一层同样的颜色等于没叠，叠白又会在浅色柱子上糊掉；而带子
+            // 上端常常探出柱顶（q3 本来就可能高于均值），探出去那截落在白底上——深色
+            // 在那儿仍然看得见，白色就没了。
+            //
+            // 动画跟柱子同一套 animMs(750)，否则会出现「柱子长、带子不动」。
+            const bandWidth = Math.max(3, x.bandwidth() * 0.36);
+            const bandX = d => x(d.displayName || d.name) + x.bandwidth() / 2;
+            const bandEdge = d => {
+                const box = d.box;
+                if (!box || !isFiniteNumber(box.q1) || !isFiniteNumber(box.q3)) return null;
+                // y 轴是反的：数值大的在上面。所以 q3 是上端、q1 是下端。
+                return [
+                    Math.max(0, Math.min(h, y(box.q3))),
+                    Math.max(0, Math.min(h, y(box.q1)))
+                ];
+            };
+            const bands = g.select(".content-area").selectAll("line.spread-band").data(sortedData, d => d.id);
+            bands.join(
+                enter => enter.append("line")
+                    .attr("class", d => `spread-band book-el book-${d.id}`)
+                    .attr("x1", bandX).attr("x2", bandX)
+                    // 从零基线长出来，和柱子同一套入场动画
+                    .attr("y1", zeroY).attr("y2", zeroY)
+                    // 松烟墨（与 d3-style.css 的 --ink-100 同一个值）：这里是行内属性，
+                    // 不能写 var(--ink-100)——导出图里没有那张样式表
+                    .attr("stroke", "#2f2a23")
+                    .attr("stroke-opacity", 0.42)
+                    .attr("stroke-linecap", "butt")
+                    .attr("stroke-width", bandWidth)
+                    // 带子压在柱子正中间，而 svg 的命中判定默认是「画了就能点」——
+                    // 不加这一条，鼠标落在柱子中间（最顺手的位置）会被这条线接走，
+                    // 悬停提示、高亮、点开详情全部失灵。让事件穿透过去。
+                    .attr("pointer-events", "none")
+                    .call(e => e.transition().duration(animMs(750))
+                        .attr("y1", d => { const b = bandEdge(d); return b ? b[0] : zeroY; })
+                        .attr("y2", d => { const b = bandEdge(d); return b ? b[1] : zeroY; })),
+                update => update.transition().duration(animMs(750))
+                    .attr("x1", bandX).attr("x2", bandX)
+                    .attr("stroke-width", bandWidth)
+                    .attr("y1", d => { const b = bandEdge(d); return b ? b[0] : zeroY; })
+                    .attr("y2", d => { const b = bandEdge(d); return b ? b[1] : zeroY; }),
+                // 和柱子一样缩回零基线再走，不然「柱子收、带子瞬间消失」
+                exit => exit.transition().duration(animMs(500)).attr("y1", zeroY).attr("y2", zeroY).remove()
+            // 抬到柱子上面：新增一本书时它的柱子是追加在最后的，不 raise 的话
+            // 这一根会把自己的带子盖住（首屏那几根没事，只有新增那根有事）。
+            ).raise();
+
+            // 带子是什么，得有一句话说。写在 SVG 外面的 #adv-mean-band-note 里
+            // （跟隔壁 #adv-line-legend 一个位置、一个理由：initD3Structures() 会清空
+            // 图表容器里的所有子元素），由 collectExportAxisNote() 带进导出。
+            // 一条带子都没画出来时必须藏起来——那句话点名了「柱子上的带子」，
+            // 挂上去就是在说一件屏幕上没有的事。
+            const bandNote = document.getElementById('adv-mean-band-note');
+            if (bandNote) bandNote.hidden = !sortedData.some(d => bandEdge(d));
         }
 
         function renderAdvLine(data) {
@@ -1506,13 +1678,31 @@
         // 书的片段详情——而「哪一段偏离得厉害」这类判断，正是从这个卡片里读出来的。
         // 走法沿用图上别处（主视图折线、热力图、星系）已经做好的那套：整张图只留一个
         // Tab 停靠点，进去之后用方向键逐本走，避免几十根柱子各占一个 Tab。
-        function attachDrillKeyboard(nodes) {
+        // 柱子上那条带子的**文字版**（第五十七批）。悬停提示与读屏标签共用这一份说法，
+        // 免得两处各写一遍、改一处漏一处。带子的定义域可能落在轴外（画不出来），
+        // 那时这里也返回空串——图上没有的东西，提示和读屏里也不该有。
+        function spreadBandText(d) {
+            const box = d && d.box;
+            if (!box || !isFiniteNumber(box.q1) || !isFiniteNumber(box.q3)) return '';
+            return `中间一半的片段落在 ${fmtMetric(box.q1)} 到 ${fmtMetric(box.q3)} 之间`;
+        }
+
+        function attachDrillKeyboard(nodes, opts) {
             if (!nodes || nodes.empty()) return;
+            // withBand：这张图上有没有画那条「中间一半」的带子。整体水平对比画了、
+            // 逐段走势没画，而两处共用这一个函数——不分开的话，走势图的读屏用户会听到
+            // 一个屏幕上根本不存在的东西（第五十七批）。
+            const withBand = !!(opts && opts.withBand);
             const NEXT_KEYS = ['ArrowRight', 'ArrowDown'];
             const PREV_KEYS = ['ArrowLeft', 'ArrowUp'];
             nodes.attr("tabindex", (d, i) => (i === 0 ? 0 : -1))
                 .attr("role", "button")
-                .attr("aria-label", d => `${d.displayName || d.name}，${advMeanLabel()} ${fmtMetric(d.currentMean)}。按回车查看这本书的片段详情`)
+                .attr("aria-label", d => {
+                    const band = withBand ? spreadBandText(d) : '';
+                    return `${d.displayName || d.name}，${advMeanLabel()} ${fmtMetric(d.currentMean)}`
+                        + (band ? `，${band}` : '')
+                        + '。按回车查看这本书的片段详情';
+                })
                 .on("keydown", function (event, d) {
                     if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
