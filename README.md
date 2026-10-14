@@ -6707,3 +6707,78 @@ If-None-Match: 上面那串 → 304 ；If-None-Match: "deadbeef" → 200
 - **服务器上 `requirements.server.txt` 仍是未跟踪**（`git status --porcelain` 只列出它一行）——这是它本来的状态，**没有动**。
 
 - **本批没有在服务器上删过任何东西**：清单只有 `git fetch` + `git merge --ff-only` + 自动部署脚本自己的重启，没有 `rm`。
+
+## 🧭 第五十四批：读屏能用上、走得通——三处无障碍硬伤 + 一处只有开发者能执行的提示（2026-10-14）
+
+### 1. 为什么做这一批
+
+承接第五十三批。上一批末尾把三条「看不见、但在无障碍标准里更硬」的问题留到了下一批（原话记在那一节第 4 条），你定的范围就是它们，外加一条文案：**无障碍三处 + 一处文案**。
+
+四条都**回到源码逐条复现**过，不是照抄上一批的勘察结论：
+
+- 全站 `<a>` 标签 **0 个** → 没有「跳到主内容」入口；页面地标**只有 1 个**（页脚），没有 `main`。这条在 WCAG 2.2 里是 **2.4.1 Bypass Blocks，A 级**——比 AA 那几条还硬。
+- 三个弹窗共用 `.galaxy-modal-overlay`（`position:fixed` 铺满视口 + 5px 模糊），打开时**全站没有任何锁滚代码**（grep 确认），内容是隔着一层毛玻璃在动。
+- `.book-btn` 的「选中」只写在 `.active` 类上，全站 `aria-pressed` 只有 1 个（背景文字雨那个开关）。
+- 服务端两处 404 的 message 写着「请先运行 python generate_data.py 生成示例数据，或通过上传接口 /api/analyze 上传自己的文本」，而前端的 `getErrorMessage`（`if (result && result.message) return result.message;`）会把服务端 message **原样显示给读者**——对文学研究者，这一整句里没有一步是他能执行的。这正是本项目那条文案判据：**读者能不能执行下一步**。
+
+**一句话结论**：**不改外观、不动算法、不加抽象层**。改完之后看得见的像素一个不变，但键盘与读屏多出四条可走的路径；测试从 308 条加到 **310 条**。
+
+### 2. 四处改动
+
+**① 加「跳到主内容」入口，并把主内容变成 `main` 地标（WCAG 2.4.1，A 级）。** 做法是**换标签、不包壳**：`<div class="container">` 改成 `<main class="container" id="main-content" tabindex="-1">`，结束标签同步改；再在 `<body>` 直下、背景画布**之前**插一条 `<a class="skip-link" href="#main-content">跳到主内容</a>`（平时移出视口，Tab 到它才滑下来，层级压过弹窗遮罩的 9999）。
+
+为什么走换标签而不是「外面再包一层 `<main>`」：`.container` 是全局 flex 列，子元素的先后由 `order` **逐条**指定（`.header{order:1}` … `.footer{order:30}`），任何插进去的新元素默认吃 `.container > * { order: 20 }`，会掉到页尾——包壳就得再补排序规则，多两处像素风险；而样式全部挂在 `.container` 这个**类**上，换标签不动任何选择器。跳转链接必须挂在 `body` 直下，是因为 `.container` 带 `backdrop-filter`，会成为 fixed 后代的包含块（同一个坑本文件里已经记过两次，弹窗与一次性提示都为此挂在 body 直下）。另外单独加了 `#main-content:focus { outline: none }`：全局 `:focus-visible` 那条会给整张纸描一圈 2px 朱砂边，看着像出错。
+
+**② 弹窗打开时锁住背后的页面滚动。** 新增一个 `syncModalScrollLock()`：扫三个 overlay 的 `display`，**只要有一个开着**就 `body{overflow:hidden}`，同时按滚动条宽度补 `padding-right`（写成 `calc(基础值 + 宽度)`，基础值从 computed style 取一次——桌面端不会因为滚动条消失让内容横向跳一格）。写成「扫描现状」而不是「进出计数」，天然幂等，某条关闭路径漏调一次也不会把页面永久锁死。调用点**只有 6 个**（三个弹窗各一开一关），因为按钮、「点击遮罩」（`e.target === this`）、「Esc」**全部汇进那三个 close 函数**，没有一处直接改 `display`。
+
+**③ 书架上「选了哪几本」让读屏也听得到。** 给书名按钮加 `aria-pressed`（一组多选开关，语义正是它），并给 `#bookSelector` 补 `role="group" aria-label="书籍选择"`，免得读屏听到一串「按下了 / 未按下」却不知道在选什么。写这一段时发现「选中态」原来有**两个出口、只改了一个**：`selectBook` 里是直接 `btn.classList.add/remove('active')`，**没同步 aria**——于是点一下书，眼睛看到选中、读屏听到的还是「未按下」。改法是把两个出口合成一个 `setBookButtonPressed()`，`selectBook` 与 `syncBookButtonStates` 都走它。这个漏网不是读代码看出来的，是探针逐本对了一遍 `.active` 与 `aria-pressed` 才露出来的。
+
+**④ 服务端两处提示改成读者能执行的话。** `/api/fingerprint-data` 的 404 现在是「暂时还没有可分析的书籍。**上传一份英文全文（.txt），就能在这里开始分析。**」；`/api/book/<name>` 的 404 改成「没有找到《书名》这本书。它可能已经被移除，刷新页面看看。」（这条端点目前没有前端调用方，一并改齐，别留下一个「改了一半」的样子）。「该跑 `generate_data.py`」这条**开发者线索挪到服务端日志**（`app.logger.info`）——给读者的归界面、给排障的归日志。`status` 与状态码一个字节没动；已确认没有测试断言过这两句原文。
+
+### 3. 验证记录
+
+**代码闸门**：`node --check static/js/d3-charts.js` 通过；`python -m unittest discover -s tests` → **Ran 310 tests ... OK**。本批给第四条加了 2 条回归测试，断言两条 404 文案里**不再出现** `python` / `/api/` / `generate_data` 这类只有开发者能用的字样，并断言「至少得告诉读者下一步能做什么」。**顺带记一个坑**：这 2 条一开始加在基类 `LibraryApiTestCase` 上，而它有 **8 个子类**——一跑从 308 变成 326 条。挪进 `ErrorMessageTestCase` 才回到 310。
+
+**① 换标签是逐像素不变的——实测过的，不是推断的。** 把 HEAD 那份 `d3_visualization.html` 写回工作区、量一遍、再还原（并核对还原后逐字节相同），两版对照：
+
+| 元素 | 改前 | 改后 |
+| --- | --- | --- |
+| `.container` | x71.5 y28 w1220 h1823.5 | **同** |
+| `.footer` | x106.5 y1777.5 w1150 h47 order 30 | **同** |
+| `.header` / `.book-bar` / `.tab-navigation` | y63 / y180.8 / y399.3 order 4 | **同** |
+| `#view-main` / `.global-toolbar` / `.upload-bar` | y532.8 order 6 / y1442 order 7 / y1493 order 8 | **同** |
+| 页面总高 / body 右内边距 | 1892 / 20px | **同** |
+
+两版探针的 `consoleErrors` 都为空。标签也核了配平（去注释后 `div` 97/97、`main` 1/1、`footer` 1/1）。
+
+**② 跳转入口在真键盘上走通了。** 页面载入后按**第一次 Tab**，焦点落在跳转链接上、且它**可见**（`tag:A cls:skip-link top:12 left:12 visible:true`，1400px 与 390px 两档都是，截图另存）；再按 Enter → 焦点落到 `#main-content`、页面滚到主内容顶部，且 main 上**没有**那圈朱砂描边（`outlineStyle:"none"`）。**量测坑记一个**：一开始在按完 Tab 立刻量，抓到的是 0.2s 滑入动画的中间态（`top:-56`），加了 450ms 等待才是终值。
+
+**③ 锁滚用真滚轮验的，改前 / 改后逐条对照。**
+
+| | 滚轮后的 `scrollY` |
+| --- | --- |
+| 无弹窗（基线，证明页面本来能滚） | 400 |
+| 片段详情 / 书架编号 / 覆盖确认 打开时 | **0（不动）** |
+| 关掉之后再滚 | **400（又能滚了）** |
+
+**这里也踩了一个坑，值得写下来**：`window.scrollBy()` 对 `overflow:hidden` 的盒子**仍然有效**（它只是不能**被用户**滚），所以第一版探针量出来是「照样动了」——那是探针错了，不是改动错了。换成 CDP 的 `Input.dispatchMouseEvent`（`type:'mouseWheel'`）之后结论才对。三条关闭路径（按钮 / 点遮罩 / Esc）都回到 `overflow:''`、`padding-right` 回到 20px（390px 窄屏回到 10px——手机上本来没有滚动条，所以不补）。桌面 1400×1000 与 390×844 两档都跑了，`consoleErrors` 全为空。
+
+**④ 选中态两个出口始终一致。** 点一本没选的书、再点回去、再切到别的视图、再点「重置」，每一步都把 `.active` 与 `aria-pressed` 逐本对一遍——不一致的清单**始终为空**（`books_mismatch_after_clicks: []`、`books_mismatch_after_reset: []`）。
+
+**⑤ 服务端文案的端到端**：把 `data/processed/` 与 `data/raw/` 两处都临时挪开再访问，`/api/fingerprint-data` 返回 **404** 且带新的那句；首页把它原样显示成「加载数据失败：暂时还没有可分析的书籍。上传一份英文全文（.txt），就能在这里开始分析。」，页面上**搜不到** `python` / `/api/` / `generate_data` 任何一个字样；恢复目录后首页照常画出四本书、`all_books.json` 字节数与修改时间都没变。**顺带发现一件不显然的事**：只把 `all_books.json` 挪走**并不会**触发这个 404——`_load_corpus` 有一条后备逻辑，汇总文件缺失时会退回「`data/processed/` 里最新的单书文件」（第五十二批加的）。所以这条文案真正露面的条件是：**processed 目录里一本书文件都不剩，且 raw 里也没有 .txt**。
+
+**收尾**：本地 5000 端口那个服务进程按 **PID** 关掉（先 `tasklist` 确认是 `python.exe` 才动手，**没有**用 `taskkill /IM`）；`data/library/` 回到**空**；工作区只多一个未跟踪的 `p10.json`。两道结课报告守卫照旧都过：`git check-ignore -v` 命中 `.gitignore:29`；`git log --all --name-only -- '*.pdf'` 里「结课报告」出现 **0** 次。
+
+### 4. 一个说清楚的代价、两个数的更正、明确不做
+
+**一个代价（写在这里，免得以后有人当成 bug）**：`<footer>` 现在落在 `<main>` 里，按 HTML-AAM 不再映射成 `contentinfo` 地标。它原来就是全页唯一的地标、而且只是一行装饰文字；换来的 `main` 才是读屏真正用来跳转的那个。**没有**给它补 `role="contentinfo"` 去把这个地标买回来——landmark 嵌在 main 里不合规（axe 的 `landmark-contentinfo-is-top-level` 会报）。同理也没给页签条包 `<nav>`：它已经有更具体的 `role="tablist" aria-label="分析视图"`（一个元素只能有一个角色），而包一层会打乱它的 `order: 4`。
+
+**更正上一批记错的两个数**：上一批写「`static/js/d3-charts.js` 里 67 处六位色值，其中 40 来处与 CSS 变量完全重复」。重新数过：**71 处**六位色值，其中 **48 处**与变量完全重复（分布在 11 个不同的变量上）。
+
+**明确不做 / 留到下一批**：
+
+- **设计变量收口**（间距、字号、圆角、层级仍是散装的）：**22 种字号**在用；间距大量落在 4px 栅格之外；**9 种圆角**；层级只有 4 档且 5 处并列最高值 9999；页面上还有 26 处内联样式；`.detail-panel h3` 吃浏览器默认 18.72px，反超它父级内联写死 18px 的 h2；三个视图大标题是同一段内联样式**抄了三遍**；图标一半内联 SVG、一半 emoji。属「更规范」，不影响用，改动面大。
+- **没有 `meta description` / 分享卡片 / `theme-color`，也不跟随系统深色模式**。
+- **`inert` 把弹窗背景整块摘出无障碍树**：`inert` 的支持面与副作用得单独验一轮，本批只做了锁滚（先解决「看得见的乱动」），这块留后。
+- **`truncateText` 少 2 个字符、`literature-autodeploy.sh` 失败时记 `rc=0`**：上一批已留档，理由照旧。
+- **本批先不推送**：按老规矩等你说推；推的时候一并上服务器确认线上已更新。

@@ -721,12 +721,17 @@ def get_fingerprint_data():
         data, message = _load_corpus()
 
         if data is None:
-            # 没有真实数据时，返回明确错误并引导用户生成/上传，不返回随机模拟数据
-            # （避免用户把随机数误当成自己的分析结果）
+            # 没有真实数据时，返回明确错误并引导用户上传，不返回随机模拟数据
+            # （避免用户把随机数误当成自己的分析结果）。
+            # 文案面向**读者**（第五十四批）：原来写的是「请先运行 python generate_data.py
+            # 生成示例数据，或通过上传接口 /api/analyze 上传自己的文本」——而这条 message
+            # 会被前端的 getErrorMessage 原样显示在界面上（d3-charts.js 的 showError 那条），
+            # 对文学研究者来说，整句话里没有一步是他能执行的。给读者的归界面、给排障的归日志。
+            app.logger.info("语料为空：data/processed/all_books.json 不存在，"
+                            "data/raw/ 里也没有可用的 .txt（可跑 python generate_data.py 预生成）")
             return jsonify({
                 "status": "error",
-                "message": "暂无可用书籍数据。请先运行 python generate_data.py 生成示例数据，"
-                           "或通过上传接口 /api/analyze 上传自己的文本。"
+                "message": "暂时还没有可分析的书籍。上传一份英文全文（.txt），就能在这里开始分析。"
             }), 404
 
         resp = jsonify({
@@ -777,9 +782,14 @@ def get_book_data(book_name):
                 "data": _public_book_data(all_data[book_name])
             })
 
+        # 与上面 /api/fingerprint-data 那条同源（第五十四批）：给读者一句他能执行的话，
+        # 开发者线索（该跑 generate_data.py）走日志。这条端点目前没有前端调用方，
+        # 一并改齐，别留下一个「改了一半」的样子。
+        app.logger.info("请求的书不存在：%r（语料里共有 %d 本）",
+                        book_name, len(all_data) if all_data else 0)
         return jsonify({
             "status": "error",
-            "message": f"书籍 '{book_name}' 不存在。请先运行 python generate_data.py 生成数据"
+            "message": f"没有找到《{book_name}》这本书。它可能已经被移除，刷新页面看看。"
         }), 404
 
     except Exception:

@@ -55,6 +55,15 @@
         </symbol>
     </svg>
 
+    <!-- 0. 跳到主内容（第五十四批）。键盘与读屏用户进来第一件事是「跳过这一堆重复的
+         页头、书名栏、上传栏、页签」，WCAG 2.2 把这条（2.4.1 Bypass Blocks）列在 **A 级**——
+         比 AA 还硬。全站原来一个 <a> 都没有，所以这是唯一一处锚点。
+         它必须挂在 body 直下：下面 .container 有 backdrop-filter，会成为 fixed 后代的
+         包含块（同一个坑本文件里已记过两次，见弹窗与一次性提示那两段注释）；
+         而且它是 fixed 定位，挂在容器里会按容器的两千多像素高解析。
+         平时移出视口，Tab 到它才滑进来（样式见 .skip-link）。 -->
+    <a class="skip-link" href="#main-content">跳到主内容</a>
+
     <!-- 1. 背景画布。纯装饰（书名关键词的「文字雨」），标 aria-hidden：
          画在 canvas 里的东西对读屏本来就是不可见的，但这块画布是固定定位、铺满全屏，
          不标的话它在无障碍树里仍是一个「画布」节点，读屏用户会先撞上一个没有名字的空壳。
@@ -66,7 +75,17 @@
         ■ 停止文本雨
     </button>
     
-    <div class="container">
+    <!-- 主内容地标（第五十四批）。这里原来是 <div class="container">，只换了标签、
+         加了 id 与 tabindex="-1"：所有样式都挂在 .container 这个**类**上，所以逐像素不变，
+         而读屏从此有一个 main 地标可跳（上面那根跳转链接就落在它身上）。
+         没走「外面再包一层 <main>」是因为 .container 是全局 flex 列、子元素先后由 order
+         逐条指定（见样式表里那一组 .header{order:1} … .footer{order:30}）：插进去的新元素
+         默认吃 `.container > * { order: 20 }`，会掉到页尾。
+         代价：<footer> 现在落在 <main> 里，按 HTML-AAM 不再是 contentinfo 地标。它本来就
+         只是一行装饰文字，而换来的 main 才是读屏真正用来跳的那个。不给它补
+         role="contentinfo"——landmark 嵌在 main 里不合规（axe 的
+         landmark-contentinfo-is-top-level 会报）。 -->
+    <main class="container" id="main-content" tabindex="-1">
         <div class="header">
             <div class="seal" aria-hidden="true">文印</div>
             <h1>文印 · 文学指纹</h1>
@@ -84,7 +103,9 @@
                 <input type="search" id="book-search" aria-label="在书名里查找"
                        placeholder="在书名里找一个…" autocomplete="off">
             </div>
-            <div class="book-selector" id="bookSelector"></div>
+            <!-- role="group"：这一排书名按钮是一个多选开关组，给读屏一句组名，
+                 免得听到一串「按下了 / 未按下」的按钮却不知道在选什么（第五十四批）。 -->
+            <div class="book-selector" id="bookSelector" role="group" aria-label="书籍选择"></div>
         </div>
 
         <!-- 上传自定义文本（与示例书籍并列分析） -->
@@ -466,8 +487,8 @@
             <span class="footer-seal" aria-hidden="true">文印</span>
         </footer>
 
-        
-    </div>
+
+    </main>
 
     <!-- 悬浮详情页模态框 (公用)
          必须放在 .container 外面：.container 有 backdrop-filter，而 backdrop-filter 会让
