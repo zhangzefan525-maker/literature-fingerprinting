@@ -328,6 +328,17 @@ body::before {
 .global-status-action:hover { background: rgba(120, 96, 60, 0.14); }
 
 /* ---------- 全局导出条（在标签页之外，三个视图共用） ---------- */
+/* position/z-index 是守门（第五十六批），不是背景修饰：.dash-chart-body 是
+   position:relative + z-index:auto，那一类「定位后代替补」在同一层叠上下文里画在所有
+   常规流内容之后；工具条是 .container 的 flex item（order:7，DOM 里却在视图之前），
+   于是只要视图内容往下溢出到这一行，按钮就会**静默失效**——看得见、点不动，
+   点击事件落在图表的 svg 上。第五十六批把 dashboard-grid 那 68px 的溢出修掉了，
+   这一条的用处是：以后谁再加高一张卡片，同样的死点击不会再来一次而没人发现。
+
+   **约束（改这一条之前先读）**：这里的 z-index 必须始终高于 .dash-card /
+   .dash-chart-body 那一条链。它赢的是「1 > auto」这个差值——将来谁在图表容器上加一个
+   正整数 z-index（图表改版时很容易顺手加上），同一类静默死点击就会原样复活，
+   而且依然是「看不见」的：按钮好端端在那儿，点它就是不响。 */
 .global-toolbar {
     display: flex;
     align-items: center;
@@ -335,6 +346,8 @@ body::before {
     gap: 12px;
     flex-wrap: wrap;
     margin: -8px 0 18px;
+    position: relative;
+    z-index: 1;
 }
 .global-toolbar-hint {
     color: var(--ink-50);
@@ -1027,6 +1040,9 @@ button:hover {
     /* 这里刻意不吸顶：吸顶会盖住紧跟在下面的标签页按钮，
        而且窄屏上它折成 114px 高，占掉屏幕太多。吸顶交给 .tab-navigation。 */
 }
+/* （第五十六批：「作者归属」页签下 switchTab 会给这个盒子加 hidden；它自带
+   display:flex，靠文件末尾那条 [hidden] { display: none !important } 生效，
+   这里不必再写一条。） */
 .metric-bar .control-group {
     flex-shrink: 0;
 }
@@ -1240,11 +1256,17 @@ button:hover {
    同一个动作、名字也逐字相同），样式随之没有了承载者，一并删掉。 */
 
 /* ---------- 仪表盘 ---------- */
+/* 高度由内容决定（第五十六批）。原来写死 height:600px，而两栏的自然高度都是 668
+   （左栏两张图卡各 327 ＋ 18 的列间距），于是子项越过格子底边 68px，正压在下一条
+   .global-toolbar 上——那 68px 里的三个按钮不但被盖住，还点不动（点击落在图表的
+   svg 上，见 .global-toolbar 那条守门规则）。min-height 600 保住原来那点「面板
+   别太矮」的意思；668 那个数不是新加的，它就是左栏的自然高度。 */
 .dashboard-grid {
     display: grid;
     grid-template-columns: 3fr 1fr;
     gap: 18px;
-    height: 600px;
+    height: auto;
+    min-height: 600px;
 }
 
 .charts-area {
@@ -1416,6 +1438,23 @@ button:hover {
     position: relative;
     overflow: hidden;
 }
+/* 这一条是修一个「每拖一次窗口就长高一点」的回路，不是排版偏好。第 1 段是对的，
+   第 2 段才是它为什么必须在这儿——别删。
+
+   1. 内联的 <svg> 坐在文字基线上（display:inline + vertical-align:baseline），
+      容器因此比 svg 本身高出约 10px：实测 #adv-mean 的 clientHeight 288，里面那张 svg 高 278。
+   2. initD3Structures() 是拿容器**当下的** clientHeight 当新 svg 的高度
+      （d3_visualization.html 里 `const h = el.clientHeight`）。于是每重画一次：
+      新 svg = 旧容器高 = 旧 svg + 10，新容器 = 新 svg + 10 —— 容器每重画一次长 20px。
+      一次窗口往返会重画一次，所以**每拖一个来回，每张卡片长 20px、整页长 40px，没有上界**。
+
+   实测（1280↔1440 反复拖）：卡片 327 → 347 → 367 → … → 447，整页 2676 → 2916，一路往上不收敛。
+   改成 block 之后容器高度就等于 svg 高度，这个回路变成不动点：同样的往返跑下来全程
+   卡片 327、整页 2676，一个数都不动；而且**正常载入时页面高度一个像素没变**（改前改后都是 2676）。
+
+   改前网格钉死 600px，所以这个回路一直存在、只是看不见——现在网格跟着内容走才露出来。
+   第五十六批查「窗口拖过之后页面会变高」时挖出来的。 */
+.dash-chart-body > svg { display: block; }
 
 /* 「风格走势」卡片的图例（第四十六批）。样式对着 .galaxy-legend 写：同一个东西
    （哪条线是哪本书）在两页上长得一样。不设 min-height——空的时候它自己 hidden，
@@ -1491,6 +1530,11 @@ button:hover {
     pointer-events: none;
 }
 
+/* 右栏「片段详情」跟着左栏的高度走（第五十六批）。它自己的内容有一千多像素，
+   不做限制就会把整行撑到那么高；668 是左栏两张图卡的自然高度，超出部分由下面的
+   .drill-content 自己滚（它本来就是 overflow-y:auto，只是以前没机会用上）。
+   这个上限只在两栏并排时成立（见下面那条 min-width:901px）——单栏堆叠时它是独立
+   的一段，该多高就多高，不需要内部滚动条。 */
 .drill-panel {
     background: var(--card);
     border-radius: 8px;
@@ -1500,6 +1544,13 @@ button:hover {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-height: 0;
+}
+
+/* 与上面 .dashboard-grid 那条 668 同源：左栏的自然高度。断点跟 .dashboard-grid
+   变成单栏的那一处（max-width: 900px）对齐。 */
+@media (min-width: 901px) {
+    .drill-panel { max-height: 668px; }
 }
 
 .drill-content {
@@ -2148,7 +2199,9 @@ button:hover {
     .container { padding: 24px 20px 22px; }
     .visualization-container { grid-template-columns: 1fr; }
     .detail-panel { max-height: 420px; }
-    .dashboard-grid { grid-template-columns: 1fr; height: auto; }
+    /* height/min-height 一起归零：单栏堆叠时高度全由内容决定（上面那条 600 的
+       下限是给两栏并排用的，堆起来之后它只会凭空多出一段空白）。 */
+    .dashboard-grid { grid-template-columns: 1fr; height: auto; min-height: 0; }
     .charts-area { grid-template-rows: auto auto; }
     .dash-card { min-height: 320px; }
     .drill-panel { min-height: 280px; }
@@ -2253,17 +2306,20 @@ button:hover {
     .controls { padding: 10px 12px; gap: 10px; }
     .control-group { flex-wrap: wrap; }
 
-    /* 观察角度：说明文字是手机上最大的一块文字（实测 108px），收成两行。
-       注意 .metric-hint 里还有一行 .metric-context（参考区间/框选口径），
-       截断会把它一起盖住——完整句子仍在 DOM 里（读屏/复制/搜索照旧）。 */
+    /* 观察角度这一块在手机上不再截断（第五十六批）。
+       原来把 .metric-hint 收成两行，理由是「首屏预算」；实测这一截盖掉的正是最该留的部分：
+       390 档整块 272px，截断后只剩 44px，被藏掉的 228px 里有 180px 是 .metric-context——
+       也就是「参考区间 14.48 – 18.81 / 只有这 4 本，不足以构成常模——不是好坏标准 /
+       这几本都是在同样长度的片段上算的，可以直接比」这几句。判断「这个数能不能信」的话
+       界面别处没有第二份（.metric-context 由 getMetricContextLine() 现算，只出现在这里）。
+       「首屏预算」这条理由站不住：图表的顶边跟着下移同样 228px（390×844，同一次载入内
+       实测 764 → 992，视口高 844）——露在首屏里的那一条边本来也读不出东西（图上只有顶边
+       和图题，没有数字），而首屏省下的位置换到的是一句没人看得见的提醒。
+       这一步是拿「首屏多露 76px 图」换「读者知道这个数能不能信」，选后者。
+       顺带记下取留的边界，免得下一批照着抄：.header-subtitle 与 #view-main .adv-header small
+       的两行截断保留——前者是装饰性副标题；后者截掉的那半句（纵轴是哪个指标、一格约 1 万词）
+       图上本来就看得到。凡是「判断这个数能不能信」的文字，手机上也不许截。 */
     .metric-bar { gap: 8px; padding: 8px 12px; }
-    .metric-hint {
-        display: -webkit-box;
-        -webkit-box-orient: vertical;
-        -webkit-line-clamp: 2;
-        line-clamp: 2;
-        overflow: hidden;
-    }
 
     /* 图表标题条：读图说明（实测 67px）也收成两行。
        选择器限定 #view-main：本批的截断目标只有首屏这一条。风格星系页的同款说明
@@ -2963,6 +3019,10 @@ button.copy-failed:hover {
     .drill-panel {
         display: block;
         overflow: visible;
+        /* 屏幕上那个 max-height:668px（第五十六批）在纸上必须撤掉：纸上这一块是
+           自然高度，内容 1085px，留着上限的话横向打印（纸宽折算约 1123px，会命中
+           min-width:901px 那条）就会让多出来的部分压在下面的内容上。 */
+        max-height: none;
     }
     #adv-drill-content {
         flex: none;
