@@ -168,25 +168,6 @@
             <span class="upload-hint">提示：译本、删节本与原著不可直接对比。</span>
         </div>
 
-        <!-- 全局指标选择器（前三个标签页共用同一指标，切换后对所有视图生效；
-             第四个页签「作者归属」一个指标都不读，切过去时 switchTab 会把这一栏整块隐藏，
-             见 d3-charts.js 里 switchTab 中那段注释） -->
-        <div class="metric-bar">
-            <div class="control-group">
-                <!-- for= 不能省，和下面「曲线平滑：」同一个理由（见那一处的注释）。下拉框自己
-                     有 aria-label，两者文字一样，补上 for= 不会让读屏念两遍；对鼠标用户则是
-                     点「观察角度」这四个字也能展开下拉框。 -->
-                <label for="metricSelect">观察角度：</label>
-                <select id="metricSelect" aria-label="观察角度">
-                    <option value="sentenceLength">平均句长</option>
-                    <option value="simpsonIndex">用词重复度</option>
-                    <option value="hapaxLegomena">独特词丰富度</option>
-                    <option value="functionWords">风格走向</option>
-                </select>
-            </div>
-            <div class="metric-hint" id="metric-hint"></div>
-        </div>
-
         <!-- 快速开始：只留这一个入口。
              原来这里是「① 点书名多选 ② 换观察角度 ③ 点图上的点」三步，但同屏里三句话各自
              都有别处在说同一件事，而且都是动态的、比这三句更准：① 是 #toggleComparison
@@ -224,6 +205,33 @@
             </button>
         </div>
         
+        <!-- 全局指标选择器（前三个标签页共用同一指标，切换后对所有视图生效；
+             第四个页签「作者归属」一个指标都不读，切过去时 switchTab 会把这一栏整块隐藏，
+             见 d3-charts.js 里 switchTab 中那段注释）。
+
+             第五十八批：这一块从页签条**上面**挪到了**下面**。
+             原先的顺序是「书名栏 → 观察角度 + 该指标的说明 → 页签」，等于让读者在选
+             「看哪一页」之前先读「这一页在看什么」；而且作者归属页会把这块整块隐藏，
+             于是页签条的纵坐标在四个页签里差 144px——同一个控件换一页就换一个高度。
+             挪到页签之后，四页的页签条落在同一处，语义也顺了：先选页，再看这一页的观察角度。
+             位置由样式表里 .metric-bar/.tab-navigation 的 order 决定（.container 是 flex 列、
+             每个子节点都写了显式 order），所以 DOM 与 order 必须一起改，只挪 DOM 是无效的。 -->
+        <div class="metric-bar">
+            <div class="control-group">
+                <!-- for= 不能省，和下面「曲线平滑：」同一个理由（见那一处的注释）。下拉框自己
+                     有 aria-label，两者文字一样，补上 for= 不会让读屏念两遍；对鼠标用户则是
+                     点「观察角度」这四个字也能展开下拉框。 -->
+                <label for="metricSelect">观察角度：</label>
+                <select id="metricSelect" aria-label="观察角度">
+                    <option value="sentenceLength">平均句长</option>
+                    <option value="simpsonIndex">用词重复度</option>
+                    <option value="hapaxLegomena">独特词丰富度</option>
+                    <option value="functionWords">风格走向</option>
+                </select>
+            </div>
+            <div class="metric-hint" id="metric-hint"></div>
+        </div>
+
         <!-- 全局状态条：三个标签页共用。
              数据加载 / 分析失败 / 无数据这类反馈原来只写进 #detailPanel，而它在 #view-main 内部，
              于是在「风格星系」「全书对比」页签下操作时，失败是彻底静默的。 -->
@@ -281,7 +289,7 @@
                          再讲怎么操作」，截断点正好落在「点…」，把「下一步怎么做」整句吃掉了。
                          改成「先讲怎么操作、再讲怎么读图」——被截掉的就变成坐标轴的解释，
                          而轴含义在图上本来就看得到。字数一字未改，桌面端读起来也更顺。 -->
-                    <small style="color:#6b6254">点击图中位置即可查看该片段详情。如需结论，可切换到上方的「全书对比」。横轴是第几个片段（各书的总数不同），纵轴是「观察角度」里选的这个指标；一格约对应 1 万词。</small>
+                    <small style="color:var(--ink-50)">点击图中位置即可查看该片段详情。如需结论，可切换到上方的「全书对比」。横轴是第几个片段（各书的总数不同），纵轴是「观察角度」里选的这个指标；一格约对应 1 万词。</small>
                 </div>
                 <div>
                     <button type="button" id="demo-entry" class="demo-entry" hidden onclick="loadComparisonExample()" title="自动挑出当前观察角度下差异最大的一对书，并切换到「全书对比」查看结论">载入对比示例</button>
@@ -347,7 +355,7 @@
                 <div class="adv-header">
                     <div>
                         <h2 style="margin:0; color:#2f2a23; font-size: 18px;">✧ 风格星系</h2>
-                        <small style="color:#6b6254">每个点的位置，根据书中高频小词<span id="galaxy-axis-words"></span>的使用习惯计算。点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或水平相似。</small>
+                        <small style="color:var(--ink-50)">每个点的位置，根据书中高频小词<span id="galaxy-axis-words"></span>的使用习惯计算。点与点靠得近，只说明高频词的用法相近，不代表两本书的内容或水平相似。</small>
                     </div>
                     <div>
                         <button id="restartGalaxyBtn" type="button" onclick="restartGalaxy()" title="把被推开的点按原始坐标重新排布（力导向为避免重叠会略微移动点的位置）" style="padding:5px 15px;">↻ 重新布局</button>
@@ -376,8 +384,6 @@
                 <!-- 尺寸图例：气泡图必须给出「多大算大」的刻度，否则圆点大小这个编码
                      读不出来。三个圆用与图中同一个比例尺画，指标一换就重建（第三十六批）。 -->
                 <div class="galaxy-size-legend" id="galaxy-size-legend" hidden></div>
-                <div class="galaxy-note" id="galaxy-axis-note" hidden></div>
-
                 <!-- 星系图容器 -->
                 <div id="galaxy-container" style="width: 100%; height: 600px; background: #f2e7cd; border-radius: 10px; position: relative; overflow: hidden; cursor: grab;">
                     <!-- HUD 附近点分析面板。这段空闲态文案是给读屏和首屏兜底用的，
@@ -398,6 +404,13 @@
                     </div>
                     <div id="galaxy-loading" style="color:#2f2a23; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);">正在加载…</div>
                 </div>
+
+                <!-- 轴说明（第五十八批：从点云上方挪到下方）。
+                     这一段 302 字、桌面高 161px、手机高 346px，原来横在点云前面，
+                     读者点开「风格星系」先读七行说明、点云从半屏以下才开始。本页
+                     自己已有同类先例：主图页的热力图色标说明就放在图**下面**
+                     （见 .chart-scale-note 那条注释）。文案一字未改，挪位置。 -->
+                <div class="galaxy-note" id="galaxy-axis-note" hidden></div>
             </div>
         </div>
 
@@ -519,7 +532,7 @@
                     <h2 style="margin:0; color:#2f2a23; font-size: 18px;"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-quill"/></svg> 作者归属</h2>
                     <!-- 「跟你说的是哪几本书」必须写在这里。页面顶上的书名栏在这一页同样显示着，
                          但这一页跟它无关——不说明，读者会以为结果是按他选的那两本算的。 -->
-                    <small style="color:#6b6254">把每本书的虚词使用习惯两两比一遍，看谁和谁更像同一个人写的。四本示例书正好两两同作者（马克·吐温的《汤姆·索亚历险记》《哈克贝利·费恩历险记》，杰克·伦敦的《野性的呼唤》《白牙》），所以这套判断准不准，这里有现成的答案可对。这一页算的是这台服务器上的全部原文，与你上面选了哪几本书无关。</small>
+                    <small style="color:var(--ink-50)">把每本书的虚词使用习惯两两比一遍，看谁和谁更像同一个人写的。四本示例书正好两两同作者（马克·吐温的《汤姆·索亚历险记》《哈克贝利·费恩历险记》，杰克·伦敦的《野性的呼唤》《白牙》），所以这套判断准不准，这里有现成的答案可对。这一页算的是这台服务器上的全部原文，与你上面选了哪几本书无关。</small>
                 </div>
             </div>
             <div id="authorship-root">
@@ -1204,11 +1217,17 @@
             const cfg = INSIGHT_METRIC[currentMetric] || INSIGHT_METRIC.sentenceLength;
             const lines = [];
 
+            // 口径/来源类的行（框选范围、自动选书、平均数口径）与结论句原来是同号同色，
+            // 整块读起来是一坨等权的短句，读者得自己找哪句是结论。把这几行的下标记下来，
+            // 渲染时降一档字号并换浅墨——**句子一个字都不改**，只是不再和结论抢位置。
+            // 下标用「push 之后的长度 - 1」拿，避免以后在它前面插行时忘了同步。
+            const metaLines = new Set();
+
             // 框选生效时先把口径写在最前面：下面「整体水平」「整体最长」这些说法
             // 报的其实是框选那一段的值，而同屏的异常面板报的是全书平均。
             const brushScope = advBrushPercent();
             if (brushScope) {
-                lines.push(`下面这些数字只统计走势图上框选的 ${brushScope} 区段，不是全书。`);
+                metaLines.add(lines.push(`下面这些数字只统计走势图上框选的 ${brushScope} 区段，不是全书。`) - 1);
             }
 
             // 范围词：框选时说区段、没框选时说整体。拼进 high/low 那两句话里，
@@ -1325,7 +1344,7 @@
             // 「更换**下方**选书即可」改掉了（第四十六批）：书选栏在页顶，不在下方；而这句话
             // 会被复制进笔记、写进论文，在文件里连一个「下方」都没有。改成不依赖方位的说法。
             if (typeof isAutoPickedPair === 'function' && isAutoPickedPair()) {
-                lines.push('这两本是按「差距最大」自动挑出的，并非你手动选择——如需比较其他组合，改选其它书籍即可。');
+                metaLines.add(lines.push('这两本是按「差距最大」自动挑出的，并非你手动选择——如需比较其他组合，改选其它书籍即可。') - 1);
             }
 
             // 同一位作者的两部作品（第四十六批）。这四本内置书是**故意两两同作者**的，
@@ -1345,13 +1364,17 @@
             // 「整体」这个平均数的口径（第四十批）：重叠滑窗不是独立样本，本工具不做显著性判断。
             if (typeof buildAveragingNote === 'function') {
                 const avgNote = buildAveragingNote(data.map(d => d.name));
-                if (avgNote) lines.push(avgNote);
+                if (avgNote) metaLines.add(lines.push(avgNote) - 1);
             }
 
             // 存一份给导出/「复制结论」用（d3-charts.js 里声明的 lastInsightLines）。
             // 存的是同一个数组的内容，不是再算一遍——屏幕与导出必须是同一句话。
+            // 注意：这里存的是**纯字符串**，降档只是屏幕上的一层 class，
+            // 导出与「复制结论」拿到的仍然是完整句子。
             lastInsightLines = lines.slice();
-            panel.innerHTML = lines.map(l => `<div class="insight-line">${l}</div>`).join('');
+            panel.innerHTML = lines.map((l, i) =>
+                `<div class="insight-line${metaLines.has(i) ? ' insight-line-meta' : ''}">${l}</div>`
+            ).join('');
         }
 
         // 3. 渲染逻辑
@@ -1980,7 +2003,7 @@
                 let bookHtml = `
                     <div style="margin-bottom: 20px; border-bottom: 2px dashed #e4d9c3; padding-bottom: 10px;">
                         <div style="padding:5px; margin-bottom:5px; display:flex; justify-content:space-between; align-items:center;">
-                            <strong style="color:${book.color};font-size:14px">${escapeHtml(book.displayName || book.name)}</strong>
+                            <strong style="color:${bookTextColor(book.name)};font-size:14px">${escapeHtml(book.displayName || book.name)}</strong>
                             <button type="button" class="drill-remove-btn" onclick="removeSelection('${book.id}')"
                                     aria-label="收起《${escapeHtml(book.displayName || book.name)}》的片段详情；这本书仍留在图表和导出里">✕ 收起</button>
                         </div>
@@ -2000,7 +2023,7 @@
                             <strong>#${i+1} ${peakPointLabel()}: ${fmtMetric(b.value)}</strong>
                             <div style="margin:2px 0;color:#6b6254;font-size:10px">📍 ${escapeHtml(loc)}</div>
                             <p${previewLang} style="margin:0;color:#6b6254;line-height:1.2;max-height:50px;overflow:hidden">${b.preview ? escapeHtml(b.preview.substring(0,60)) + '...' : '无预览'}</p>
-                            ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:9px">※ <span lang="en">${escapeHtml(keywords)}</span></div>` : ''}
+                            ${keywords ? `<div style="margin-top:2px;color:#b5472f;font-size:10px">※ <span lang="en">${escapeHtml(keywords)}</span></div>` : ''}
                             ${b.preview ? `<div style="margin-top:4px;text-align:right;">${excerptCopyButtonHtml(book.name, b.blockIndex, b.preview, 'drill-copy-btn')}</div>` : ''}
                         </div>
                     `;

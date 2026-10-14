@@ -3970,6 +3970,36 @@ function colorForBook(name) {
     return BOOK_COLOR_RANGE[bookSlot(name) % BOOK_COLOR_RANGE.length];
 }
 
+// 上面那张表是**画**用的（柱子的填充、折线、点云），颜色一个都不动；
+// 这张同序表是**写字**用的。片段详情里书名那行是拿系列色当文字
+// （`<strong style="color:${book.color}">`），它压在卡片底 #fdf9ef 上——实测原始色里
+// #6b8f5a 只有 3.50、#a67c3d 只有 3.58、#4f7a8c 只有 4.44，都够不上 WCAG AA 的 4.5
+// （14px 不算大字）。
+//
+// 标定方法与 :root 里的 --vermilion-ink / --ok-ink 同源：不换色相，只把原色往黑等比
+// 压暗；底取比卡片更深的 --panel #f8efda（留余量），压到刚过 4.55 就停手，改动最小。
+// 压完八槽在卡上是 5.11 / 4.96 / 5.01 / 4.96 / 5.10 / 4.97 / 4.95 / 4.98，全部达标。
+// 0 / 4 / 5 号槽本来就达标，原样保留。
+//
+// 旁注：压暗之后 2 号（绿）与 7 号（青）、3 号（金）与 6 号（棕）更靠近了——但文字这边
+// 本来就不只靠颜色分辨：书名旁边有边框色（.drill-item 的 border-left 仍用**原色**）
+// 和原色图例兜着，同一屏里也不会并排出现两本书的名字。
+const BOOK_COLOR_INK = [
+    '#b5472f',  // 槽 0 原色 5.11，已达标
+    '#4a7283',  // 槽 1 原色 #4f7a8c（4.44）→ 4.96
+    '#567448',  // 槽 2 原色 #6b8f5a（3.50，八色里最差）→ 5.01
+    '#8a6631',  // 槽 3 原色 #a67c3d（3.58）→ 4.96
+    '#5a6b8c',  // 槽 4 原色 5.10，已达标
+    '#a2546b',  // 槽 5 原色 4.97，已达标
+    '#836845',  // 槽 6 原色 #8c6f4a（4.45）→ 4.95
+    '#577268'   // 槽 7 原色 #5f7d72（4.28）→ 4.98
+];
+
+// 拿系列色当**文字**时用它；图上仍然是 colorForBook()。
+function bookTextColor(name) {
+    return BOOK_COLOR_INK[bookSlot(name) % BOOK_COLOR_INK.length];
+}
+
 // 只靠颜色区分书，对红绿色盲等于没区分——八种色相里他们还分得开的只有两三种，
 // 而这套色板里 #b5472f / #a67c3d / #a2546b 三者的明度与色相都挨得很近。
 // 所以给每条**线**再配一个线型（第二编码通道）：颜色分不出来时靠虚实分辨。
@@ -7635,7 +7665,11 @@ function renderAuthorshipTree(container, data) {
             .attr('x', -(margin.left - 2)).attr('y', group.y0 - 8)
             .attr('text-anchor', 'start')
             .attr('font-size', authorFont).attr('font-weight', 600)
-            .attr('fill', color)
+            // 这行作者名是拿系列色当**文字**（第五十八批）：11px / 600 不算大字，
+            // 而 #6b8f5a 压在卡片底上只有 3.50:1，够不上 4.5。同一个色相的文字安全档
+            // 见 bookTextColor()。组底带与书名前的小色块仍用**原色**（那就是它在指认的东西），
+            // 所以「哪一支是什么颜色」一点没变——坐标系、数值、字号、位置也全都没动。
+            .attr('fill', bookTextColor(group.names[0]))
             .text(authorZh[group.author] || group.author || '');
         group.names.forEach(name => {
             const y = rowY[name];
