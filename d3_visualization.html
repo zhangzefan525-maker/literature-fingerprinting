@@ -18,7 +18,7 @@
     <link rel="stylesheet" href="static/css/d3-style.css">
 </head>
 <body>
-    <!-- 0. 图标 sprite：8 个装饰图标一次定义、处处 <use> 引用。hidden 的方式是把
+    <!-- 0. 图标 sprite：9 个装饰图标一次定义、处处 <use> 引用。hidden 的方式是把
          整块缩到 0×0（不是 display:none——Safari 上那样会让 <use> 也一起消失）。
          描边风格 24×24，颜色跟着 currentColor 走。 -->
     <svg aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden">
@@ -52,6 +52,10 @@
         <symbol id="i-sort-alpha-up" viewBox="0 0 24 24">
             <path d="M4 12 7.5 4 11 12"/><path d="M5.2 9h4.6"/>
             <path d="M17 20V4"/><path d="M13 8l4-4 4 4"/>
+        </symbol>
+        <symbol id="i-quill" viewBox="0 0 24 24">
+            <path d="M4 20c6-1 10-4 12.5-9.5L19 5l-5.5 1.5C8 9 5 13 4 20Z"/>
+            <path d="M4 20l7-7"/>
         </symbol>
     </svg>
 
@@ -212,6 +216,9 @@
             </button>
             <button id="tab-view-dashboard" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-dashboard" tabindex="-1" onclick="switchTab('view-dashboard')" title="将几本书并列对比：整体水平、逐段走势，以及值得一看的片段">
                 <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chart-bar"/></svg> 全书对比
+            </button>
+            <button id="tab-view-authorship" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-authorship" tabindex="-1" onclick="switchTab('view-authorship')" title="只看虚词使用习惯，把几本书两两比一遍，看能不能判出谁和谁是同一作者，并给出判对了多少">
+                <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-quill"/></svg> 作者归属
             </button>
         </div>
         
@@ -478,6 +485,30 @@
                         <div id="adv-drill-announce" class="visually-hidden" role="status" aria-live="polite"></div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- ============================================ -->
+        <!--  视图 4: 作者归属 (Authorship View)          -->
+        <!-- ============================================ -->
+        <!-- 这一页与前三个页签的关系是「加」不是「改」：它读的是 data/raw/ 下的原文，
+             不参与 /api/fingerprint-data 那条链路，现有三个指标与所有投影坐标一个数都没动。
+             内容全部由 renderAuthorship() 填进 #authorship-root —— 一块空白容器而不是写死的
+             DOM，因为这一页有四种状态（还没开始算 / 正在算 / 算完了 / 这台机器上没有可用的原文），
+             而且矩阵、树、三张表的行列数都取决于语料里有几本书，写死就等于把它们钉在「四本」上。 -->
+        <div id="view-authorship" class="view-section" role="tabpanel" aria-labelledby="tab-view-authorship" hidden>
+            <div class="adv-header">
+                <div>
+                    <h2 style="margin:0; color:#2f2a23; font-size: 18px;"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-quill"/></svg> 作者归属</h2>
+                    <!-- 「跟你说的是哪几本书」必须写在这里。页面顶上的书名栏在这一页同样显示着，
+                         但这一页跟它无关——不说明，读者会以为结果是按他选的那两本算的。 -->
+                    <small style="color:#6b6254">把每本书的虚词使用习惯两两比一遍，看谁和谁更像同一个人写的。四本示例书正好两两同作者（马克·吐温的《汤姆·索亚历险记》《哈克贝利·费恩历险记》，杰克·伦敦的《野性的呼唤》《白牙》），所以这套判断准不准，这里有现成的答案可对。这一页算的是这台服务器上的全部原文，与你上面选了哪几本书无关。</small>
+                </div>
+            </div>
+            <div id="authorship-root">
+                <!-- 脚本没跑起来时的兜底。正常情况下一进这一页就会被替换掉，
+                     所以只说一句两边都成立的话，不承诺任何还没发生的事。 -->
+                <div class="auth-state" role="status">作者归属分析会显示在这里。</div>
             </div>
         </div>
 
