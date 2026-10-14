@@ -43,6 +43,29 @@
        实心底（.cyber-btn-float.active）和亮底上的大字号仍用原来的色，不动。 */
     --vermilion-ink: #9c3a25;
     --ok-ink:        #557545;
+    /* 第五十八批补两个同族深色：花青与赭石原来只有「当底色/描边」的那一档，
+       被直接拿去当文字色时不够。要拿它们当文字的地方有两处，底都是最亮的 --card：
+         .copy-block-btn 的按钮文字（衬底是 rgba(79,122,140,.1) 压 --card = rgb(231,227,210)）
+         片段详情右栏里用系列色写的那行书名（d3_visualization.html 里 bookTextColor()）
+       实测原色：--indigo #5a6b8c 在按钮衬底上 4.17:1、--ochre #a67c3d 在 --card 上 3.58:1，
+       都不到 AA 的 4.5:1。下面这两个仍按「最深的 --paper 底」标定，与上一条同一套办法：
+         --indigo-ink #4a5a78：paper 5.65 / panel 6.07 / card 6.60 / elev 5.30 / 按钮衬底 5.39
+         --ochre-ink   #7d5c2c：paper 4.97 / panel 5.34 / card 5.81 / elev 4.66 / 按钮衬底 4.74
+       图表里的系列色（柱子、折线、点云）一律不动，只换「拿颜色当文字」的那两处。 */
+    --indigo-ink:    #4a5a78;
+    --ochre-ink:     #7d5c2c;
+
+    /* 排版尺度（第五十八批）。
+       行高只留三档：正文 1.6、说明/元信息 1.5、紧凑标题与单行控件 1.25。
+       原来散着 1.85 / 1.75 / 1.7 / 1.65 / 1.6 / 1.55 / 1.5 / 1.2 / 1.17 / 1.12 十档，
+       差值小于半个像素、肉眼分不出，只让「同一段文字换了个类就换了行距」。
+       正文行宽：中文排版的舒适区是每行 25–40 个全角字，而本项目未限宽的说明段落
+       实测到 88–102 字/行（整行 1000px 以上）。--measure 按本项目的正文行高字体
+       取整，约合 38 个全角字（≈76 个西文字符），落在中英文各自的舒适区里。 */
+    --lh-body:  1.6;
+    --lh-meta:  1.5;
+    --lh-tight: 1.25;
+    --measure:  76ch;
 
     /* 交互控件（按钮 / 芯片 / 可聚焦格子）的过渡属性清单。
        别写 transition: all —— 它会把键盘焦点外框的 outline-width / outline-color
@@ -80,6 +103,30 @@ body {
     padding: 28px 20px 40px;
     -webkit-font-smoothing: antialiased;
 }
+
+/* ---------- 标题阶（第五十八批） ----------
+   这份样式表原先**一条 h1–h4 的基础规则都没有**，于是所有没写字号的标题都落到浏览器
+   默认档上，量出来的结果自相矛盾：
+     .detail-panel h3（「▤ 数据详情」）吃 1.17em = 18.72px —— 比它自己的父标题 h2 还大；
+     .drill-panel h4（「▸ 片段详情」）吃 1em = 16px —— 和同级的 .dash-card h4（13px）差 3px；
+     <small> 吃 0.8333em = 13.3333px。
+   这里把四级字号一次性定死，各级之间只差一档、子级不再大于父级；**只定字号，不定字重
+   与行高**：字重沿用各处已有的声明（没声明的继续吃浏览器默认的 bold），行高维持原样，
+   免得动到图表容器的高度预算。
+   各页原有的覆盖规则此后只留颜色/字重/边距，不再重复写字号。 */
+h1 { font-size: 32px; }
+h2 { font-size: 18px; }
+h3 { font-size: 15px; }
+h4 { font-size: 13px; }
+small { font-size: 13px; }
+/* 同一条理由：<button> 不写字号就吃浏览器给表单控件的 13.3333px（Chrome 的 UA 表里写死
+   的 13.3333px + Arial），是这份样式表里最后一处 13.3333px 的来源——书名芯片、末尾那格
+   「＋ 上传我的文本」、「↻ 重新布局」都在这一档上。写一条把它们收回 13px 这一档；
+   已经写明字号的按钮（页签、弹窗、导出组、复制按钮）由各自那条更具体的规则管着，不受影响。 */
+button { font-size: 13px; }
+/* 弹窗标题是**页之上**的一层，不进页内那套 32/18/15/13 的阶：它原先吃 UA 的 1.5em
+   = 24px，加了上面那条 h2 之后会被压到 18px，跟页内小节一般高。这里显式留在 24px。 */
+.galaxy-modal-content h2 { font-size: 24px; }
 
 /* 纸纤维噪点：给羊皮纸铺一层极淡的纤维质感 */
 body::before {
@@ -212,7 +259,7 @@ body::before {
     font-family: var(--font-display);
     font-weight: 700;
     font-size: 14px;
-    line-height: 1.12;
+    line-height: 1.25;
     letter-spacing: 2px;
     box-shadow:
         inset 0 0 0 2px rgba(253, 250, 243, 0.5),
@@ -225,7 +272,7 @@ body::before {
 .header h1 {
     color: var(--ink-100);
     font-family: var(--font-display);
-    font-size: 2rem;
+    font-size: 32px;
     font-weight: 600;
     letter-spacing: 3px;
     margin-bottom: 10px;
@@ -234,13 +281,13 @@ body::before {
 
 .header p {
     color: var(--ink-70);
-    font-size: 1rem;
+    font-size: 16px;
 }
 
 .header-subtitle {
     margin: 0 auto;
-    line-height: 1.55;
-    font-size: 0.94rem;
+    line-height: 1.5;
+    font-size: 15px;
     color: var(--ink-50);
     white-space: nowrap;
 }
@@ -301,7 +348,7 @@ body::before {
     border-radius: 8px;
     background: var(--panel);
     color: var(--ink-100);
-    font-size: 0.88rem;
+    font-size: 14px;
     line-height: 1.6;
 }
 .global-status.loading { border-left-color: var(--indigo); color: var(--ink-70); }
@@ -317,7 +364,7 @@ body::before {
 .global-status-action {
     margin-left: 10px;
     padding: 3px 10px;
-    font-size: 0.85em;
+    font-size: 12px;
     font-weight: 600;
     background: transparent;
     border: 1px solid currentColor;
@@ -351,7 +398,7 @@ body::before {
 }
 .global-toolbar-hint {
     color: var(--ink-50);
-    font-size: 0.78rem;
+    font-size: 12px;
 }
 
 /* ---------- 视图切换 ---------- */
@@ -445,7 +492,7 @@ button:hover {
     background: var(--card);
     border: 1px dashed var(--border);
     border-radius: 8px;
-    font-size: 0.85rem;
+    font-size: 14px;
     color: var(--ink-70);
 }
 
@@ -455,7 +502,7 @@ button:hover {
 
 .quickstart-demo {
     padding: 5px 12px;
-    font-size: 0.82rem;
+    font-size: 13px;
     background: var(--vermilion);
     color: #fdfaf3;
 }
@@ -469,7 +516,7 @@ button:hover {
     padding: 2px 8px;
     background: transparent;
     color: var(--ink-50);
-    font-size: 0.85rem;
+    font-size: 14px;
 }
 
 .quickstart-close:hover {
@@ -485,7 +532,7 @@ button:hover {
    否则触屏上这个按钮比旁边那排小一圈。默认 hidden，由 setDemoEntryVisible 控制。 */
 .demo-entry {
     padding: 5px 12px;
-    font-size: 0.82rem;
+    font-size: 13px;
     background: var(--vermilion);
     color: #fdfaf3;
 }
@@ -503,7 +550,7 @@ button:hover {
 }
 .export-group button {
     padding: 6px 12px;
-    font-size: 0.82rem;
+    font-size: 13px;
     font-weight: 600;
     background: var(--card);
     color: var(--ink-100);
@@ -561,7 +608,7 @@ button:hover {
    display: inline-block 不能省：inline 盒子不可 transform，rotate 会静默失效。 */
 .export-caret {
     display: inline-block;
-    font-size: 0.72em;
+    font-size: 10px;
     transition: var(--transition-control);
 }
 .export-more-toggle[aria-expanded="true"] .export-caret {
@@ -621,6 +668,7 @@ button:hover {
     font-size: 13px;
     line-height: 1.6;
     color: var(--ink-70);
+    max-width: var(--measure);
 }
 
 .detail-panel {
@@ -659,7 +707,7 @@ button:hover {
 }
 
 .detail-card .value {
-    font-size: 1.5rem;
+    font-size: 24px;
     font-weight: 700;
     color: var(--vermilion);
     font-family: var(--font-mono);
@@ -910,7 +958,7 @@ button:hover {
     font-size: 11px;
     font-weight: 400;
     opacity: 0.7;
-    line-height: 1.2;
+    line-height: 1.25;
 }
 
 /* ---------- 上传条 ---------- */
@@ -1046,11 +1094,15 @@ button:hover {
 .metric-bar .control-group {
     flex-shrink: 0;
 }
+/* 这一栏**刻意不限宽**（第五十八批 T5 的两个豁免之一，另一个是 .anomaly-preview）。
+   它是本行里 flex:1 的那一格，实宽约 885px、本来就约 64 字/行；套上 --measure（≈580px）
+   之后左边空出三百多像素、行数从 5 行涨到 8 行，整条 .metric-bar 会从 130px 涨到约 200px
+   ——限宽在这里买不到可读性，只买到一条更高的壳。 */
 .metric-hint {
     flex: 1;
     min-width: 220px;
     color: var(--ink-70);
-    font-size: 0.86rem;
+    font-size: 14px;
     line-height: 1.6;
 }
 .metric-hint-label {
@@ -1060,7 +1112,7 @@ button:hover {
     background: var(--indigo);
     color: #fdf9ef;
     border-radius: 10px;
-    font-size: 0.72rem;
+    font-size: 12px;
     font-weight: 600;
 }
 
@@ -1075,7 +1127,7 @@ button:hover {
     border: 1px solid var(--border-soft);
     border-radius: 8px;
     color: var(--ink-70);
-    font-size: 0.82rem;
+    font-size: 13px;
 }
 /* 指针能力决定说哪句：触屏没有滚轮，也没有「悬停」。
    两句都写在 HTML 里，这里按设备择一显示——不用 JS 判断，设备接上鼠标也会自动跟上。 */
@@ -1098,7 +1150,7 @@ button:hover {
     padding: 8px 12px;
     background: var(--card);
     border-radius: 8px;
-    font-size: 0.82rem;
+    font-size: 13px;
     color: var(--ink-70);
 }
 .galaxy-legend-item {
@@ -1118,8 +1170,9 @@ button:hover {
     border: 1px solid var(--border-soft);
     border-radius: 8px;
     color: var(--ink-70);
-    font-size: 0.8rem;
+    font-size: 13px;
     line-height: 1.6;
+    max-width: var(--measure);
 }
 .galaxy-note-warn {
     background: #fdf1e0;
@@ -1161,7 +1214,7 @@ button:hover {
     padding: 8px 12px;
     background: var(--card);
     border-radius: 8px;
-    font-size: 0.82rem;
+    font-size: 13px;
     color: var(--ink-70);
 }
 .galaxy-size-legend[hidden] {
@@ -1239,6 +1292,24 @@ button:hover {
     border-left: 3px solid var(--vermilion);
 }
 
+/* 标题下的说明行限宽（第五十八批）。三个页签的 `.adv-header` 里都有一句「这一页在讲
+   什么」，实测 1440 档一行 1014px、**81 个全角字**——全站最宽的一行，读到行尾找不回
+   下一行的开头。中文的舒适区是 25–40 字，这行是它的两倍。
+   为什么单独写一条：--measure 那一套限宽只对块级元素成立，而 <small> 的计算 display 是
+   inline，光给它 max-width 什么都不会发生。改 display 这一步 B 提过、A 判成「会动到
+   .adv-header 的 space-between 排版」——实测不会：这个 <small> 在它所在的 div 里是唯一的
+   行内串，独立成块不改变任何既有排版（div 仍是 .adv-header 的 flex 子项，标题仍在上面一行）。
+   为什么限在 <small> 上而不是外层那个 div：div 里还有 h2，限在 div 上会把标题一起限住，
+   将来标题变长会莫名其妙换行。
+   代价认了：这三页的表头各长高一行（80→100、80→100、104→124），第一张图跟着下移同样的
+   距离——第五十八批把页签条上移 144px 换来的余量足够付。换到的是行宽从 81 字降到约 38 字。
+   手机档不受影响：390 档可用宽约 350px 本来就够不到这条限值；#view-main 那两行截断的规则
+   带 id、优先级更高，仍照原样生效（见手机段里那条取留边界的记录）。 */
+.adv-header small {
+    display: block;
+    max-width: var(--measure);
+}
+
 /* 「重置视图」（第三十八批从行内样式搬过来的）。搬家的理由只有一个：
    行内样式没法在 @media (pointer: coarse) 里给它补 44px 的触屏命中区——
    实测这个按钮在 390×844 的触摸仿真下只有 25px 高，连 WCAG 2.5.8 的下限 24px
@@ -1289,7 +1360,7 @@ button:hover {
    用 flex 而不是 float 是为了窄屏换行时按钮不会跑到文字下面去。 */
 .insight-panel h4 {
     margin: 0 0 10px 0;
-    font-size: 14px;
+    font-size: 15px;
     color: var(--ink-100);
     font-family: var(--font-display);
     display: flex;
@@ -1327,8 +1398,9 @@ button:hover {
 
 .insight-line {
     font-size: 14px;
-    line-height: 1.85;
+    line-height: 1.6;
     color: var(--ink-100);
+    max-width: var(--measure);
 }
 
 .insight-line::before {
@@ -1340,6 +1412,19 @@ button:hover {
 .insight-muted {
     color: var(--ink-50);
     font-size: 13px;
+}
+
+/* 口径/来源类的行（框选范围、自动选书、平均数口径）与结论句同号同色时，整块读起来
+   是一坨等权的短句，读者得自己找哪句是结论。降一档并换浅墨：句子一字不动、仍完整
+   显示，只是不再和结论抢位置。（第五十八批，小明C 的 N2；类名由 renderInsight 按行
+   打上，见 d3_visualization.html 里 renderInsight 的 metaLines。） */
+.insight-line-meta {
+    font-size: 13px;
+    color: var(--ink-50);
+}
+/* 降档之后那枚朱砂圆点就更抢眼了——说明句的记号也改用浅墨。 */
+.insight-line-meta::before {
+    color: var(--ink-50);
 }
 
 /* ---------- 「值得一看的片段」（异常片段） ---------- */
@@ -1358,8 +1443,8 @@ button:hover {
 
 .anomaly-muted {
     color: var(--ink-50);
-    font-size: 12.5px;
-    line-height: 1.7;
+    font-size: 13px;
+    line-height: 1.6;
 }
 
 .anomaly-item {
@@ -1371,7 +1456,7 @@ button:hover {
 }
 
 .anomaly-head {
-    font-size: 12.5px;
+    font-size: 13px;
     color: var(--ink-70);
     display: flex;
     align-items: center;
@@ -1395,6 +1480,9 @@ button:hover {
     margin-top: 4px;
 }
 
+/* T5 的第二个豁免：这一段是**英文**摘录，本来就 155 字符一行；中文的 38 字/行换算到
+   英文上会把它压成三行（实测 #anomaly-content 整块 1034 → 1168px）。摘录的英文长句
+   断得太碎反而更难读，所以只限中文说明段，不限摘录原文。 */
 .anomaly-preview {
     font-size: 12px;
     color: var(--ink-50);
@@ -1421,8 +1509,10 @@ button:hover {
 
 .dash-card h4 {
     margin: 0 0 10px 0;
-    font-size: 13px;
-    color: var(--ink-70);
+    /* 第五十八批：这里原先是 --ink-70，而右栏 .drill-panel 的「▸ 片段详情」反而是
+       --ink-100——同屏两块，主图那张卡的标题比侧栏那块淡。现按一条统一规则分：
+       主图卡标题 ink-100、侧栏与表格类标签 ink-70。 */
+    color: var(--ink-100);
     border-bottom: 1px solid var(--border-soft);
     padding-bottom: 6px;
     display: flex;
@@ -1478,7 +1568,7 @@ button:hover {
     flex-wrap: wrap;
     gap: 2px 14px;
     margin: 0 0 6px 0;
-    font-size: 0.78rem;
+    font-size: 12px;
     color: var(--ink-70);
 }
 
@@ -1636,7 +1726,7 @@ button:hover {
 .drill-remove-btn {
     font-size: 10px;
     font-weight: 400;
-    color: #6b6254;
+    color: var(--ink-50);
     cursor: pointer;
     background: none;
     border: none;
@@ -1710,7 +1800,7 @@ button:hover {
     padding: 16px 18px;
     color: var(--ink-70);
     font-size: 13px;
-    line-height: 1.75;
+    line-height: 1.6;
 }
 
 .auth-state b { color: var(--ink-100); font-size: 14px; }
@@ -1734,16 +1824,16 @@ button:hover {
 
 .auth-hero h3 {
     margin: 0 0 6px 0;
-    font-size: 15px;
-    line-height: 1.75;
+    line-height: 1.6;
     color: var(--ink-100);
     font-family: var(--font-display);
+    max-width: var(--measure);
 }
 
 .auth-note {
     margin: 0;
     font-size: 12px;
-    line-height: 1.75;
+    line-height: 1.6;
     color: var(--ink-50);
 }
 
@@ -1768,8 +1858,9 @@ button:hover {
 
 .auth-card h4 {
     margin: 0 0 10px 0;
-    font-size: 13px;
-    color: var(--ink-70);
+    /* 第五十八批：与 .dash-card h4 同一条判据——同一容器里，栏题不得比它管辖的
+       正文浅。这里下面跟的是 .auth-table / .auth-matrix 的 12px 正文（--ink-100）。 */
+    color: var(--ink-100);
     border-bottom: 1px solid var(--border-soft);
     padding-bottom: 6px;
     font-family: var(--font-display);
@@ -1801,9 +1892,10 @@ button:hover {
     caption-side: top;
     text-align: left;
     font-size: 11px;
-    line-height: 1.75;
+    line-height: 1.6;
     color: var(--ink-50);
     padding-bottom: 8px;
+    max-width: var(--measure);
 }
 
 .auth-matrix th,
@@ -1863,9 +1955,10 @@ button:hover {
     caption-side: top;
     text-align: left;
     font-size: 11px;
-    line-height: 1.75;
+    line-height: 1.6;
     color: var(--ink-50);
     padding-bottom: 8px;
+    max-width: var(--measure);
 }
 
 .auth-table th,
@@ -1874,7 +1967,7 @@ button:hover {
     padding: 7px 10px;
     border-bottom: 1px solid var(--border-soft);
     vertical-align: top;
-    line-height: 1.75;
+    line-height: 1.6;
 }
 
 .auth-table thead th {
@@ -2009,6 +2102,10 @@ button:hover {
 }
 
 .modal-section h4 {
+    /* 这一处是「区块标题」而不是「卡片标题」：它底下直接跟的是 15px 的摘录正文
+       （.text-scroll-area），用 h4 的基础档 13px 会变成标题比正文小。
+       全站按同一个判据分两档：区块标题 15px、卡片/栏目标题 13px。 */
+    font-size: 15px;
     color: var(--ink-70);
     margin-bottom: 10px;
     border-left: 3px solid var(--vermilion);
@@ -2033,7 +2130,7 @@ button:hover {
     max-height: 300px;
     overflow-y: auto;
     font-family: "Georgia", "Songti SC", "STSong", serif;
-    line-height: 1.7;
+    line-height: 1.6;
     font-size: 15px;
     color: #3a342b;
     border: 1px solid var(--border-soft);
@@ -2250,8 +2347,13 @@ button:hover {
 /* 书名栏现在是 .book-bar 这一层占第 2 位（#bookSelector 成了它的孩子，不再直接
    参与这套排序）。 */
 .book-bar { order: 2; }
-.metric-bar { order: 3; }
-.tab-navigation { order: 4; }
+/* 第五十八批：3 / 4 这两条互换过。原来「观察角度」在页签**上面**，加上它在作者归属页
+   被整块隐藏，页签条的纵坐标在四个页签里就差 144px（metricBar 高 130 + 下边距 14）——
+   同一个控件换一页就换一个高度。换成「页签在前、观察角度在后」之后四页对齐，
+   语义也顺了：先选看哪一页，再看这一页的观察角度。
+   注意：DOM 顺序也一并调过（d3_visualization.html），**只改其中一处是无效的**。 */
+.tab-navigation { order: 3; }
+.metric-bar { order: 4; }
 #global-status { order: 5; }
 #view-main, #view-galaxy, #view-dashboard, #view-authorship { order: 6; }
 .global-toolbar { order: 7; margin: 10px 0 18px; }
@@ -2291,11 +2393,11 @@ button:hover {
     .header { padding-bottom: 12px; }
     .header::before { font-size: 130px; }
     .header::after { width: 130px; }
-    .header h1 { font-size: 1.6rem; letter-spacing: 2px; margin-bottom: 6px; }
+    .header h1 { font-size: 26px; letter-spacing: 2px; margin-bottom: 6px; }
     .header-subtitle {
         white-space: normal;
-        font-size: 0.85rem;
-        line-height: 1.7;
+        font-size: 14px;
+        line-height: 1.6;
         display: -webkit-box;
         -webkit-box-orient: vertical;
         -webkit-line-clamp: 2;
@@ -2432,7 +2534,7 @@ button:hover {
     .auth-matrix tbody td { min-width: 0; }
     .auth-row-title, .auth-row-meta { white-space: normal; }
     .auth-row-title { font-size: 11px; }
-    .auth-row-meta { font-size: 9px; }
+    .auth-row-meta { font-size: 10px; }
 
     .galaxy-hud {
         width: auto;
@@ -2512,15 +2614,14 @@ button:hover {
     border-radius: 10px;
     color: var(--ink-70);
     font-size: 14px;
-    line-height: 1.7;
+    line-height: 1.6;
 }
 .state-card h3 {
     margin: 0 0 6px;
-    font-size: 16px;
     font-weight: 600;
     color: var(--ink-100);
 }
-.state-card p { margin: 4px 0; }
+.state-card p { margin: 4px 0; max-width: var(--measure); }
 .state-card.loading { border-color: var(--indigo); background: rgba(90, 107, 140, 0.08); }
 /* 这里原来还有一条 .state-card.success——第二十批把「成功加载 N 本书」那张卡整个删掉
    （那块地方换成了能点进去的「先看这 3 段」），样式跟着删，不留死规则。 */
@@ -2655,7 +2756,7 @@ button:hover {
 /* ---------- 出处定位 / 指标解读参考 / 复制片段（研究资产化） ---------- */
 .block-location {
     display: inline-block;
-    font-size: 0.85rem;
+    font-size: 14px;
     color: var(--ink-70);
     background: var(--elev);
     border: 1px solid var(--border-soft);
@@ -2664,16 +2765,17 @@ button:hover {
     margin: 8px 0 4px;
 }
 
+/* 同上：这行在 #metric-hint 里面，跟着那一格走，也不限宽。 */
 .metric-context {
     margin-top: 4px;
-    font-size: 0.78rem;
+    font-size: 12px;
     color: var(--ink-50);
     line-height: 1.6;
 }
 
 /* 详情面板：所在章节 + 全书概况 */
 .chapter-location {
-    font-size: 0.85rem;
+    font-size: 14px;
     color: var(--ink-70);
     margin: 4px 0;
 }
@@ -2681,7 +2783,7 @@ button:hover {
 /* 章号口径补充（第四十批）：跟在同一行的后面，字号再小一档。
    它说的是「这个标签是怎么来的」，不是新的结论，所以压得比正文轻。 */
 .chapter-location-hint {
-    font-size: 0.76rem;
+    font-size: 12px;
     color: var(--ink-50);
 }
 
@@ -2689,15 +2791,18 @@ button:hover {
     margin-top: 10px;
     padding-top: 8px;
     border-top: 1px dashed var(--border-soft);
-    font-size: 0.78rem;
+    font-size: 12px;
     color: var(--ink-50);
-    line-height: 1.7;
+    line-height: 1.6;
 }
 
 .copy-block-btn {
     font-family: inherit;
-    font-size: 0.75rem;
-    color: var(--indigo);
+    font-size: 12px;
+    /* 第五十八批：原来用 --indigo #5a6b8c，压在自己的淡底
+       rgba(79,122,140,.1) 合成出来的 rgb(231,227,210) 上只有 4.17:1，不到 AA 的 4.5。
+       换同为花青族的 --indigo-ink #4a5a78，同一衬底上 5.39:1。 */
+    color: var(--indigo-ink);
     background: rgba(79, 122, 140, 0.1);
     border: 1px solid rgba(79, 122, 140, 0.3);
     border-radius: 6px;
@@ -2716,14 +2821,14 @@ button:hover {
    读者先看到「共约 1 万词，此处显示 1200 字」，再看到正文，就不会把引文当全文。 */
 .modal-text-note {
     margin: 0 0 8px;
-    color: #6b6254;
-    font-size: 0.78rem;
+    color: var(--ink-50);
+    font-size: 12px;
     line-height: 1.5;
 }
 .excerpt-note {
     margin: 4px 0 8px;
-    color: #6b6254;
-    font-size: 0.72rem;
+    color: var(--ink-50);
+    font-size: 12px;
     line-height: 1.5;
 }
 
@@ -2760,7 +2865,7 @@ button:hover {
     color: var(--vermilion);
     min-width: 3.4em;   /* 三行数字左边缘对齐，扫一眼就能比大小 */
 }
-.quick-preview-row .qp-loc { font-size: 0.85em; color: var(--ink-50); }
+.quick-preview-row .qp-loc { font-size: 11px; color: var(--ink-50); }
 
 /* ---------- 第二十批：「书架编号」按钮与弹窗 ---------- */
 /* 常驻在上传条里（新设备上正需要它，那时这个书架还是空的），外观跟旁边的
@@ -2786,7 +2891,7 @@ button:hover {
 .shelf-modal-lead {
     color: var(--ink-70);
     font-size: 13px;
-    line-height: 1.65;
+    line-height: 1.6;
     margin-bottom: 12px;
 }
 .shelf-code-row {
@@ -2812,7 +2917,7 @@ button:hover {
 .shelf-code-row .copy-block-btn { margin-top: 0; }
 .shelf-code-warn {
     margin-top: 10px;
-    color: #6b6254;
+    color: var(--ink-50);
     font-size: 12px;
     line-height: 1.6;
 }
