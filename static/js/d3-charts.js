@@ -775,6 +775,16 @@ window.switchTab = function(tabId, options) {
         section.hidden = !isActive;
     });
 
+    // 「观察角度」这一栏跟着页签显隐（第五十六批）。它上面写着「三个标签页共用同一指标」
+    // ——那是第四个页签出现之前的实情；作者归属那一页一个指标都不读（它比的是虚词用法，
+    // 见本文件作者归属那一节的开头），留着这个下拉框只会让读者改它、然后等页面变，
+    // 而这一页永远不会变。手机上它还白占 272px（见 CSS 里 .metric-hint 那段），
+    // 正好把这一页的第一条正文推到视口之外。
+    // 用 hidden 属性而不是行内样式，和上面 .view-section 同一套写法；.metric-bar
+    // 自带 display:flex，靠样式表末尾那条 [hidden] { display: none !important } 兑现。
+    const metricBar = document.querySelector('.metric-bar');
+    if (metricBar) metricBar.hidden = (tabId === 'view-authorship');
+
     const activeSection = document.getElementById(tabId);
     if (activeSection) {
         // 滚到刚切出来的这块内容。放在这里、不进下面的 setTimeout：
@@ -1887,7 +1897,7 @@ async function loadBooksList() {
         if (!response.ok || !data || data.status !== 'success') {
             const message = getErrorMessage(response, data);
             console.error('加载书籍列表失败:', message);
-            showError(`无法加载书籍列表：${message}`);
+            showError(`无法加载书籍列表：${message}`, { action: reloadBooksAction() });
             return;
         }
 
@@ -1908,8 +1918,18 @@ async function loadBooksList() {
         console.error('网络错误:', error);
         // 原话是「请确保已运行 python api_server.py」——那是写给部署者看的（第三十五批）。
         // 读者不知道 api_server.py 是什么，也不需要知道；技术细节丢在上一行的 console.error 里。
-        showError('暂时无法连接到分析服务。请检查网络后稍后重试。');
+        showError('暂时无法连接到分析服务。请检查网络后稍后重试。', { action: reloadBooksAction() });
     }
+}
+
+// 书籍列表加载失败时那个「重新加载」（第五十六批）。
+// 原来这两种失败（接口报错、连不上）只显示一句话，页面上**没有任何地方**能再试一次：
+// 书架是空的、按钮表里没有重试、全页搜「重试/刷新」命中的只是那句话本身——读者只能
+// 自己去刷新浏览器，而界面从没告诉过他。这句话里写着「稍后重试」，却指不到任何东西上。
+// 挂到状态条上而不是数据详情卡：状态条在页面顶部，手机上不用往下翻；而且 error 类的
+// 状态条不会自己收起（见 setGlobalStatus），按钮不会跟着消息一起消失。
+function reloadBooksAction() {
+    return { label: '重新加载', onClick: () => { setGlobalStatus(null, ''); loadBooksList(); } };
 }
 
 // —— 书名栏：整份名单 ＋ 一层「找书」过滤（第四十九批）——
@@ -5612,8 +5632,10 @@ function showLoading(message) {
     `;
 }
 
-function showError(message) {
-    setGlobalStatus('error', message);
+function showError(message, options) {
+    // options.action（第五十六批）：错误消息可以自带一个「下一步」按钮，详见 loadBooksList
+    // 里「连书籍列表都拿不到」那一处——那里除了重试，页面上再没有第二个出口。
+    setGlobalStatus('error', message, options && options.action ? { action: options.action } : undefined);
     showGalaxyError(message);
     // 状态条滚出屏幕外时补一条贴底的提示，否则「点了没反应」。
     // 判断必须放在 setGlobalStatus 之后：是它负责把状态条显示出来的，在那之前量不到它的位置。
@@ -7218,6 +7240,12 @@ let authorshipData = null;
 let authorshipStatus = 'idle';      // idle | loading | ready | unavailable
 let authorshipMessage = '';
 let authorshipRequested = false;
+// 失败分两类，决定界面上给不给「重新算一次」（第五十六批）：
+//   能重试的——服务端 5xx、连不上（网络抖一下），再点一次确实可能就好了；
+//   重试没用的——原文不够（404）。触发条件摆在服务器上，点一百次都是同一个结果，
+//   这时给按钮等于把「这台服务器算不了」包装成「你运气不好，再试一次」。
+// 这一类不给动作，只把「为什么」和「换书也没用」说清楚——省得读者回书架乱试。
+let authorshipRetryable = false;
 
 async function loadAuthorship() {
     if (authorshipRequested) return;
@@ -7238,12 +7266,16 @@ async function loadAuthorship() {
             // （「这台服务器上还没有可供分析的原文…」），它说得比这里准，照用；
             // 拿不到就补一句不涉及任何内部细节的兜底。
             authorshipStatus = 'unavailable';
+            // 4xx = 这台服务器上算不出来（原文不够），5xx = 服务器刚才那一下没算成。
+            // 只有后者值得再点一次。
+            authorshipRetryable = response.status >= 500;
             authorshipMessage = (body && body.message)
                 || '这台服务器上还没有可供分析的原文，作者归属暂时算不出来。';
         }
     } catch (err) {
         console.error('作者归属分析失败:', err);
         authorshipStatus = 'unavailable';
+        authorshipRetryable = true;   // 连不上是网络那一段的事，再试有意义
         authorshipMessage = '连不上服务器，作者归属暂时算不出来。稍后再试一次。';
     }
 
@@ -7256,6 +7288,7 @@ window.retryAuthorship = function() {
     authorshipRequested = false;
     authorshipData = null;
     authorshipMessage = '';
+    authorshipRetryable = false;
     loadAuthorship();
 };
 
@@ -7283,11 +7316,17 @@ function renderAuthorship() {
         return;
     }
 
+    // 出口按失败类型二选一（第五十六批）。不能重试的那一类不给按钮：那个按钮必然失败，
+    // 而读者会以为是自己的问题，回书架换书、一遍遍重算。换成一句「换书也一样」，
+    // 让他知道这不是他操作出来的。
+    const outlet = authorshipRetryable
+        ? '<button type="button" class="auth-retry" onclick="retryAuthorship()">重新算一次</button>'
+        : '<span>这一页算的是这台服务器上现成的全部原文，和你上面选了哪几本书无关：换书、再点一次，结果都一样。</span>';
     root.innerHTML = `
         <div class="auth-state auth-state-error" role="status">
             <b>暂时算不出作者归属</b>
             <span>${escapeHtml(authorshipMessage)}</span>
-            <button type="button" class="auth-retry" onclick="retryAuthorship()">重新算一次</button>
+            ${outlet}
         </div>`;
 }
 
