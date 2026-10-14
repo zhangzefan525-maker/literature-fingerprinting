@@ -2193,6 +2193,41 @@ button:hover {
     outline-offset: 2px;
 }
 
+/* ---------- 「跳到主内容」（第五十四批，WCAG 2.4.1 Bypass Blocks，A 级） ----------
+   键盘与读屏用户进来第一件事是跳过页头 / 书名栏 / 上传栏 / 页签这一堆每页都一样的东西。
+   平时整条移出视口上方，Tab 到它才滑下来。它挂在 body 直下（.container 带 backdrop-filter，
+   会让 fixed 后代的包含块变成那张两千多像素高的纸——同一个坑，弹窗与一次性提示都为此
+   挂在 body 直下）。
+   z-index 压过弹窗遮罩的 9999：万一它和弹窗同屏，键盘用户也得看得见自己在哪。 */
+.skip-link {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 10001;
+    transform: translateY(calc(-100% - 24px));
+    transition: transform 0.2s ease;
+    padding: 10px 16px;
+    border: 2px solid var(--vermilion);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--ink-100);
+    font-family: var(--font-body);
+    font-size: 14px;
+    text-decoration: none;
+    box-shadow: 0 6px 18px rgba(94, 78, 54, 0.25);
+}
+.skip-link:focus {
+    transform: translateY(0);
+}
+
+/* 跳转的落点是 <main> 这个**容器**本身，不是某个控件。全局 :focus-visible 那条会给它
+   描一圈 2px 朱砂边，等于把整张纸圈起来，看着像出错。这里显式去掉——焦点可见性（2.4.7）
+   管的是可操作元素，一个滚动容器不是。 */
+#main-content:focus,
+#main-content:focus-visible {
+    outline: none;
+}
+
 /* 使 HTML hidden 属性始终生效（压过元素的 display 规则） */
 [hidden] { display: none !important; }
 

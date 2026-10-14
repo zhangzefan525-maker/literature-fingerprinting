@@ -863,6 +863,26 @@ class UploadCleaningTestCase(LibraryApiTestCase):
 class ErrorMessageTestCase(LibraryApiTestCase):
     """错误提示必须是给非技术用户看的中文，不能把异常原文抛出去。"""
 
+    def test_no_data_message_is_written_for_the_reader(self):
+        """
+        这条 message 会被前端的 getErrorMessage 原样显示在界面上（showError 那条），
+        读它的人是文学研究者。原来写的是「请先运行 python generate_data.py 生成示例数据，
+        或通过上传接口 /api/analyze 上传自己的文本」——整句话里没有一步是他能执行的。
+        判据就是本项目那条界面文案规矩：**读者能不能执行下一步**。
+        开发者线索（该跑 generate_data.py）改走服务端日志，所以这里顺带把「不许回到
+        给读者的那句话里」的几种字样钉住。
+        """
+        (self.processed / "all_books.json").unlink()
+        msg = self.client.get("/api/fingerprint-data").get_json()["message"]
+        for leak in ("python", "/api/", "generate_data", "接口"):
+            self.assertNotIn(leak, msg)
+        self.assertIn("上传", msg)  # 至少得告诉读者下一步能做什么
+
+    def test_missing_book_message_is_written_for_the_reader(self):
+        msg = self.client.get("/api/book/no-such-book").get_json()["message"]
+        for leak in ("python", "/api/", "generate_data"):
+            self.assertNotIn(leak, msg)
+
     def test_missing_file_field(self):
         resp = self.client.post("/api/analyze", data={}, content_type="multipart/form-data")
         self.assertEqual(resp.status_code, 400)

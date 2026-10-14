@@ -1302,6 +1302,7 @@ function openOverwriteModal(file) {
 
     modal.setAttribute('aria-hidden', 'false');
     modal.style.display = 'flex';
+    syncModalScrollLock();
     document.addEventListener('keydown', trapOverwriteModalFocus);
     setTimeout(() => {
         modal.classList.add('show');
@@ -1319,6 +1320,7 @@ function closeOverwriteModal({ returnFocus = true } = {}) {
     document.removeEventListener('keydown', trapOverwriteModalFocus);
     setTimeout(() => {
         modal.style.display = 'none';
+        syncModalScrollLock();
         if (!returnFocus) return;
         // 焦点还给上传按钮。它是 <label>，本身不可聚焦，要转给里面的 file input——
         // 直接对 label 调 focus() 会静默失败，焦点掉回页面开头。
@@ -1365,6 +1367,10 @@ function buildBookGroup(book, { active = false, deletable = false, onClick } = {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'book-btn' + (active ? ' active' : '');
+    // 「选没选中」原来只写在 .active 类上（= 底色 + 描边），读屏读到的是一排没有状态的
+    // 按钮。这是一组多选开关，aria-pressed 正是它的语义（第五十四批）。
+    // 另一处会改选中态的地方是 syncBookButtonStates()，两处必须一起改。
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
     button.dataset.id = id;
     // 书名下面加一小行「作者 · 年份」（第四十六批）。这四本是**故意两两同作者**的，
     // 而整个界面原来一个作者名都没有——第一次打开的人看到的是四本互不相干的书，
@@ -1626,6 +1632,7 @@ function openShelfModal() {
 
     modal.setAttribute('aria-hidden', 'false');
     modal.style.display = 'flex';
+    syncModalScrollLock();
     document.addEventListener('keydown', trapShelfModalFocus);
     setTimeout(() => {
         modal.classList.add('show');
@@ -1642,6 +1649,7 @@ function closeShelfModal() {
     document.removeEventListener('keydown', trapShelfModalFocus);
     setTimeout(() => {
         modal.style.display = 'none';
+        syncModalScrollLock();
         const trigger = document.getElementById('shelf-code-btn');
         if (trigger) trigger.focus(); // 焦点还给打开它的那个按钮，不然键盘用户会掉到页面开头
     }, 300);
@@ -2096,6 +2104,15 @@ function announceOrNotice(text, options) {
     }
 }
 
+// 「这本书被选中了」有两个出口：给眼睛看的 .active 和给读屏听的 aria-pressed。
+// 合成一个函数写，免得再出现「只改了其中一个」——第五十四批就是这么发现 selectBook
+// 里还有一处漏网的（这里原来直接 btn.classList.add/remove，没同步 aria）。
+function setBookButtonPressed(btn, pressed) {
+    if (!btn) return;
+    btn.classList.toggle('active', pressed);
+    btn.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+}
+
 function selectBook(bookId) {
     const btn = getBookButtonById(bookId);
 
@@ -2107,11 +2124,11 @@ function selectBook(bookId) {
             return;
         }
         selectedBooks.delete(bookId);
-        if (btn) btn.classList.remove('active');
+        setBookButtonPressed(btn, false);
     } else {
         // 如果未选中，则添加
         selectedBooks.add(bookId);
-        if (btn) btn.classList.add('active');
+        setBookButtonPressed(btn, true);
     }
 
     // 选中变了，那条「已替你选中差异最大的两本」当场成了假话（第四十九批）。
@@ -2146,8 +2163,10 @@ function updateCompareButtonLabel() {
 // 按 selectedBooks 同步书名按钮的选中态（链接还原、删除后使用）
 function syncBookButtonStates() {
     document.querySelectorAll('.book-group').forEach(group => {
-        const btn = group.querySelector('.book-btn');
-        if (btn) btn.classList.toggle('active', selectedBooks.has(group.dataset.bookId));
+        setBookButtonPressed(
+            group.querySelector('.book-btn'),
+            selectedBooks.has(group.dataset.bookId)
+        );
     });
     updateCompareButtonLabel();
 }
@@ -6543,12 +6562,43 @@ function openGalaxyModal(d) {
 
     modal.setAttribute('aria-hidden', 'false');
     modal.style.display = 'flex';
+    syncModalScrollLock();
     document.addEventListener('keydown', trapModalFocus);
     setTimeout(() => {
         modal.classList.add('show');
         const closeButton = modal.querySelector('.galaxy-modal-close');
         if (closeButton) closeButton.focus();
     }, 10);
+}
+
+// 弹窗打开时锁住背后的页面滚动（第五十四批）。
+// 三个弹窗（片段详情 / 书架编号 / 覆盖确认）共用同一套 .galaxy-modal-overlay：fixed 铺满
+// 视口、带 5px 模糊，而遮罩本身不可滚——滚轮 / 触摸 / 空格键会穿过去把**底下的**页面滚走，
+// 内容是隔着一层毛玻璃在动。
+// 写成「扫描现状」而不是「进出计数」：只要还有一个 overlay 开着就锁、全关了才放。
+// 这样天然幂等，某条关闭路径漏调一次也不会把页面永久锁死。
+const MODAL_OVERLAY_IDS = ['galaxy-modal', 'shelf-modal', 'overwrite-modal'];
+let _bodyPadRightBase = null;
+function syncModalScrollLock() {
+    const anyOpen = MODAL_OVERLAY_IDS.some(id => {
+        const el = document.getElementById(id);
+        return !!el && el.style.display !== 'none';
+    });
+    if (anyOpen) {
+        // 桌面端 body 一直挂着纵向滚动条；overflow:hidden 会让它消失、内容横向跳一格。
+        // 按滚动条宽度补一段右内边距兜住（基础值从样式表取一次，别把 body 自己的 padding 顶掉；
+        // 手机上没有滚动条，sw 为 0，回到 body 原本的 padding）。
+        const sw = window.innerWidth - document.documentElement.clientWidth;
+        if (_bodyPadRightBase === null) {
+            _bodyPadRightBase = getComputedStyle(document.body).paddingRight;
+        }
+        document.body.style.overflow = 'hidden';
+        document.body.style.paddingRight = sw > 0
+            ? `calc(${_bodyPadRightBase} + ${sw}px)` : '';
+    } else {
+        document.body.style.overflow = '';
+        document.body.style.paddingRight = '';
+    }
 }
 
 // 键盘焦点陷阱：弹窗打开时 Tab 只在弹窗内部循环，
@@ -6595,6 +6645,7 @@ function closeGalaxyModal() {
     document.removeEventListener('keydown', trapModalFocus);
     setTimeout(() => {
         modal.style.display = 'none';
+        syncModalScrollLock();
         if (lastGalaxyTrigger && typeof lastGalaxyTrigger.focus === 'function') {
             lastGalaxyTrigger.focus();
         }
