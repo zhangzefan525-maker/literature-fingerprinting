@@ -1456,6 +1456,19 @@ button:hover {
    第五十六批查「窗口拖过之后页面会变高」时挖出来的。 */
 .dash-chart-body > svg { display: block; }
 
+/* 「整体水平对比」柱子上那条深色带子的说明（第五十七批）。放在 .dashboard-grid
+   自己的第二行（第一列），**不在 .dash-card 里**——这一条是在浏览器里量出来的，
+   不是排版偏好：.dash-chart-body 是 `flex: 1`，柱区高度 = 卡片高度 − 卡里别的东西，
+   所以放进卡片就等于从柱子上抠走它的高度。实测放卡里 288 → 234（横轴的旋转书名
+   开始被 .dash-chart-body 的 overflow:hidden 切掉），放到这里则柱区仍是 288、
+   柱子的 x/y/width/height 与改动前逐字节相同。
+   第二行是 auto 行，只把网格撑高，第一行的两栏高度（也就是柱区高度）一个像素不动。
+   grid-column 显式钉在第一列：宽屏下它落在左栏（两张图）正下方，而不是钻取面板下面。 */
+.dash-band-note {
+    grid-column: 1;
+    margin-top: 0;
+}
+
 /* 「风格走势」卡片的图例（第四十六批）。样式对着 .galaxy-legend 写：同一个东西
    （哪条线是哪本书）在两页上长得一样。不设 min-height——空的时候它自己 hidden，
    而 svg 的高度是在 initD3Structures 里量一次的，多出来的这一行吃掉的是卡片

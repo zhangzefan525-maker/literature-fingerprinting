@@ -3769,6 +3769,44 @@ function getMetricMeanRange(bookNames, metric) {
     return { count: means.length, min: d3.min(means), max: d3.max(means) };
 }
 
+// 「书与书之间的差距」和「一本书自己从头到尾的起伏」哪个大（第五十七批）。
+//
+// 上面那句报的是参照区间有多宽（= 书与书之间平均水平的差距）；这个函数拿每本书
+// **自己内部**的片段起伏（标准差）当尺子量它一下，返回一句判断、或者空串。
+//
+// 三条取舍：
+// 1) **不新增统计口径**。用的是每本书里已有的那些片段值，同一个 getMetricValues。
+// 2) **样本太少的书不参与**：d3.deviation 对 1 个点返回 undefined，兜成 0 会得出
+//    「书间差距是书内起伏的无穷倍」——一条恰好相反的结论。门槛与「起伏最小」那句
+//    一致（>= 5 个片段）。少于两本可用时整句不给。
+// 3) **尺子取「较大」的那一份**。连较大的一份起伏都不超过，就一定也没超过另一本；
+//    超过了再报结论，用的仍是保守的那一个。
+function getMetricSpreadVerdict(baselineNames, baseline, metric) {
+    if (!baseline || !Array.isArray(baselineNames)) return '';
+    const extent = baseline.max - baseline.min;
+    if (!isFiniteNumber(extent) || extent <= 0) return '';
+    const spreads = baselineNames
+        .map(name => {
+            const values = getMetricValues(name, metric).map(d => d.value);
+            if (values.length < 5) return null;
+            const sd = d3.deviation(values);
+            return isFiniteNumber(sd) && sd > 0 ? sd : null;
+        })
+        .filter(v => v !== null);
+    if (spreads.length < 2) return '';
+    const maxSd = d3.max(spreads);
+    const minSd = d3.min(spreads);
+    const ruler = `这 ${baseline.count} 本各自从头到尾的起伏（同一本书内的标准差）`
+        + `在 ${formatMetric(minSd)} – ${formatMetric(maxSd)} 之间`;
+    if (extent / maxSd >= 3) {
+        return `${ruler}；书与书之间的差距，明显大于一本书自己从头到尾的起伏。`;
+    }
+    if (extent >= maxSd) {
+        return `${ruler}；书与书之间的差距，和一本书自己从头到尾的起伏是同一个量级。`;
+    }
+    return `${ruler}；书与书之间的差距，比一本书自己从头到尾的起伏还小。`;
+}
+
 function getMetricContextLine(metric) {
     if (!realData) return '';
     const loaded = Object.keys(realData);
@@ -3802,6 +3840,17 @@ function getMetricContextLine(metric) {
         // 一句话里出现了两次。本数留在 caveat 里——那是第四十批有意加的强调（把样本有多小
         // 直接说出来），上面那个括号现在装的是书名，不是本数。
         parts.push(`参考区间：${label}${named}的平均水平大致在 ${formatMetric(baseline.min)} – ${formatMetric(baseline.max)}。${caveat}它只用于判断你的书落在参考区间的哪一端，不是好坏标准。`);
+        // 上面那句把「书与书之间的差距」摆出来了（那个区间的宽），却没说过这个差距
+        // 算不算大——而读者会默认它大到足以说明问题。这一句拿「一本书自己从头到尾的
+        // 起伏」当尺子量一下（第五十七批）。实测：平均句长上，吐温两本的均值差 4.33，
+        // 而《哈克贝利·费恩》自己内部的起伏就有 1.97——同一个量级。
+        //
+        // 这段只用已经算好的数（每本书的片段值、以及它们的标准差），**不新增任何
+        // 统计口径**，也不做检验：片段由重叠滑窗切出来（相邻重叠约 9000 词），不是
+        // 独立样本，做显著性检验会高估证据量。所以下面说的是「描述」，不是「推断」，
+        // 措辞里不许出现「显著」「置信」这类词。
+        const spreadLine = getMetricSpreadVerdict(baselineNames, baseline, metric);
+        if (spreadLine) parts.push(spreadLine);
     }
     if (selected && !sameAsBaseline) {
         // 只选了一本时，「在 X – X 之间」是句废话（最小值等于最大值），改说平均水平
@@ -4317,13 +4366,31 @@ function collectExportAxisNote() {
         // 看着就是全书平均——一个比屏幕上更错的版本。这句话必须跟着图走。
         const scope = document.getElementById('adv-mean-scope');
         const scopeText = scope ? (scope.textContent || '').trim() : '';
-        if (!scopeText) return '';
         // 只在真的导出这张条形图时加：走势图画的是整条曲线，框选只是高亮，
         // 给它挂一句「数值取的是区段平均」反而变成新的一句错话。
         const exportElement = getExportTarget().element;
-        if (!exportElement || exportElement !== document.querySelector('#adv-mean svg')) return '';
-        const rangeText = scopeText.replace(/^（|）$/g, '').replace(/^框选区段\s*/, '');
-        return `图中各书的数值取的是框选区段 ${rangeText} 内的分段平均，不是全书平均`;
+        const isMeanChart = !!exportElement && exportElement === document.querySelector('#adv-mean svg');
+        const parts = [];
+        if (scopeText && isMeanChart) {
+            const rangeText = scopeText.replace(/^（|）$/g, '').replace(/^框选区段\s*/, '');
+            parts.push(`图中各书的数值取的是框选区段 ${rangeText} 内的分段平均，不是全书平均`);
+        }
+        // 第五十七批新增：柱子中间那条浅色带子的说明写在 SVG 外面的
+        // #adv-mean-band-note 里，同一条规矩（屏幕上说了的话，跟着图走）。
+        // 没有它，导出图上那条带子是个没有来由的记号——而导出的图才是要贴进论文的那份。
+        // 只在导这张条形图时加：走势图上没有带子。
+        const bandNote = document.getElementById('adv-mean-band-note');
+        if (isMeanChart && bandNote && !bandNote.hidden) {
+            const bandText = (bandNote.textContent || '').trim();
+            if (bandText) parts.push(bandText);
+        }
+        // 拼法跟下面星系那一段一致：上一句已经收尾（句号/叹号/问号/右括号）就不再加
+        // 「；」，否则导出的图上会出现「…。；…」这种像打错字的东西。
+        return parts.reduce((acc, text) => {
+            if (!acc) return text;
+            const closed = /[。！？）”』」]$/.test(acc);
+            return acc + (closed ? '' : '；') + text;
+        }, '');
     }
     // 主图页（指纹热力图）：色标那句说明写在 SVG 外面的 #heatmap-scale-note 里，
     // 而导出只序列化 SVG，于是导出的热力图上「同一个颜色」到底是多大，一个字都没有——
