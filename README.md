@@ -7073,3 +7073,19 @@ If-None-Match: 上面那串 → 304 ；If-None-Match: "deadbeef" → 200
 - **弹窗打开时，背后的内容还在无障碍树里**（`inert` 没做，第五十四批留的）。看得见的乱动与滚动都在上一批解决了；这一条是「用读屏的人仍然能 Tab 进背后的内容」，方案有了但副作用要单独验一轮，留到下一批。
 - **路线图剩下的三件**：③ 不确定性 / 置信范围、④ 关键词升级成对数似然比、⑤ 交互可解释性。
 - **本批先不推送**：按老规矩等你说推；推的时候一并上服务器确认线上已更新。
+
+- **推送与上线（补记，2026-10-15）**：上面那条「本批先不推送」是这一节写下时的状态；你说了推，已经推了、也上线了，记录如下。
+
+- **推送**：`694df1d..3c78ac0`，推到 `github`（本仓库的远端名叫 `github`）。提交是 `3c78ac0`，4 个文件、191 增 18 删；其中 `README.md` 是 **72 增 0 删**（上面那一整节），另外三个文件是 `d3_visualization.html`（+4/-1，只改一处注释）、`static/css/d3-style.css`、`static/js/d3-charts.js`。提交前重跑了一遍测试：`Ran 353 tests ... OK`。`p10.json` 仍是未跟踪、**没有**进这次提交。结课报告的两道守卫照旧都过。
+
+- **这一批的 cron 自己拉动了**：推送后第一次上服务器，HEAD 还停在 `694df1d`，日志尾部是一串 `fatal: unable to access … Empty reply from server`；再等一轮就看到 `01:38:02 [deploy] 694df1d18746fe… -> 3c78ac07ca23…` 与 `01:38:06 [ok] restarted, HEAD=3c78ac0, serving`。**没有走打包直送**，服务器 HEAD 与 GitHub 上的 `master` 都是 `3c78ac0`。
+
+- **「够不着 github.com」的第三类病又出现了一次，判据确认可复用**：这次两个探针**都通**——`https://api.github.com/` 返回 **200**、`https://github.com/` 也是 **200（rc=0）**，而日志里 git 报的是 `Empty reply from server` / `curl 52`。即「能连上、握不上手」这一类。它**不是**「等也没用」，隔一轮 cron 就过去了；反过来说，**只看那两个探针通不通，不能判断这次该不该打包直送**——第五十三批记的结论（先等至少两轮 cron 再下结论）这次又对上了。
+
+- **线上验活（实地看到，不是推断）**：`/`、`/visualization`、`/thesis/`（nginx 同 server 块下的另一个项目）都返回 **200**，`/api/authorship` **200**（冷启动十几秒）；服务 `active`、`NRestarts=0`。把三个前端文件从**公网地址**取下来、去掉 CR 之后与本地那份比 sha256，逐份相同：`d3-charts.js` `8a60c038e1da…`、`d3-style.css` `e4b92756ad3f…`、`/visualization`（即 `d3_visualization.html`）`64472a9931be…`。这一次**没有**再和服务器磁盘上那份对——线上 == 本地 ＋ 服务器 HEAD == `3c78ac0` 已经够说明问题，但要写明少比了这一头。
+
+- **五处改动逐条在线上核了，且两头都查（新的在、旧的没了）**：新的在——`reloadBooksAction`、`authorshipRetryable`、`metricBar.hidden`、`.dash-chart-body > svg { display: block; }`、`.dashboard-grid` 的 `min-height: 600px`；旧的没了——`.metric-bar` 那一段里搜不到 `-webkit-line-clamp`，「三个标签页共用同一指标」也不再作为原话出现（现在是「**前**三个标签页共用同一指标」）。
+
+- **这一批我又被自己的朴素子串判断骗了两次，记下来免得再犯**：① 查「网格写死的 600px 还在不在」时写的是 `'height: 600px' not in …`，而新规则里的 `min-height: 600px` **包含**这个子串——差点把「已经改对了」读成「没改」；② 查「旧注释还在不在」时用的是旧串本身，而新注释 = 「前」+ 旧串，**子串匹配必然命中**。两次都得改成正则/看规则原文才判得准。**「搜得到」和「还在用」不是一回事**——凡是要判「旧的没了」，得把新旧两种写法都写出来，或者直接把那段规则原文打出来看。
+
+- **本批没有在服务器上删过任何东西**：只跑了只读的 `git rev-parse` / `tail` / `curl` / `systemctl is-active`，合并与重启都是自动部署脚本自己做的；**没有 `rm`**。服务器上 `requirements.server.txt` 仍是未跟踪（`git status --porcelain` 只列出它一行）——这是它本来的状态，**没有动**。
