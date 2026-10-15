@@ -3220,8 +3220,17 @@ function showDetail(data, bookName) {
     if (!detailPanel) return;
 
     const displayName = getBookDisplayName(bookName);
+    // 分数（对数似然比）只在「与词一一对应」时才敢配对显示：一个特征词都挑不出来时
+    // 后端会退回旧口径的频次前三，那时 keywordScores 是空数组，按 index 配对会印出
+    // 「undefined」（C 指出过）。所以这里先卡长度。
+    const scores = Array.isArray(data.keywordScores) && Array.isArray(data.keywords)
+        && data.keywordScores.length === data.keywords.length
+        ? data.keywordScores : null;
     const keywordsHtml = Array.isArray(data.keywords) && data.keywords.length > 0
-        ? data.keywords.map(keyword => `<span class="keyword-tag" lang="en">${escapeHtml(keyword)}</span>`).join('')
+        ? data.keywords.map((keyword, i) => {
+            const score = scores ? ` title="对数似然比 ${escapeHtml(String(scores[i]))}"` : '';
+            return `<span class="keyword-tag" lang="en"${score}>${escapeHtml(keyword)}</span>`;
+        }).join('')
         : '';
     const locationText = formatBlockLocation(bookName, data.block) + formatWordCount(data.wordCount);
     const chapter = getBlockChapter(bookName, data.block);
@@ -3266,6 +3275,7 @@ function showDetail(data, bookName) {
             <div style="margin: 15px 0;">
                 <h4>※ 关键词</h4>
                 <div class="keywords">${keywordsHtml}</div>
+                ${scores && scores.length > 0 ? `<p class="keyword-note">只列这一段明显偏多的词（对数似然比），全书各段都爱用的词——主角名、said 之类——不列入。</p>` : ''}
             </div>` : ''}
 
             ${previewHtml}
@@ -3375,8 +3385,42 @@ function normalizeBookMeta(bookName) {
             ? raw.overlap
             : Math.max(0, blockSize - step),
         chapters: Array.isArray(raw.chapters) && raw.chapters.length > 0 ? raw.chapters : null,
-        projection: raw.projection || null
+        projection: raw.projection || null,
+        // 关键词是哪一版算法算的（第五十九批）。v4 起有，旧数据没有——**必须逐书判断**，
+        // 不能只看 schemaVersion：书架里早先存下的书是旧口径，而且它只落了功能词向量、
+        // 没有原文，永远重算不出来（api_server 的书架合并只负责把文件读回来）。对它们
+        // 说「按对数似然比排序」就是假话，所以界面上所有解释口径的地方都先问这个字段。
+        keywordMethod: raw.keywordMethod || null
     };
+}
+
+// 这一本书的关键词是不是按对数似然比（第五十九批的新口径）算出来的。
+function usesDistinctiveKeywords(bookName) {
+    const meta = normalizeBookMeta(bookName);
+    return !!(meta && meta.keywordMethod && meta.keywordMethod.method === 'log-likelihood-ratio');
+}
+
+// 「关键词」这一栏到底是什么，写成一句能独立读的话，给导出物用（第五十九批）。
+//
+// 为什么非要写：这一批把它从「这一段出现最多的实词」换成了「相对本书其它部分明显偏多的词」，
+// 而**列名一个字没改**。两张表摆在一起，表头一样、都是「关键词」，读者不会想到不能比——
+// 而导出物是要离开这个页面的，收件人手里只有文件，没有别的线索。
+//
+// 逐本判断而不是一句写死：同一页里可能同时有出厂书（新口径）和早先从书架读回来的书
+// （换算法之前算好的，而且书架只落了功能词向量、没有原文，永远重算不出来——只能保持原样）。
+function describeKeywordMethod(books) {
+    const list = Array.isArray(books) ? books : [];
+    const fresh = list.filter(usesDistinctiveKeywords).length;
+    const oldWay = '按出现次数排序（这些文本是在换算法之前算好的，也没有原文可以重算，保持原样）。';
+    const newWay = '按对数似然比排序：挑的是「相对这本书其它部分明显偏多的词」，不是出现次数最多的词'
+        + '（比较的对象是这本书自己的其它部分；一段里出现不到 3 次、或偏多程度很低的词不入选）。';
+
+    if (list.length > 0 && fresh === 0) return oldWay;
+    if (list.length > 0 && fresh < list.length) {
+        return `${newWay}另有 ${list.length - fresh} 本是换算法之前算好的（没有原文可以重算），`
+            + '仍按出现次数排序，这些行的这一列与其它行不可比。';
+    }
+    return newWay;
 }
 
 // 章节标签的口径（第四十批）。标签取的是「片段窗口正中间」落在哪一章，而一格横跨 4–6 章。
@@ -5323,6 +5367,12 @@ function buildMethodsParagraph(books) {
     parts.push('功能词二维投影（界面上的「风格走向」）用的词表是 NLTK 的英语停用词表（the / of / he 这类小词），'
         + '每个片段按这些小词在该片段里的相对出现次数投影。');
     parts.push('计算指标包括平均句长、用词重复度（Simpson\'s D）、独特词丰富度（Honoré R）与功能词二维投影。');
+    // 关键词那一栏的口径（第五十九批）。上面把四个指标的算法逐条交代了，唯独没写关键词是怎么来的，
+    // 而这一批刚把它换掉（列名没变）。摘要的标准是「收件人照着能复现」——不写，别人拿同一本书
+    // 也复现不出同一批词，却找不到任何线索。逐本判断的理由见 describeKeywordMethod。
+    if (books.some(usesDistinctiveKeywords)) {
+        parts.push(`每个片段另附一组关键词。${describeKeywordMethod(books)}`);
+    }
     parts.push(buildComparabilitySentence(books));
     // 三个标量能不能跨书比（第四十批）：原来的可比较性说明只讲了功能词投影。
     parts.push(buildScalarComparabilityNote(books));
@@ -5350,7 +5400,7 @@ function exportTableData() {
         return;
     }
 
-    const header = ['书名', '片段序号', '所在章节', '起始词位置', '平均句长', '用词重复度', '独特词丰富度', '风格走向_横轴', '风格走向_纵轴', '关键词'];
+    const header = ['书名', '片段序号', '所在章节', '起始词位置', '平均句长', '用词重复度', '独特词丰富度', '风格走向_横轴', '风格走向_纵轴', '关键词', '关键词对数似然比'];
     const rows = [header];
 
     books.forEach(book => {
@@ -5384,7 +5434,10 @@ function exportTableData() {
                 value('hapaxLegomena'),
                 formatExportNumber(style && style.value),
                 formatExportNumber(style && style.value_y),
-                Array.isArray(words.keywords) ? words.keywords.join(' ') : ''
+                Array.isArray(words.keywords) ? words.keywords.join(' ') : '',
+                // 第五十九批新增：与「关键词」同序的对数似然比（空 = 这一行还是旧口径，
+                // 或者这一段一个特征词都没挑出来、关键词退回的是频次榜）
+                Array.isArray(words.keywordScores) ? words.keywordScores.join(' ') : ''
             ]);
         }
     });
@@ -5412,6 +5465,12 @@ function exportTableData() {
         `# 数据版本：${describeCorpusVersion(books)}`,
         `# 指标口径：平均句长（词/句）；用词重复度（Simpson，越高越重复）；独特词丰富度（Honoré R，越高用词越丰富）；风格走向_横/纵轴（高频小词用法的二维坐标）`,
         `# 数值精度：全部 4 位有效数字（原始值是分词与滑窗算出来的，再多的位不是真实信息）`,
+        // 关键词两列的口径（第五十九批）。列名与算法的对应关系变了而名字没变，是这一批最容易
+        // 出的错：两个文件表头一致，读者不会想到不能比。逐本判断的理由见 describeKeywordMethod。
+        // 这两行放在「数值精度」**之后**：第二行要说「不适用上面那条 4 位有效数字」，
+        // 位置反了的话这句话指的就是下面那条了。
+        `# 关键词口径：${describeKeywordMethod(books)}`,
+        `# 关键词对数似然比：同一行「关键词」各词的对数似然比，空格分隔、与关键词一一对应；空 = 这一行是上面说的旧口径，或这一段没有够格的偏多词（关键词退回的是出现次数榜）。这一列保留一位小数，不适用上面那条「4 位有效数字」。`,
         `# 统计范围：${describeExportScope()}`,
         `# 片段口径：${windowSpecs.join('；')}。同一段原文会被反复计入，请勿把这些行当作互相独立的样本，按行做显著性检验会高估样本量。`,
         // 章节标签的口径（第四十批）：表里那一列写的是「窗口正中间」落的那一章，
@@ -6634,9 +6693,9 @@ function openGalaxyModal(d) {
             d.keywords.forEach(kw => {
                 const span = document.createElement('span');
                 span.textContent = kw;
-                // 关键词是英文（the / his / of 这类功能词）。不标 lang，读屏会拿中文音库
-                // 逐字母去念；标了才会切到英文音库。只标这一个 span——下面那个「无关键词」
-                // 的中文 span 不能跟着被标成英文。
+                // 关键词是英文（fence / becky 这类实词；the / his 这样的功能词在提取前就被
+                // 滤掉了）。不标 lang，读屏会拿中文音库逐字母去念；标了才会切到英文音库。
+                // 只标这一个 span——下面那个「无关键词」的中文 span 不能跟着被标成英文。
                 span.lang = 'en';
                 keywordContainer.appendChild(span);
             });
@@ -6645,6 +6704,23 @@ function openGalaxyModal(d) {
             empty.style.color = '#6b6254';
             empty.textContent = '无关键词';
             keywordContainer.appendChild(empty);
+        }
+        // 口径说明（第五十九批）：换算法之后这一栏常出现人名、地名、器物名
+        // （spitz / françois / slate），不给一句话，读者会以为工具在乱报词。
+        // 判据是「这一段的词后面真的跟着分数」——分数只在按对数似然比选出来时才有；
+        // 一个特征词都没挑出来时后端会退回旧口径（这一段出现最多的实词），那时说
+        // 「只列明显偏多的词」就是假话。没词时那句兜底也已经说清楚了。
+        // 元素是复用的，所以先清掉上一次可能留下的说明（同下面 long-text 的 lang 处理）。
+        const staleNote = keywordContainer.parentElement
+            ? keywordContainer.parentElement.querySelector('.keyword-note') : null;
+        if (staleNote) staleNote.remove();
+        const hasScores = Array.isArray(d.keywords) && Array.isArray(d.keywordScores)
+            && d.keywordScores.length > 0 && d.keywordScores.length === d.keywords.length;
+        if (hasScores) {
+            const note = document.createElement('p');
+            note.className = 'keyword-note';
+            note.textContent = '只列这一段明显偏多的词（对数似然比），全书各段都爱用的词——主角名、said 之类——不列入。';
+            keywordContainer.insertAdjacentElement('afterend', note);
         }
     }
 

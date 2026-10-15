@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data_loader import get_chapter_spans, get_blocks
+from src.metrics import KEYWORD_MIN_COUNT
 from src.pipeline import SCHEMA_VERSION, build_book_data
 from src.projection import build_model, compute_model_id, projection_metadata
 
@@ -106,6 +107,100 @@ class TestTotalWordsIsReal(unittest.TestCase):
         self.assertIsNone(meta["totalWords"])
         self.assertIsNone(meta["chapters"])
         self.assertEqual(meta["analyzedWords"], 25)
+
+
+class TestDistinctiveKeywordsInPipeline(unittest.TestCase):
+    """关键词这一栏在管线里的样子（第五十九批）。
+
+    这一批把 `keywords` 的含义换了、并新增了 `keywordScores`，而这两件事
+    都是「字段名没变」的改动——数据读得动、界面不报错，所以只能靠测试钉住。
+    """
+
+    @requires_nltk
+    def setUp(self):
+        # 26 个互不相同、全是字母、都不是停用词的「词」（aa…zz），循环铺满 120 个词；
+        # 再把开头 30 个词全换成 aa —— 那一段就该以 aa 为特征词。
+        vocab = [chr(ord('a') + i) * 2 for i in range(26)]
+        words = [vocab[(i * 3) % 26] for i in range(120)]
+        words[:30] = ['aa'] * 30
+        self.text = " ".join(words)
+        self.blocks = get_blocks(self.text, block_size=40, overlap=30)
+
+    @requires_nltk
+    def test_keywords_and_scores_are_paired_on_every_series(self):
+        data = build_book_data(self.blocks, text=self.text,
+                               block_size=40, overlap=30)
+        saw_scores = 0
+        for key in ("sentenceLength", "simpsonIndex", "hapaxLegomena", "functionWords"):
+            for entry in data[key]:
+                words = entry["keywords"]
+                scores = entry["keywordScores"]
+                # 只有两种合法形状：分数与词一一对应，或者分数为空（这一段一个特征词
+                # 都没挑出来、关键词退回出现次数榜）。**没有中间状态**——前端就是靠
+                # 「长度对不上 = 不显示分数」来分辨这件事的，所以这里必须钉死。
+                self.assertIn(len(scores), (0, len(words)),
+                              f"{key} 第 {entry['block']} 段：词与分数既不成对、又不为空")
+                if scores:
+                    saw_scores += 1
+                for score in scores:
+                    self.assertEqual(score, round(score, 1))
+        # 四个指标各带一份：只挂在其中一个上，换个「观察角度」就读不到了，
+        # 所以「有分数的段数」应当是 4 的倍数
+        self.assertGreater(saw_scores, 0)
+        self.assertEqual(saw_scores % 4, 0)
+
+    @requires_nltk
+    def test_fallback_shape_when_no_word_is_distinctive(self):
+        """一个特征词都挑不出来时：关键词退回出现次数榜，分数为空。
+
+        这不是臆想的分支——本文件的合成语料里就有这样一段（第 1 段：唯一偏多的词
+        刚好卡在下限上），所以它一定走得到。出厂的四本书里 251 段一段都没触发，
+        正因为如此才更要在这里钉住：真触发时界面少一句「只列明显偏多的词」，
+        而不是把那句话错着说一遍。
+        """
+        data = build_book_data(self.blocks, text=self.text,
+                               block_size=40, overlap=30)
+        second = data["sentenceLength"][1]
+        self.assertEqual(second["keywordScores"], [])
+        self.assertEqual(len(second["keywords"]), 3)   # 退回频次榜仍然给够 n 个
+
+    @requires_nltk
+    def test_distinctive_word_is_the_one_that_is_actually_over_represented(self):
+        data = build_book_data(self.blocks, text=self.text,
+                               block_size=40, overlap=30)
+        first = data["sentenceLength"][0]["keywords"]
+        self.assertEqual(first[0], 'aa')
+        # 最后一段没有 aa，前几名不该再是它
+        self.assertNotIn('aa', data["sentenceLength"][-1]["keywords"])
+
+    @requires_nltk
+    def test_keyword_method_is_recorded(self):
+        data = build_book_data(self.blocks, text=self.text,
+                               block_size=40, overlap=30)
+        method = data["metadata"]["keywordMethod"]
+        self.assertEqual(method["method"], "log-likelihood-ratio")
+        self.assertEqual(method["reference"], "sameBookRest")
+        self.assertEqual(method["minCount"], KEYWORD_MIN_COUNT)
+        self.assertEqual(method["top"], 3)
+
+    @requires_nltk
+    def test_missing_text_reconstructs_the_same_reference(self):
+        """拿不到全文时，参考语料按滑窗的定义拼回来，结果必须与有全文时一致。
+
+        片段重叠 9000 词，若拿「各块词频之和」当参考语料，书中间的词会被重复
+        计约 10 遍、首尾计得少——参考语料因此变成位置相关的，同一本书各段不再
+        同口径。这条测试就是钉住「拼回来」这条实现路径。
+        （上传接口与 generate_data.py 都带全文，所以这条路径只有测试走得到。）
+        """
+        with_text = build_book_data(self.blocks, text=self.text,
+                                    block_size=40, overlap=30)
+        without_text = build_book_data(self.blocks, block_size=40, overlap=30)
+        for i in range(len(self.blocks)):
+            self.assertEqual(without_text["sentenceLength"][i]["keywords"],
+                             with_text["sentenceLength"][i]["keywords"],
+                             f"第 {i} 段的关键词在两条路径下不一样")
+            self.assertEqual(without_text["sentenceLength"][i]["keywordScores"],
+                             with_text["sentenceLength"][i]["keywordScores"])
 
 
 class TestChapterDetection(unittest.TestCase):

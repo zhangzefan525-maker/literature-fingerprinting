@@ -2014,8 +2014,9 @@
                     const keywords = b.keywords ? b.keywords.join(", ") : "";
                     const loc = formatBlockLocation(book.name, b.blockIndex) + formatWordCount(b.wordCount);
                     // 长摘录不随数据下发（第二十一批）：按钮点下去时按书名+片段号现取
-                    // 摘录和关键词都是英文（关键词是 the / his / of 这类功能词）。不标 lang，
-                    // 读屏会拿中文音库逐字母念。但「无预览」这句兜底文案是中文，不能跟着标——
+                    // 摘录和关键词都是英文（关键词是 fence / becky 这类实词——停用词在提取前
+                    // 就被滤掉了，所以这里不会出现 the / his）。不标 lang，读屏会拿中文音库
+                    // 逐字母念。但「无预览」这句兜底文案是中文，不能跟着标——
                     // 所以 lang 只在真有英文内容时才加。
                     const previewLang = b.preview ? ' lang="en"' : '';
                     bookHtml += `

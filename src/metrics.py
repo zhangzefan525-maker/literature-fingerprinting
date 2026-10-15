@@ -214,6 +214,157 @@ def get_top_keywords(text_block, n=5):
     counter = Counter(content_words)
     
     # 6. 获取频率最高的 n 个词
-    top_n = counter.most_common(n)
-    
-    return [word for word, count in top_n]
+    return top_content_words(counter, n)
+
+
+# ---------------------------------------------------------
+# 任务 E′：特征词提取（对数似然比，第五十九批）
+# ---------------------------------------------------------
+# 上面那个 get_top_keywords 是「这一段出现最多的实词」，一个字都不动（测试还断言它）。
+# 但它有个读者一眼看不出的毛病：一本小说里排前面的永远是主角名和几个高频虚词，
+# 书的**任何一段**都是这几个词，等于没告诉你「这一段在讲什么」。
+#
+# 这一节加的是语言学界做「关键词分析（keyness）」的标准做法：Dunning (1993) 的对数似然比 G²。
+# 拿「这一段」当目标语料、「这本书的其它部分」当参考语料，算每个词在 2×2 列联表上的 G²，
+# 取**显著偏多**的前几个。同一批片段实测：汤姆第 1 块从 tom/boy/would 变成
+# chapter/fence/jim/boy/whitewash（刷栅栏那一章），第 11 块变成 tick/beetle/tooth（教堂看甲虫）。
+#
+# 口径上的两条边界写在这里，免得以后有人当成统计结论用：
+#   1. 片段是 1 万词、重叠 9 千词的滑窗切出来的，彼此完全不独立，所以 G² **只当排序依据**，
+#      不当检验结论——不给 p 值、不说「显著差异」（README 第五十七批已经写过这一条）。
+#   2. 参考语料是「同一本书的其它部分」。它回答的是「这一段相对这本书自己的常态偏多的是什么」，
+#      不是「这个词在英语里罕见」。G² 的**绝对大小只在同一本书内部可比**——块占全书比例不同，
+#      同一个效应（块内 8 次 / 参考 0 次）在《汤姆》（块:参考 ≈ 0.16）得 31.4、在《野性》
+#      （≈ 0.46）只有 18.2（B 实测）。所以界面上不并排两本书的 G²。
+
+# 特征词的段内最少出现次数。放进模块常量是为了让「数据里记的口径」和「代码用的口径」
+# 不可能各说一套——metadata.keywordMethod.minCount 直接引用它。
+KEYWORD_MIN_COUNT = 3
+
+# G² 的下限：15.13 是 1 自由度在 p<0.0001 上的临界值。这是一条**卫生下限**，不是结论——
+# 这一批仍然不给 p 值、不说「显著」（见上面第 1 条）。为什么还要它：G² 是随语料规模放大的，
+# 段内出现 3 次的词在参考里为 0 时就有 11.79，够不上任何像样的证据强度。实测它几乎从不触发
+# （251 个片段里只有 1 个的第 3 名低于它），所以加它不改变界面上看到的东西，只是把
+# 「万一某本书特别小、候选特别弱」那条路堵上。
+MIN_G2 = 15.13
+
+# 古腾堡排版辅文里的词。目录页与版权页落在全文最前面约 1 千词内，而滑窗步长正是 1 千词——
+# 于是它们**只**污染第 0 个片段：《汤姆》第 0 块的 chapter 出现 40 次（全书 72 次），
+# 于是「chapter」被当成这一段最偏多的词，而它显然不是作者写的东西。
+# 只在这一栏的候选池里排除，不动分词、不动三个指标、不动 get_top_keywords（B 实测：
+# 加这张表只改动《汤姆》《哈克》第 0 块的前三名，其余片段与另外两本书一个词都不变）。
+PARATEXT_WORDS = frozenset({
+    'chapter', 'chapters', 'contents', 'illustration', 'illustrations',
+    'transcriber', 'gutenberg', 'ebook', 'preface', 'appendix',
+})
+
+
+def content_word_frequencies(text):
+    """
+    去掉英文停用词之后的实词词频（Counter）。
+
+    两处都用它：整本书的全文 → 特征词的参考语料；单个片段 → 特征词的候选池。
+    输入：一段文本
+    输出：collections.Counter
+    """
+    from nltk.corpus import stopwords
+
+    stop_words = set(stopwords.words('english'))
+    return Counter(w for w in _clean_tokens(text) if w not in stop_words)
+
+
+def top_content_words(block_counter, n=5):
+    """
+    旧口径：按出现次数取前 n 个实词。收 Counter 而不是收文本，理由同 get_distinctive_words——
+    一个片段的实词只分词一次，两边共用；否则上传路径白白多花约 20% 的时间。
+    """
+    return [word for word, _count in block_counter.most_common(n)]
+
+
+def log_likelihood_ratio(a, b, c, d):
+    """
+    Dunning (1993) 的对数似然比 G²（2×2 列联表）：
+
+        a = 该词在**目标语料**（这一段）里的次数
+        b = 目标语料里其它词的次数
+        c = 该词在**参考语料**（这本书的其它部分）里的次数
+        d = 参考语料里其它词的次数
+
+    G² = 2 * Σ O * ln(O / E)，E 由行列边际算出。值越大 = 该词在目标语料里越不寻常。
+    某个格为 0 时该项贡献 0（0 * ln 0 取极限为 0）。
+    """
+    n = a + b + c + d
+    if n <= 0:
+        return 0.0
+
+    total = 0.0
+    for observed, row, col in ((a, a + b, a + c), (b, a + b, b + d),
+                               (c, c + d, a + c), (d, c + d, b + d)):
+        expected = row * col / n
+        if observed > 0 and expected > 0:
+            total += observed * math.log(observed / expected)
+
+    return 2.0 * total
+
+
+def get_distinctive_words(block_counter, book_counter, n=3,
+                          min_count=KEYWORD_MIN_COUNT, min_g2=MIN_G2):
+    """
+    找出这一段里「相对这本书其它部分显著偏多」的词（特征词），按对数似然比降序。
+
+    Args:
+        block_counter (Counter): 这一段的实词词频（用 content_word_frequencies 算）
+        book_counter (Counter): **整本书**的实词词频（含本块）
+        n (int): 取前几个
+        min_count (int): 段内出现次数低于这个数的词不参与。一两次的出现多半是
+            人名、生僻词或排版噪声，放进来会让「特征词」变成随机榜
+        min_g2 (float): G² 下限，见 MIN_G2 的注释
+
+    Returns:
+        List[Tuple[str, float]]: [(词, G²), ...]，G² 圆整到一位小数；不足 n 个就少给
+
+    调用方传**整本书**的词频，函数内部自己扣掉本块——参考语料是「这本书的其它部分」，
+    拿自己比自己恒为 0、没有意义。扣完为负（跨书参考等场景）时按 0 处理。
+
+    只收「多于期望值」的词，不收「偏少」的：这一栏的用途是「这一段在讲什么」，
+    某个词在这段**缺席**说明不了这一段在讲什么（偏少的第一名往往是「这一段里没出现的
+    主角名」，B 实测《汤姆》第 0 块偏少第一名是 huck，G² 48.6，比多数偏多词还高——
+    混排会把「哈克不在场」顶成这一段的关键词）。
+
+    收 Counter 而不是收文本：同一个片段的实词词频在调用方已经为「高频词兜底」算过一次了，
+    再分词一次会让上传路径多花约 20% 的时间（C 实测：每块 0.198 s → 0.248 s）。
+    """
+    block_total = sum(block_counter.values())
+    if block_total <= 0:
+        return []
+    book_total = sum(book_counter.values())
+
+    scored = []
+    for word, count in block_counter.items():
+        if count < min_count or word in PARATEXT_WORDS:
+            continue
+
+        in_block = count
+        in_reference = max(0, book_counter.get(word, 0) - count)
+        rest_in_block = block_total - in_block
+        rest_in_reference = max(0, book_total - block_total - in_reference)
+
+        # 期望值 = 该词在两份语料合计里的占比 × 目标语料规模。只收偏多。
+        total = in_block + rest_in_block + in_reference + rest_in_reference
+        if total <= 0:
+            continue
+        expected = (in_block + in_reference) * (in_block + rest_in_block) / total
+        if in_block <= expected:
+            continue
+
+        score = log_likelihood_ratio(in_block, rest_in_block,
+                                     in_reference, rest_in_reference)
+        if score < min_g2:
+            continue
+
+        scored.append((score, word))
+
+    # 同分时按字母序，保证不同机器、不同次生成的结果一致
+    scored.sort(key=lambda item: (-item[0], item[1]))
+
+    return [(word, round(score, 1)) for score, word in scored[:n]]
