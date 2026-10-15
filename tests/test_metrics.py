@@ -15,6 +15,7 @@ import re
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -27,7 +28,9 @@ from src.metrics import (
     calc_hapax_legomena,
     fit_pca_projection,
     function_word_matrix,
+    get_distinctive_words,
     get_top_keywords,
+    log_likelihood_ratio,
     project_blocks,
 )
 from src.data_loader import get_blocks, load_clean_text
@@ -110,6 +113,128 @@ class TestTopKeywords(unittest.TestCase):
                 get_top_keywords("river river blood", n=2)
 
         download.assert_not_called()
+
+
+class TestLogLikelihoodRatio(unittest.TestCase):
+    """对数似然比 G² 的公式本身（第五十九批）。
+
+    这个公式最容易写错的地方是四个格的**行列边际**——a/b 同一行、a/c 同一列。
+    写错时数值不会变成 nan 或负数，只会整批挤到一个几乎相同的量级上（我自己
+    第一版就是这样：所有分都落在 11 万附近、名次看起来像噪声）。所以这里拿
+    手算得出的具体数字钉死，而不只是断言「正数」「越大越好」。
+    """
+
+    def test_known_value(self):
+        # a=10,b=90（目标语料 100 词，该词占 10%）、c=1,d=499（参考语料 500 词，占 0.2%）
+        self.assertAlmostEqual(log_likelihood_ratio(10, 90, 1, 499),
+                               30.3320363758, places=6)
+
+    def test_equal_rates_give_zero(self):
+        # 两份语料里占比都是 10%：没有「偏多」可言，G² 必须是 0
+        self.assertEqual(log_likelihood_ratio(10, 90, 50, 450), 0.0)
+
+    def test_symmetric_under_swap(self):
+        # 把目标语料和参考语料对调，G² 不变（公式本身是对称的；
+        # 「只收偏多」是 get_distinctive_words 那一层的判断，不是公式的）
+        self.assertAlmostEqual(log_likelihood_ratio(10, 90, 1, 499),
+                               log_likelihood_ratio(1, 499, 10, 90), places=10)
+
+    def test_zero_cell_contributes_nothing(self):
+        # 参考语料里一次都没出现（c=0）：这一格按 0·ln0 = 0 处理，不能抛异常
+        self.assertAlmostEqual(log_likelihood_ratio(8, 92, 0, 500),
+                               29.2187915361, places=6)
+
+    def test_empty_table(self):
+        self.assertEqual(log_likelihood_ratio(0, 0, 0, 0), 0.0)
+
+    def test_grows_with_the_effect(self):
+        # 同一个比例、更大的样本：证据更强
+        weak = log_likelihood_ratio(1, 99, 1, 499)
+        strong = log_likelihood_ratio(10, 90, 10, 490)
+        self.assertLess(weak, strong)
+
+
+class TestDistinctiveWords(unittest.TestCase):
+    """特征词（keyness）的挑选规则（第五十九批）。
+
+    构造一份可控语料：fence/beetle 在这一段偏多，river/once 在这一段偏少，
+    minor/rare 出现次数不够，huck 这一段根本没出现。
+    """
+
+    def setUp(self):
+        self.block = Counter({
+            'fence': 8, 'beetle': 8, 'river': 5, 'once': 3, 'minor': 2, 'rare': 1,
+        })
+        # book_counter 是**整本书**（含本段），函数内部自己扣掉本段当参考语料
+        self.book = self.block + Counter({
+            'river': 200, 'once': 150, 'fence': 4, 'beetle': 3, 'huck': 300,
+        })
+
+    def test_over_represented_only(self):
+        words = [w for w, _ in get_distinctive_words(self.block, self.book, n=5)]
+        self.assertEqual(words, ['beetle', 'fence'])
+        # river/once 这一段远低于全书水平，绝不能出现——「这一段在讲什么」
+        # 用「某个词缺席」回答不了，混进来会把「哈克不在场」顶成关键词
+        self.assertNotIn('river', words)
+        self.assertNotIn('once', words)
+
+    def test_absent_from_block_never_appears(self):
+        words = [w for w, _ in get_distinctive_words(self.block, self.book, n=5)]
+        self.assertNotIn('huck', words)
+
+    def test_scores_are_paired_and_rounded(self):
+        got = get_distinctive_words(self.block, self.book, n=5)
+        self.assertEqual(got, [('beetle', 41.5), ('fence', 39.2)])
+        for _word, score in got:
+            self.assertEqual(score, round(score, 1))
+
+    def test_min_count_filters(self):
+        # minor(2) / rare(1) 都够不上段内最少 3 次
+        words = [w for w, _ in get_distinctive_words(self.block, self.book,
+                                                     n=5, min_count=3)]
+        self.assertNotIn('minor', words)
+        self.assertNotIn('rare', words)
+        # 把下限抬到 9，谁都不够格
+        self.assertEqual(get_distinctive_words(self.block, self.book, n=5,
+                                               min_count=9), [])
+
+    def test_min_g2_filters(self):
+        self.assertEqual(get_distinctive_words(self.block, self.book, n=5,
+                                               min_g2=100), [])
+
+    def test_tie_break_is_alphabetical(self):
+        # alpha 与 beta 次数完全一样，G² 也必然一样：按字母序，结果才可复现
+        block = Counter({'alpha': 5, 'beta': 5, 'gamma': 9})
+        book = block + Counter({'other': 500})
+        got = [w for w, _ in get_distinctive_words(block, book, n=3)]
+        self.assertEqual(got, ['gamma', 'alpha', 'beta'])
+
+    def test_empty_block_returns_empty(self):
+        self.assertEqual(get_distinctive_words(Counter(), self.book), [])
+
+    def test_reference_is_book_minus_block(self):
+        """参考语料必须是「这本书的其它部分」，不是整本书。
+
+        忘掉扣本段这一步，数值不会报错、名次也大体对，所以只能用具体数字钉死：
+        段内 a=4、全书 a=10 时，参考语料里的 a 应当是 6（不是 10）。
+        """
+        block = Counter({'a': 4, 'b': 6})
+        book = Counter({'a': 10, 'b': 100})            # 扣掉本段 → {'a': 6, 'b': 94}
+        self.assertEqual(get_distinctive_words(block, book, n=3, min_g2=0),
+                         [('a', 8.2)])
+        # 手算：G²(段内 4、段内其它 6；参考 6、参考其它 94)
+        self.assertAlmostEqual(log_likelihood_ratio(4, 6, 6, 94), 8.1662035765,
+                               places=6)
+
+    def test_book_that_is_only_this_block_returns_empty(self):
+        """全书就这一段时，参考语料是空的——此时说不出「偏多」。
+
+        期望值退化成段内规模本身（9/10 vs 9），于是没有词能超过期望值。
+        这是个**界定**：滑窗切出来的书不可能只有一段，但上传路径将来若改成
+        按段算，这里会安静地返回空，而不是拿整本书冒充参考。
+        """
+        block = Counter({'fence': 9, 'other': 1})
+        self.assertEqual(get_distinctive_words(block, block, n=3, min_g2=0), [])
 
 
 class TestGetBlocks(unittest.TestCase):
