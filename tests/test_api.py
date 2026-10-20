@@ -51,6 +51,21 @@ FAKE_BOOK = {
     "metadata": {"totalBlocks": 1, "totalWords": 2, "avgSentenceLength": 1.0, "avgSimpsonIndex": 0.5},
 }
 
+# A complete current-draft fixture: every metric has enough values for a report, while
+# the final value is a clear outlier for the block-mapping assertions below.
+REPORT_BOOK = {
+    metric: [{"block": 100 + i, "value": value, "keywords": ["alpha"],
+              "preview": f"preview-{i}", "wordCount": 2}
+             for i, value in enumerate(values)]
+    for metric, values in {
+        "sentenceLength": [10.0, 10.1, 10.2, 10.3, 10.4, 30.0],
+        "simpsonIndex": [0.20, 0.21, 0.22, 0.23, 0.24, 0.50],
+        "hapaxLegomena": [100.0, 100.1, 100.2, 100.3, 100.4, 130.0],
+        "functionWords": [0.10, 0.11, 0.12, 0.13, 0.14, 0.40],
+    }.items()
+}
+REPORT_BOOK["metadata"] = {"totalBlocks": 6}
+
 
 class TestSanitizeBookName(unittest.TestCase):
     """纯函数测试，不依赖目录。"""
@@ -194,7 +209,7 @@ class LibraryApiTestCase(unittest.TestCase):
         return target
 
     def _post_analyze(self, filename, content=b"content", save=True, client=None,
-                      replace_target=None):
+                      replace_target=None, book_data=FAKE_BOOK):
         """带桩地走 /api/analyze：不做真实 NLTK 分析。
 
         replace_target 只在**显式传了**的时候才放进表单——「不带这个字段」
@@ -202,7 +217,7 @@ class LibraryApiTestCase(unittest.TestCase):
         """
         with stub_block_count(2), \
              mock.patch("src.data_loader.get_blocks", return_value=["alpha", "beta"]), \
-             mock.patch("src.pipeline.build_book_data", return_value=FAKE_BOOK):
+             mock.patch("src.pipeline.build_book_data", return_value=book_data):
             data = {"file": (io.BytesIO(content), filename)}
             if save:
                 data["save"] = "1"
@@ -1461,13 +1476,14 @@ class ExcerptEndpointTestCase(LibraryApiTestCase):
         self.assertTrue(result["extended"])
         self.assertTrue(result["excerpt"].startswith("LONG-sentenceLength"))
 
-    def test_saved_upload_strips_response_but_keeps_file(self):
+    def test_saved_upload_keeps_response_and_file_excerpt(self):
         resp = self._post_analyze("MyDoc.txt")
         result = resp.get_json()
         self.assertEqual(result["status"], "success")
         body = json.dumps(result["data"], ensure_ascii=False)
-        self.assertNotIn("extended_preview", body)
+        self.assertIn("extended_preview", body)
         # 落盘那份一个字节都不少：长摘录只是不下发，不是不存
+        # 第六十批：上传响应也保留长摘录，上面的不下发规则仅保留在 GET 语料接口。
         on_disk = json.loads((self.shelf / "MyDoc.json").read_text(encoding="utf-8"))
         self.assertEqual(on_disk["functionWords"][0]["extended_preview"], "hello")
 
@@ -1626,6 +1642,157 @@ class ExcerptEndpointTestCase(LibraryApiTestCase):
         self.assertEqual([item["block"] for item in payload["anomalies"]], [6])
         self.assertEqual(payload["anomalyCounts"]["total"], 1)
         self.assertEqual(payload["totalBlocks"], 7)
+
+    def test_upload_reports_match_get_report_shape_for_all_metrics(self):
+        """上传响应的四份报告与 GET 报告使用同一份结构和数值。"""
+        self._put_corpus({"Draft": REPORT_BOOK})
+        upload = self._post_analyze("Draft.txt", save=False, book_data=REPORT_BOOK)
+        self.assertEqual(upload.status_code, 200)
+        reports = upload.get_json()["analyses"]
+        self.assertEqual(set(reports), {
+            "sentenceLength", "simpsonIndex", "hapaxLegomena", "functionWords"
+        })
+        for metric, report in reports.items():
+            with self.subTest(metric=metric):
+                response = self.client.get(f"/api/analysis/Draft?metric={metric}")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(report["status"], "success")
+                self.assertEqual(report, response.get_json())
+
+    def test_unsaved_same_name_reports_current_draft_not_saved_book(self):
+        """未保存同名新稿的报告必须按当前上传稿计算，而不是书架旧稿。"""
+        old = copy.deepcopy(REPORT_BOOK)
+        old["sentenceLength"] = [dict(item, block=i) for i, item in enumerate(old["sentenceLength"])]
+        old_path = self._put_library("Draft", old)
+        old_bytes = old_path.read_bytes()
+        upload = self._post_analyze("Draft.txt", save=False, book_data=REPORT_BOOK)
+        report = upload.get_json()["analyses"]["sentenceLength"]
+        self.assertEqual(report["anomalies"][0]["block"], 105)
+        self.assertTrue(upload.get_json().get("shadowsExisting"))
+        self.assertEqual(old_path.read_bytes(), old_bytes)
+        saved_report = self.client.get("/api/analysis/Draft?metric=sentenceLength").get_json()
+        self.assertEqual(saved_report["anomalies"][0]["block"], 5)
+
+    def test_save_failure_still_returns_current_draft_reports(self):
+        """书架落盘失败只影响 saved，不吞掉当前稿和它的辅助报告。"""
+        old = copy.deepcopy(REPORT_BOOK)
+        old["sentenceLength"] = [dict(item, block=i) for i, item in enumerate(old["sentenceLength"])]
+        old_path = self._put_library("Draft", old)
+        old_bytes = old_path.read_bytes()
+        with mock.patch.object(api_server, "_save_library_book", side_effect=OSError("read-only")):
+            upload = self._post_analyze("Draft.txt", book_data=REPORT_BOOK)
+        body = upload.get_json()
+        self.assertEqual(upload.status_code, 200)
+        self.assertFalse(body["saved"])
+        self.assertIn("warning", body)
+        self.assertNotIn("replacedExisting", body)
+        self.assertIn("analyses", body)
+        self.assertEqual(body["analyses"]["sentenceLength"]["anomalies"][0]["block"], 105)
+        self.assertEqual(body["data"]["sentenceLength"][-1]["block"], 105)
+        self.assertEqual(old_path.read_bytes(), old_bytes)
+        saved_report = self.client.get("/api/analysis/Draft?metric=sentenceLength").get_json()
+        self.assertEqual(saved_report["anomalies"][0]["block"], 5)
+
+    def test_upload_report_failure_keeps_success_and_original_block_numbers(self):
+        """少于五条或含非有限值时，上传仍成功且报告不重编号。"""
+        draft = copy.deepcopy(REPORT_BOOK)
+        draft["sentenceLength"] = [
+            {"block": 7, "value": 1.0}, {"block": 20, "value": 2.0},
+            {"block": 99, "value": float("nan")}, {"block": 42, "value": 3.0},
+        ]
+        upload = self._post_analyze("Draft.txt", save=False, book_data=draft)
+        body = upload.get_json()
+        self.assertEqual(upload.status_code, 200)
+        self.assertEqual(body["status"], "success")
+        failed = body["analyses"]["sentenceLength"]
+        self.assertEqual(failed["status"], "error")
+        self.assertIn("片段", failed["message"])
+        self.assertNotIn("anomalies", failed)
+        self.assertEqual(body["data"]["sentenceLength"][-1]["block"], 42)
+        self.assertEqual(body["analyses"]["simpsonIndex"]["status"], "success")
+
+    def test_upload_reports_keep_original_blocks_after_filtering_nonfinite_values(self):
+        draft = copy.deepcopy(REPORT_BOOK)
+        draft["sentenceLength"] = [
+            {"block": 7, "value": 10.0},
+            {"block": 8, "value": float("nan")},
+            {"block": 20, "value": 10.0},
+            {"block": 21, "value": float("inf")},
+            {"block": 33, "value": 10.0},
+            {"block": 34, "value": float("-inf")},
+            {"block": 60, "value": 10.0},
+            {"block": 61, "value": "100"},
+            None,
+            {"block": 62},
+            {"block": 99, "value": 100.0, "preview": "outlier excerpt", "keywords": ["signal"]},
+        ]
+        draft["metadata"] = {
+            "totalBlocks": 101, "step": 10, "blockSize": 20,
+            "chapters": [{"index": 2, "title": "Final chapter", "wordStart": 990, "wordEnd": 1020}],
+        }
+        body = self._post_analyze("Draft.txt", save=False, book_data=draft).get_json()
+        report = body["analyses"]["sentenceLength"]
+        self.assertEqual(body["status"], "success")
+        self.assertEqual(report["status"], "success")
+        self.assertEqual(report["summary"]["count"], 5)
+        self.assertEqual(report["summary"]["mean"], 28.0)
+        self.assertEqual(report["totalBlocks"], 101)
+        self.assertEqual(len(report["anomalies"]), 1)
+        anomaly = report["anomalies"][0]
+        self.assertEqual(anomaly["block"], 99)
+        self.assertEqual(anomaly["value"], 100.0)
+        self.assertEqual(anomaly["preview"], "outlier excerpt")
+        self.assertEqual(anomaly["keywords"], ["signal"])
+        self.assertEqual(anomaly["chapterIndex"], 2)
+        self.assertEqual(anomaly["chapterTitle"], "Final chapter")
+        self._put_corpus({"Draft": draft})
+        get_response = self.client.get("/api/analysis/Draft?metric=sentenceLength")
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(report, get_response.get_json())
+
+    def test_upload_report_failure_does_not_swallow_unexpected_error(self):
+        """单个辅助报告异常只标记该指标，上传结果仍照常返回。"""
+        original = api_server.analyze_series
+
+        def fail_first(values):
+            if values and values[0] == 10.0:
+                raise RuntimeError("report boom")
+            return original(values)
+
+        with mock.patch.object(api_server, "analyze_series", side_effect=fail_first):
+            upload = self._post_analyze("Draft.txt", book_data=REPORT_BOOK)
+        body = upload.get_json()
+        self.assertEqual(upload.status_code, 200)
+        self.assertEqual(body["status"], "success")
+        self.assertTrue(body["saved"])
+        self.assertIn("deleteToken", body)
+        self.assertEqual(body["data"]["sentenceLength"], REPORT_BOOK["sentenceLength"])
+        self.assertEqual(body["analyses"]["sentenceLength"]["status"], "error")
+        for metric in ("simpsonIndex", "hapaxLegomena", "functionWords"):
+            self.assertEqual(body["analyses"][metric]["status"], "success")
+        stored = json.loads((self.shelf / "Draft.json").read_text(encoding="utf-8"))
+        self.assertEqual(stored["sentenceLength"], REPORT_BOOK["sentenceLength"])
+        self.assertNotIn("analyses", stored)
+
+    def test_saved_upload_keeps_current_extended_excerpt_without_persisting_reports(self):
+        draft = copy.deepcopy(REPORT_BOOK)
+        excerpt = "current draft extended excerpt " * 20
+        draft["sentenceLength"][-1]["extended_preview"] = excerpt
+        draft["_functionWordVectors"] = [[0.1, 0.2]]
+
+        upload = self._post_analyze("Draft.txt", book_data=draft)
+        body = upload.get_json()
+        self.assertEqual(upload.status_code, 200)
+        self.assertTrue(body["saved"])
+        self.assertEqual(body["data"]["sentenceLength"][-1].get("extended_preview"), excerpt)
+        self.assertNotIn("_deleteToken", body["data"])
+        self.assertNotIn("_functionWordVectors", body["data"])
+        stored = json.loads((self.shelf / "Draft.json").read_text(encoding="utf-8"))
+        self.assertNotIn("analyses", stored)
+        self.assertNotIn("analyses", body["data"])
+        self.assertEqual(stored["sentenceLength"][-1]["extended_preview"], excerpt)
+        corpus = self.client.get("/api/fingerprint-data").get_json()
+        self.assertNotIn("extended_preview", corpus["data"]["Draft"]["sentenceLength"][-1])
 
 
 if __name__ == "__main__":

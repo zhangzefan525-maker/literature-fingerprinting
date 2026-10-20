@@ -501,6 +501,19 @@ button:hover {
 
 .quickstart-lead {
     color: var(--ink-70);
+    background: transparent;
+    padding: 8px 0;
+    min-height: 44px;
+    text-align: left;
+    white-space: normal;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.quickstart-lead:hover {
+    color: var(--ink-100);
+    background: transparent;
+    transform: none;
+    box-shadow: none;
 }
 
 .quickstart-demo {
@@ -1674,7 +1687,7 @@ button:hover {
     color: var(--ink-70);
 }
 
-.book-el { transition: all 0.3s; cursor: pointer; }
+.book-el { transition: opacity 0.3s; cursor: pointer; }
 .book-el.dimmed { opacity: 0.12; }
 .book-el.highlighted { opacity: 1; stroke-width: 2px; }
 .selection { fill: var(--vermilion-soft); stroke: var(--vermilion); }
@@ -2168,7 +2181,7 @@ button:hover {
     color: var(--ink-100);
     pointer-events: none;
     z-index: 10;
-    transition: all 0.3s ease;
+    transition: opacity 0.3s ease;
 }
 
 .hud-title {
@@ -2355,6 +2368,7 @@ button:hover {
    同一个控件换一页就换一个高度。换成「页签在前、观察角度在后」之后四页对齐，
    语义也顺了：先选看哪一页，再看这一页的观察角度。
    注意：DOM 顺序也一并调过（d3_visualization.html），**只改其中一处是无效的**。 */
+#research-scope { order: 3; }
 .tab-navigation { order: 3; }
 .metric-bar { order: 4; }
 #global-status { order: 5; }
@@ -2757,7 +2771,7 @@ button:hover {
     padding: 4px 8px;
     border-radius: 6px;
     border: 1px solid transparent;
-    transition: all .2s ease;
+    transition: color .2s ease, border-color .2s ease;
 }
 .save-toggle:hover { color: var(--ink-100); border-color: var(--border); }
 .save-toggle input { accent-color: var(--vermilion); cursor: pointer; }

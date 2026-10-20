@@ -181,12 +181,13 @@
                  第四十三批又去掉了「已经替你选好差别最明显的两本了」这半句：同一屏里
                  顶部状态条（d3-charts.js 里 announceOrNotice 那处）正在说同一件事，而且
                  说得更全（哪两本、凭什么、想换怎么办）。这句只留「点这里看什么」。 -->
-            <span class="quickstart-lead">第一次使用？点击此处前往「全书对比」，查看现成的结论。</span>
+            <button type="button" class="quickstart-lead" onclick="switchTab('view-dashboard')">第一次使用？点击此处前往「全书对比」，查看现成的结论。</button>
             <button type="button" class="quickstart-demo" onclick="loadComparisonExample()">载入对比示例</button>
             <button type="button" class="quickstart-close" onclick="hideQuickStart()" aria-label="不再自动显示快速开始" title="收起。之后可以在「基础趋势分析」页右上角手动载入对比示例">✕</button>
         </div>
 
         <!-- 新增：顶部 Tab 切换导航 -->
+        <p id="research-scope" class="chart-scale-note" aria-live="polite"></p>
         <div class="tab-navigation" role="tablist" aria-label="分析视图">
             <!-- title 是给鼠标用户的「这个页签里有什么」：三个名字（趋势/星系/对比）
                  都说得出口，但光看名字猜不到点进去会看到什么图。读屏用户不听 title
@@ -721,11 +722,7 @@
             advState.data = [];
             // 数据整份换了，上一次异常分析的去重键就作废了——不然同一本书、同一个观察角度
             // 重新加载后，renderAnomalies 会以为「算过了」而直接跳过，面板停在旧内容上。
-            lastAnomalyKey = null;
-            // 同理，上一份数据的异常报告也整批作废——不然新书还没问回来之前，
-            // 「复制结论」会照着旧书的那几十行原文片段导出。
-            lastAnomalyReports = [];
-            lastAnomalyBooks = [];
+            window.invalidateAnomalies();
             const books = Object.keys(realData);
 
             books.forEach(bookName => {
@@ -880,6 +877,14 @@
         // 所以同一个组合重复进来就直接复用，不再重发。键盘框选每按一次方向键都会重跑到
         // 这里，原先等于每按一次发一次请求、还把那块 live region 整段重写一遍。
         let lastAnomalyKey = null;
+        window.invalidateAnomalies = function() {
+            anomalyRequestId += 1;
+            lastAnomalyKey = null;
+            lastAnomalyContext = null;
+            lastAnomalyReports = [];
+            lastAnomalyBooks = [];
+            unmuteAnomalyLive();
+        };
 
         // 相邻片段之间重叠了多少词。脚注要如实交代「这些片段不是互相独立的样本」，
         // 而旧数据没有 overlap 字段——走 normalizeBookMeta，它会按「窗口长 − 步长」推出来。
@@ -892,9 +897,9 @@
         // 拿不到异常片段时：把原因明说，而不是把面板清空。
         // 失败也必须写进 lastAnomalyReports——否则「导出摘要」里这一段会静默消失，
         // 读的人只会以为这本书没有偏离片段（那是「取不到」，不是「没有」）。
-        function showAnomalyFailure(index, book, displayName, mLabel, why) {
+        function showAnomalyFailure(index, book, displayName, mLabel, why, retryable = false, localUpload = false) {
             if (!Array.isArray(lastAnomalyReports)) lastAnomalyReports = [];
-            lastAnomalyReports[index] = { book, displayName, metricLabel: mLabel, failed: true, reason: why };
+            lastAnomalyReports[index] = { book, displayName, metricLabel: mLabel, failed: true, reason: why, retryable, localUpload };
             renderAnomalyPanel();
         }
 
@@ -922,6 +927,24 @@
                 ? `<div class="anomaly-muted">${escapeHtml(ANOMALY_GLOBAL_NOTE)}点开左侧曲线可以查看它前后的变化。</div>`
                 : '';
             panel.innerHTML = blocks + globalNote;
+            panel.querySelectorAll('[data-anomaly-book]').forEach(button => {
+                button.addEventListener('click', () => openAnomalyExcerpt(button.dataset.anomalyBook, Number(button.dataset.anomalyBlock)));
+            });
+            if (reports.some(report => report && report.failed && report.retryable)) {
+                const retry = document.createElement('button');
+                retry.type = 'button';
+                retry.className = 'copy-block-btn';
+                retry.textContent = '重试片段分析';
+                retry.addEventListener('click', () => { lastAnomalyKey = null; renderAnomalies(getAdvComputed()); });
+                panel.appendChild(retry);
+            }
+            if (reports.some(report => report && report.failed && !report.retryable
+                && report.localUpload)) {
+                const nextStep = document.createElement('div');
+                nextStep.className = 'anomaly-muted';
+                nextStep.textContent = '这份上传稿没有可重试的片段分析；请重新上传文本后再试。';
+                panel.appendChild(nextStep);
+            }
         }
 
         // 一本书的那一块。report 还是 null = 这本书的请求还没回来。
@@ -965,6 +988,7 @@
                                 <div class="anomaly-value">${mLabel} ${Number.isFinite(value) ? fmtMetric(value) : ''}${compare ? ` · ${compare}` : ''}</div>
                                 ${preview}
                                 ${keywords}
+                                <button type="button" class="copy-block-btn" data-anomaly-book="${escapeHtml(report.book)}" data-anomaly-block="${Number(item.block)}">查看这段原文</button>
                             </div>`;
             }).join('');
             // 脚注与导出共用同一个函数（anomalyNotes 在 d3-charts.js 里），屏幕与导出物不可能
@@ -979,6 +1003,7 @@
             const panel = document.getElementById('anomaly-content');
             if (!panel) return;
             if (!data || data.length === 0) {
+                window.invalidateAnomalies();
                 panel.innerHTML = '';
                 lastAnomalyReports = [];
                 lastAnomalyBooks = [];
@@ -989,8 +1014,10 @@
             // 键里必须带上**全部**选中书的名字：只带 data[0] 的话，换了第二本书而第一本没动，
             // 这里会当成同一份结果直接返回，第二本书的偏离片段永远停在旧数据上。
             const books = data.map(d => ({ name: d.name, displayName: d.displayName || d.name }));
-            const anomalyKey = books.map(b => b.name).join('\u0001')
-                + `\u0000${currentMetric}\u0000${advBrushPercent() ? 1 : 0}`;
+            const metric = currentMetric;
+            const contextKey = researchKey();
+            const anomalyKey = contextKey + `\u0000${advBrushPercent() ? 1 : 0}`
+                + JSON.stringify(books.map(book => [book.name, bookRevision(book.name)]).sort());
             if (anomalyKey === lastAnomalyKey) return;
             lastAnomalyKey = anomalyKey;
             // mLabel 提到 fetch 之前：失败分支也要用它，原来它只在成功分支里定义。
@@ -1001,6 +1028,7 @@
             const reports = books.map(() => null);
             lastAnomalyBooks = books;
             lastAnomalyReports = reports;
+            lastAnomalyContext = contextKey;
             // 这一段从头到尾会写 #anomaly-content 三次以上：这里清一次，每本书的响应回来
             // 各一次（成功和失败都写）。而那块是 aria-live="polite" 的，读屏会照着播三遍
             // 半成品——第一遍还是「正在找…」，听的人以为只有一本书在算。视觉上「先回来的
@@ -1023,20 +1051,33 @@
             books.forEach((entry, index) => {
                 const book = entry.name;
                 const displayName = entry.displayName;
-                fetch(`/api/analysis/${encodeURIComponent(book)}?metric=${encodeURIComponent(currentMetric)}`)
-                    .then(resp => resp.json().catch(() => null))
+                const localReports = uploadReports.get(realData[book]);
+                const response = localReports
+                    ? Promise.resolve({
+                        localUpload: true,
+                        report: localReports[metric] || {
+                            status: 'error', message: '本次上传稿未生成片段分析，请重新上传后再试。'
+                        }
+                    })
+                    : fetch(`/api/analysis/${encodeURIComponent(book)}?metric=${encodeURIComponent(metric)}`)
+                        .then(async resp => ({ response: resp, report: await resp.json().catch(() => null) }));
+                response
                     .then(result => {
-                        if (requestId !== anomalyRequestId) return; // 已经有更新的一代了，丢弃
-                        if (!result || result.status !== 'success') {
-                            // 服务端在这条路上写了一句很具体的话（「有效的片段太少，做不了异常分析。」
-                            // 「这本书在这个观察角度下没有数据」…）。原来整句被丢掉、面板直接清空，
-                            // 用户分不清「没有偏离」和「压根没算成」。照实显示，并让导出也知道这一段缺了。
-                            showAnomalyFailure(index, book, displayName, mLabel,
-                                (result && result.message) || '暂时取不到这本书的偏离片段，请稍后重试。');
+                        if (requestId !== anomalyRequestId || contextKey !== researchKey()) return; // 当前稿/选择已变化
+                        const report = result && Object.prototype.hasOwnProperty.call(result, 'report')
+                            ? result.report : result;
+                        if (!report || report.status !== 'success') {
+                            const retryable = result && result.localUpload
+                                ? false
+                                : !result.response || result.response.status >= 500;
+                            const why = (report && report.message)
+                                || (retryable ? '暂时取不到这本书的偏离片段，请稍后重试。'
+                                    : '这本书的当前文本暂不可分析；请更换或补充文本后再试。');
+                            showAnomalyFailure(index, book, displayName, mLabel, why, retryable, !!(result && result.localUpload));
                             return;
                         }
-                        const items = result.anomalies || [];
-                        const mean = result.summary && Number(result.summary.mean);
+                        const items = report.anomalies || [];
+                        const mean = report.summary && Number(report.summary.mean);
                         // 屏幕上渲染了什么，导出里就是什么——两块共用这一个缓存。
                         // flagged / blockCount / overlap 三个数只服务于脚注那几句
                         // （「这只是前 8 个」「这些片段互相重叠、不是独立样本」）。
@@ -1044,14 +1085,14 @@
                             book, displayName, metricLabel: mLabel, mean,
                             brushScoped: !!advBrushPercent(),
                             items,
-                            flagged: result.anomalyCounts && Number(result.anomalyCounts.total),
-                            blockCount: Number(result.totalBlocks) || getBookBlockCount(book),
+                            flagged: report.anomalyCounts && Number(report.anomalyCounts.total),
+                            blockCount: Number(report.totalBlocks) || getBookBlockCount(book),
                             overlap: anomalyOverlapWords(book)
                         };
                         renderAnomalyPanel();
                     })
                     .catch(() => {
-                        if (requestId !== anomalyRequestId) return;
+                        if (requestId !== anomalyRequestId || contextKey !== researchKey()) return;
                         // 原来这里是「拿不到就不占地方，不打扰用户」——面板先闪一句「正在找…」
                         // 再凭空消失，用户分不清是没算成还是本来就均匀；同时缓存被清空，
                         // 导出的摘要里整段【值得一看的片段】被无声略过。现在两边都明说。
@@ -1178,7 +1219,7 @@
             if (usable.length === 0) return '';
 
             const worst = usable.reduce((a, b) => (b.currentStd > a.currentStd ? b : a));
-            const consequence = '换一段文本再算，这个高下很可能就反过来。';
+            const consequence = '这只是描述性比较，不能据此判断换一段后高下反转的概率。';
             const ratio = gap / worst.currentStd;
             // 十位以上再写小数点没有意义（0.1 倍的精度落不到任何一位真实的信息上）
             const ratioText = ratio >= 10 ? String(Math.round(ratio)) : ratio.toFixed(1);
@@ -1191,7 +1232,7 @@
             if (relist === false) {
                 const gapText = fmtMetric(gap);
                 return tooSmall
-                    ? `这一对的差是 ${gapText}，比它们各自的内部起伏都小——${consequence}`
+                    ? `这一对的差是 ${gapText}，小于其中较大的内部起伏（约 ${ratioText} 倍）——${consequence}`
                     : `这一对的差是 ${gapText}，约是它们中起伏较大的那一本的 ${ratioText} 倍。`;
             }
 
@@ -1200,7 +1241,7 @@
                 .join('、');
             const head = `作为对照，它们的内部起伏（同一本书内各片段之间的标准差）是${listed}——`;
             return tooSmall
-                ? head + `这个差比它们都小：${consequence}`
+                ? head + `这个差小于其中较大那个（约 ${ratioText} 倍）：${consequence}`
                 : head + `这个差约是其中较大那个的 ${ratioText} 倍。`;
         }
 
@@ -1372,6 +1413,8 @@
             // 注意：这里存的是**纯字符串**，降档只是屏幕上的一层 class，
             // 导出与「复制结论」拿到的仍然是完整句子。
             lastInsightLines = lines.slice();
+            lastInsightContext = researchKey(true);
+            updateResearchScope();
             panel.innerHTML = lines.map((l, i) =>
                 `<div class="insight-line${metaLines.has(i) ? ' insight-line-meta' : ''}">${l}</div>`
             ).join('');
@@ -1517,7 +1560,13 @@
             // 一条带子都没画出来时必须藏起来——那句话点名了「柱子上的带子」，
             // 挂上去就是在说一件屏幕上没有的事。
             const bandNote = document.getElementById('adv-mean-band-note');
-            if (bandNote) bandNote.hidden = !sortedData.some(d => bandEdge(d));
+            if (bandNote) {
+                bandNote.hidden = !sortedData.some(d => { const edge = bandEdge(d); return edge && Math.abs(edge[1] - edge[0]) > 0; });
+                bandNote.textContent = '柱子上那条深色带子：把' + (advBrushPercent() ? '当前框选范围内' : '这本书')
+                    + '的各个片段按数值排队，从第 25% 名到第 75% 名就落在这一段里——说的是'
+                    + (advBrushPercent() ? '当前范围内' : '这本书自己从头到尾')
+                    + '的起伏有多大（不是抽样误差，也不是置信区间）。';
+            }
         }
 
         function renderAdvLine(data) {

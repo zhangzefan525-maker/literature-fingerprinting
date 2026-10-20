@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from src.data_loader import BLOCK_SIZE, OVERLAP, clean_text
+from src.analysis_utils import analyze_series
 
 # 初始化Flask应用
 app = Flask(__name__, static_folder='static')
@@ -940,6 +941,63 @@ def get_block_excerpt(book_name):
             "message": "服务器读取这段摘录时出错，请稍后重试。"
         }), 500
 
+def _analysis_report(book_name, book_data, metric):
+    """Return the public report shape used by both GET and upload responses."""
+    series = book_data.get(metric)
+    if not isinstance(series, list) or not series:
+        return {"status": "error", "message": "这本书在这个观察角度下没有数据，请换一个角度再试。"}
+
+    # 先过滤成 (片段号, 数值) 对：这样异常结果的序号能准确映射回片段
+    pairs = []
+    for item in series:
+        value = item.get("value") if isinstance(item, dict) else None
+        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            pairs.append((item, float(value)))
+    if len(pairs) < 5:
+        return {"status": "error", "message": "有效的片段太少，做不了异常分析。"}
+
+    analysis = analyze_series([value for _item, value in pairs])
+    metadata = book_data.get("metadata") or {}
+    blocks = [item.get("block") for item, _value in pairs]
+    anomalies = []
+    for entry in analysis["anomalies"]["items"]:
+        item, value = pairs[entry["index"]]
+        chapter = _chapter_of_block(metadata, blocks[entry["index"]])
+        anomalies.append({
+            "block": blocks[entry["index"]],
+            "value": value,
+            "zScore": entry["zScore"],
+            "byZScore": entry["byZScore"],
+            "byIQR": entry["byIQR"],
+            "chapterIndex": chapter["index"] if chapter else None,
+            "chapterTitle": chapter["title"] if chapter else None,
+            "preview": item.get("preview"),
+            "keywords": item.get("keywords") or [],
+        })
+    return {
+        "status": "success",
+        "book": book_name,
+        "metric": metric,
+        "summary": analysis["summary"],
+        "trend": analysis["trend"],
+        "anomalies": anomalies,
+        "anomalyCounts": analysis["anomalies"]["counts"],
+        "totalBlocks": metadata.get("totalBlocks") or len(pairs),
+    }
+
+
+def _upload_analysis_reports(book_name, book_data):
+    """Build all four reports without allowing a report failure to lose upload data."""
+    reports = {}
+    for metric in sorted(_METRIC_KEYS):
+        try:
+            reports[metric] = _analysis_report(book_name, book_data, metric)
+        except Exception:
+            app.logger.exception("上传辅助分析失败: %s", metric)
+            reports[metric] = {"status": "error", "message": "这个观察角度的辅助报告暂时生成失败。"}
+    return reports
+
+
 @app.route('/api/analysis/<path:book_name>', methods=['GET'])
 def analyze_book(book_name):
     """
@@ -948,8 +1006,6 @@ def analyze_book(book_name):
     「异常」在这里是统计意义上的偏离（离均值远 / 超出四分位距），
     不代表写得好或不好——前端文案里也要写清这一点。
     """
-    from src.analysis_utils import analyze_series
-
     metric = request.args.get('metric', 'sentenceLength')
     if metric not in _METRIC_KEYS:
         return jsonify({
@@ -969,55 +1025,10 @@ def analyze_book(book_name):
                            "刷新页面拿不回来。请重新上传一次、上传时勾上「存入书架」，再回来看这一页。"
             }), 404
 
-        series = book_data.get(metric)
-        if not isinstance(series, list) or not series:
-            return jsonify({
-                "status": "error",
-                "message": "这本书在这个观察角度下没有数据，请换一个角度再试。"
-            }), 404
-
-        # 先过滤成 (片段号, 数值) 对：这样异常结果的序号能准确映射回片段
-        pairs = []
-        for item in series:
-            value = item.get("value") if isinstance(item, dict) else None
-            if isinstance(value, (int, float)) and math.isfinite(float(value)):
-                pairs.append((item, float(value)))
-        if len(pairs) < 5:
-            return jsonify({
-                "status": "error",
-                "message": "有效的片段太少，做不了异常分析。"
-            }), 404
-
-        analysis = analyze_series([value for _item, value in pairs])
-        metadata = book_data.get("metadata") or {}
-        blocks = [item.get("block") for item, _value in pairs]
-
-        anomalies = []
-        for entry in analysis["anomalies"]["items"]:
-            item, value = pairs[entry["index"]]
-            chapter = _chapter_of_block(metadata, blocks[entry["index"]])
-            anomalies.append({
-                "block": blocks[entry["index"]],
-                "value": value,
-                "zScore": entry["zScore"],
-                "byZScore": entry["byZScore"],
-                "byIQR": entry["byIQR"],
-                "chapterIndex": chapter["index"] if chapter else None,
-                "chapterTitle": chapter["title"] if chapter else None,
-                "preview": item.get("preview"),
-                "keywords": item.get("keywords") or [],
-            })
-
-        return jsonify({
-            "status": "success",
-            "book": book_name,
-            "metric": metric,
-            "summary": analysis["summary"],
-            "trend": analysis["trend"],
-            "anomalies": anomalies,
-            "anomalyCounts": analysis["anomalies"]["counts"],
-            "totalBlocks": metadata.get("totalBlocks") or len(pairs),
-        })
+        report = _analysis_report(book_name, book_data, metric)
+        if report["status"] != "success":
+            return jsonify(report), 404
+        return jsonify(report)
 
     except Exception:
         app.logger.exception("分析单本书失败")
@@ -1214,9 +1225,9 @@ def analyze_upload():
     # 的这次分析：那份响应是长摘录在世界上唯一的副本（磁盘上没有），剥了用户就只能
     # 复制到 150 字。落盘的那份由 /api/excerpt 按需取；这份响应里的则由前端直接
     # 从内存里拿（见前端 resolveExcerpt 的「先查本地」）。
+    # 第六十批：上面的例外扩展到所有本次上传响应；已保存稿也不能按书名回查，
+    # 否则同名替换时可能拿到另一稿。GET 语料仍瘦身，持久化结构不变。
     public_data = _strip_internal(book_data)
-    if want_save and not save_error:
-        public_data = _public_book_data(public_data)
 
     resp = {
         "status": "success",
@@ -1242,6 +1253,9 @@ def analyze_upload():
         resp["shadowsExisting"] = True
     if save_error:
         resp["warning"] = save_error
+    # Compute reports from the exact in-memory draft, not by reloading a same-name
+    # saved book. A report failure is scoped to its metric and cannot discard upload data.
+    resp["analyses"] = _upload_analysis_reports(final_name, book_data)
     if want_save and not save_error:
         resp["savedName"] = final_name
         resp["deleteToken"] = delete_token

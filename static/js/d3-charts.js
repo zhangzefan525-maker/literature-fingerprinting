@@ -46,6 +46,7 @@ let builtinBookNames = [];    // 服务器上常驻的示例书（用作解读�
 // 读的人（导师说「重算一遍」）需要知道当时算的是哪一份数据。它是**整份语料一个指纹**，
 // 不是每本书一个；上传/删除一本书，所有书的这一行都会一起变。
 let corpusFingerprint = null;
+let corpusSnapshotChanged = false;
 
 // 「全书对比」页那两块结论的最近一次渲染结果，由页面内另一段脚本在渲染时写入
 // （本文件先于那段脚本加载，所以在这里声明不会撞上暂时性死区）。导出摘要与
@@ -59,6 +60,71 @@ let lastAnomalyReports = [];
 // 与 lastAnomalyReports 一一对应的书名表（{name, displayName}），顺序即面板上的顺序。
 // 面板重绘、以及「这本书的报告还没回来」时要显示哪本书的名字，都得靠它。
 let lastAnomalyBooks = [];
+
+// 数据对象每次整份替换就有新修订，不靠书名、块数或内容哈希猜测稿件身份。
+const bookRevisions = new WeakMap();
+const uploadReports = new WeakMap();
+let nextBookRevision = 0;
+let lastInsightContext = null;
+let lastAnomalyContext = null;
+let activeResearchKey = null;
+function bookRevision(name) {
+    const data = realData && realData[name];
+    if (!data || typeof data !== 'object') return 0;
+    if (!bookRevisions.has(data)) bookRevisions.set(data, ++nextBookRevision);
+    return bookRevisions.get(data);
+}
+function researchKey(includeRange = false) {
+    const books = getExportBooks().map(name => [name, bookRevision(name)]).sort((a, b) => a[0].localeCompare(b[0]));
+    return JSON.stringify([currentMetric, books, includeRange ? getActiveBrushRange() : null]);
+}
+function updateResearchScope() {
+    const el = document.getElementById('research-scope');
+    if (!el) return;
+    const books = getExportBooks();
+    const session = books.filter(name => uploadReports.has(realData[name]));
+    el.textContent = currentTab === 'view-authorship'
+        ? '当前任务：服务器原文的作者归属验证，不受顶部选书和观察角度控制；示例命中率不代表普遍准确率，也不能据此鉴定未知稿作者。'
+        : `当前研究：${books.map(getBookDisplayName).join('、') || '尚未选书'} · ${getMetricLabel(currentMetric)} · ${describeExportScope()}`
+            + (session.length ? `；含本次上传稿 ${session.length} 本，异常与摘录均按当前稿。` : '');
+}
+function syncResearchContext() {
+    const key = researchKey();
+    if (key !== activeResearchKey) {
+        activeResearchKey = key;
+        lastInsightContext = null;
+        lastAnomalyContext = null;
+        lastInsightLines = [];
+        lastAnomalyReports = [];
+        if (window.invalidateAnomalies) window.invalidateAnomalies();
+        const modal = document.getElementById('galaxy-modal');
+        if (modal && modal.getAttribute('aria-hidden') === 'false') closeGalaxyModal();
+    }
+    updateResearchScope();
+}
+function openAnomalyExcerpt(book, block) {
+    const item = getMetricValues(book, currentMetric).find(entry => Number(entry.block) === Number(block));
+    if (!item) return;
+    lastGalaxyTrigger = document.activeElement;
+    lastGalaxyTriggerMeta = {
+        book, block: Number(item.block), revision: bookRevision(book), metric: currentMetric,
+        kind: 'anomaly'
+    };
+    openGalaxyModal({ book, blockIndex: item.block, realValue: item.value,
+        preview: item.preview, wordCount: item.wordCount,
+        keywords: item.keywords, keywordScores: item.keywordScores });
+}
+function keywordEvidenceHtml(data) {
+    const words = Array.isArray(data.keywords) ? data.keywords : [];
+    if (!words.length) return '';
+    const scores = data.keywordScores;
+    const valid = Array.isArray(scores) && scores.length === words.length && scores.every(isFiniteNumber);
+    const text = valid
+        ? words.map((word, i) => `${word}：${scores[i]}`).join('；')
+            + '。分数为对数似然比，比较该片段与本书其余部分，不是出现次数或作者身份概率。'
+        : '这些词没有可配对的特征分数，可能来自旧数据或出现次数榜；不能当作显著偏多的特征词。';
+    return `<details class="excerpt-note"><summary>查看词条依据</summary><p>${escapeHtml(text)}</p></details>`;
+}
 
 const METRIC_KEYS = ['sentenceLength', 'simpsonIndex', 'hapaxLegomena', 'functionWords'];
 const VIEW_IDS = ['view-main', 'view-galaxy', 'view-dashboard', 'view-authorship'];
@@ -760,6 +826,7 @@ function scrollToSection(section) {
 // Tab 切换逻辑
 window.switchTab = function(tabId, options) {
     currentTab = tabId;
+    syncResearchContext();
 
     // 同步 tab/tabpanel 语义，让键盘和读屏用户知道当前视图
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -795,6 +862,7 @@ window.switchTab = function(tabId, options) {
 
         // 延迟一点点以确保 DOM 布局已更新
         setTimeout(() => {
+            if (currentTab !== tabId) return;
             if (tabId === 'view-main' && realData) {
                 initChart();
             } else if (tabId === 'view-galaxy' && realData) {
@@ -1152,6 +1220,9 @@ async function proceedUpload(file, { replaceTarget = null } = {}) {
 
         if (!realData) realData = {};
         realData[result.book] = result.data; // 一律以服务端返回的 result.book 作为键
+        uploadReports.set(result.data, result.analyses || {});
+        corpusSnapshotChanged = true;
+        galaxyExcerptToken += 1;
         // 同名重传后，缓存里的旧摘录必须作废，否则「复制更长的摘录」会给出上一版正文
         _excerptCache.clear();
         selectedBooks.add(result.book);
@@ -1196,8 +1267,8 @@ async function proceedUpload(file, { replaceTarget = null } = {}) {
         // 异常片段分析走 /api/analysis，读的是服务器上那份语料，不含没落盘的上传。
         // 不说这句，用户会在切到那一页、看到红字时才第一次知道，而那时只能重传一遍。
         if (!result.saved && !result.warning) {
-            notes.push('「全书对比」里的异常片段分析要回头问服务器，这一步算不了没保存的上传，'
-                + '切到那一页会显示取不到；本页的图和原文摘录不受影响。');
+            notes.push('「全书对比」里的异常片段使用本次上传稿即时计算，'
+                + '无需先存入书架；刷新后仍需重新上传。');
         }
         if (result.warning) notes.push(result.warning);
         setUploadStatus(
@@ -1787,6 +1858,7 @@ async function deleteLibraryBook(bookName) {
         }
 
         if (realData) delete realData[bookName];
+        corpusSnapshotChanged = true;
         selectedBooks.delete(bookName);
         forgetDeleteToken(bookName);
         // 书架名单同步删掉：删完再传同名文件就是「新增」，不该再弹覆盖确认
@@ -1866,6 +1938,7 @@ function setDeletingBookState(bookName, deleting) {
 
 // 辅助函数：根据当前 Tab 刷新图表
 function refreshAllActiveCharts() {
+    syncResearchContext();
     if (currentTab === 'view-main') initChart();
     if (currentTab === 'view-galaxy') initStyleGalaxy();
     if (currentTab === 'view-dashboard' && window.initAdvancedData) window.initAdvancedData();
@@ -2211,17 +2284,16 @@ async function loadRealData() {
         showLoading('正在加载数据…');
 
         const response = await fetch(API_ENDPOINTS.fingerprintData);
-        // 服务端把「这份语料是什么」压成一个指纹放在 ETag 头上，供缓存判断用；
-        // 导出的摘要与数据表顺手带上它（第四十批），让导出物能说清自己算的是哪一份数据。
-        // ETag 形如 `"abc123"` 或弱验证器 `W/"abc123"`，去掉包装只留指纹本身。
-        const etag = response.headers.get('ETag') || '';
-        const fingerprint = etag.replace(/^W\//, '').replace(/"/g, '').trim();
-        corpusFingerprint = fingerprint || null;
         const contentType = response.headers.get('content-type') || '';
         const data = contentType.includes('application/json') ? await response.json() : null;
-        if (!response.ok || !data || data.status !== 'success') {
+        if (!response.ok || !data || data.status !== 'success' || !data.data || typeof data.data !== 'object') {
             showError(`加载数据失败：${getErrorMessage(response, data)}`);
             return;
+        }
+        if (!corpusSnapshotChanged) {
+            const etag = response.headers.get('ETag') || '';
+            const fingerprint = etag.replace(/^W\//, '').replace(/"/g, '').trim();
+            corpusFingerprint = fingerprint || null;
         }
 
         // 必须「合并」而不是整份替换：首次加载慢的时候（示例数据生成约 1–2 分钟，
@@ -3275,6 +3347,7 @@ function showDetail(data, bookName) {
             <div style="margin: 15px 0;">
                 <h4>※ 关键词</h4>
                 <div class="keywords">${keywordsHtml}</div>
+                ${keywordEvidenceHtml(data)}
                 ${scores && scores.length > 0 ? `<p class="keyword-note">只列这一段明显偏多的词（对数似然比），全书各段都爱用的词——主角名、said 之类——不列入。</p>` : ''}
             </div>` : ''}
 
@@ -3654,6 +3727,7 @@ function fallbackCopyText(text) {
 // 未落盘的那本书的长摘录只存在于内存），再查本页缓存，最后才发一个请求。
 const _excerptCache = new Map(); // 键 `书名\u0000片段号`；同名重传成功时整表清空
 let galaxyExcerptToken = 0; // 星系弹窗的在途请求令牌：连开两段/关掉弹窗时，旧响应作废
+let galaxyModalCloseToken = 0; // 关闭动画令牌：不被上传等摘录请求失效操作取消
 
 // 在已加载的数据里找某段的长摘录（本地命中就不发请求）。
 // 落盘的数据经服务端剥离后不带 extended_preview，只有未落盘的上传副本还带着。
@@ -3676,9 +3750,15 @@ function getLocalExcerpt(bookName, blockIndex) {
 }
 
 async function resolveExcerpt(bookName, blockIndex) {
+    const revision = bookRevision(bookName);
     const local = getLocalExcerpt(bookName, blockIndex);
     if (local) return { excerpt: local, extended: true };
-    const cacheKey = `${bookName}\u0000${Number(blockIndex)}`;
+    if (uploadReports.has(realData && realData[bookName])) {
+        const item = getMetricValues(bookName, currentMetric).find(entry => Number(entry.block) === Number(blockIndex));
+        if (item && item.preview) return { excerpt: item.preview, extended: false };
+        throw new Error('当前稿没有这段摘录，请重新上传后再试。');
+    }
+    const cacheKey = `${bookName}\u0000${revision}\u0000${Number(blockIndex)}`;
     const cached = _excerptCache.get(cacheKey);
     if (cached) return cached;
     const resp = await fetch(`${API_BASE_URL}/api/excerpt/${encodeURIComponent(bookName)}`
@@ -3689,6 +3769,7 @@ async function resolveExcerpt(bookName, blockIndex) {
         if (!(result && result.message)) console.warn('[摘录] HTTP', resp.status);
         throw new Error((result && result.message) || '取摘录失败，请稍后重试。');
     }
+    if (bookRevision(bookName) !== revision) throw new Error('稿件已经更新，请重新打开当前片段。');
     const payload = { excerpt: result.excerpt, extended: !!result.extended };
     _excerptCache.set(cacheKey, payload);
     return payload;
@@ -3704,6 +3785,7 @@ function excerptCopyButtonHtml(bookName, blockIndex, fallbackText, extraClass = 
     return `<button type="button" class="copy-block-btn${extraClass ? ` ${extraClass}` : ''}"`
         + ` data-copy-excerpt-book="${escapeHtml(bookName)}"`
         + ` data-copy-excerpt-block="${block}"`
+        + ` data-copy-excerpt-revision="${bookRevision(bookName)}"`
         + ` data-copy-fallback-idx="${fallbackIdx}">⧉ 复制更长的摘录</button>`;
 }
 
@@ -3749,10 +3831,15 @@ async function copyExcerptFromButton(button) {
     const blockIndex = Number(button.dataset.copyExcerptBlock);
     const fallbackText = _copySources[Number(button.dataset.copyFallbackIdx)] || '';
     if (!bookName || !Number.isFinite(blockIndex)) return;
+    const revision = Number(button.dataset.copyExcerptRevision);
+    if (revision !== bookRevision(bookName)) {
+        showError('稿件已经更新，请重新打开当前片段后再复制。');
+        return;
+    }
 
     const local = getLocalExcerpt(bookName, blockIndex);
     const known = local ? { excerpt: local, extended: true }
-        : _excerptCache.get(`${bookName}\u0000${blockIndex}`);
+        : _excerptCache.get(`${bookName}\u0000${revision}\u0000${blockIndex}`);
     if (known) {
         setCopyButtonLabel(button, known.extended
             ? `⧉ 复制更长的摘录（${excerptCharCount(known.excerpt)} 字符）`
@@ -3768,6 +3855,10 @@ async function copyExcerptFromButton(button) {
     button.textContent = '正在取长摘录…';
     try {
         const payload = await resolveExcerpt(bookName, blockIndex);
+        if (revision !== bookRevision(bookName)) {
+            showError('稿件已经更新，请重新打开当前片段后再复制。');
+            return;
+        }
         setCopyButtonLabel(button, payload.extended
             ? `⧉ 复制更长的摘录（${excerptCharCount(payload.excerpt)} 字符）`
             : `⧉ 复制摘录（${excerptCharCount(payload.excerpt)} 字符）`);
@@ -3775,6 +3866,10 @@ async function copyExcerptFromButton(button) {
     } catch (e) {
         console.warn('取长摘录失败:', e);
         button.innerHTML = originalHtml;
+        if (revision !== bookRevision(bookName)) {
+            showError('稿件已经更新，请重新打开当前片段后再复制。');
+            return;
+        }
         if (fallbackText) {
             copyTextToClipboard(fallbackText, button, '✓ 已复制短摘录（没能取到更长的）');
         } else {
@@ -5005,6 +5100,7 @@ function exportSummary() {
 // 「一句话解读」的纯文字版本。内容是页面内那段脚本渲染时存进 lastInsightLines 的，
 // 所以这里拿到的永远是屏幕上那几句（含框选口径说明那句），不会另算一套、也就不会打架。
 function buildInsightText() {
+    if (currentTab !== 'view-dashboard' || lastInsightContext !== researchKey(true)) return '';
     const lines = Array.isArray(lastInsightLines) ? lastInsightLines.filter(Boolean) : [];
     return lines.join('\n');
 }
@@ -5052,6 +5148,7 @@ const ANOMALY_GLOBAL_NOTE = '上面这些片段的「偏离」只是统计意义
 // 导出物里也必须写出来，否则读的人只会以为这本书没有偏离片段。
 // 屏幕上是逐本一块，这里就是逐本一段，中间空一行隔开；只选一本书时输出与以前逐字节相同。
 function buildAnomalyText() {
+    if (currentTab !== 'view-dashboard' || lastAnomalyContext !== researchKey()) return '';
     const reports = Array.isArray(lastAnomalyReports) ? lastAnomalyReports.filter(Boolean) : [];
     if (reports.length === 0) return '';
     const body = reports.map(anomalyTextForReport).filter(Boolean).join('\n\n');
@@ -5177,6 +5274,7 @@ function getExportBooks() {
 // 那一页的均值、片段数都按这个范围算，导出必须跟着走——否则同一份分析在屏幕上
 // 和导出物里是两个数，用户把导出的数字贴进论文就会和图上看到的对不上。
 function getActiveBrushRange() {
+    if (currentTab !== 'view-dashboard') return null;
     try {
         if (typeof advState === 'undefined' || !advState) return null;
         const range = advState.brushRange;
@@ -5227,6 +5325,9 @@ function describeCorpusVersion(books) {
     const uploadedCount = names.length - builtinCount;
     const composition = `本次分析用到内置示例书 ${builtinCount} 本`
         + (uploadedCount > 0 ? ` + 你自己上传的 ${uploadedCount} 本` : '');
+    if (corpusSnapshotChanged) {
+        return `${composition}；页面加载时的服务端快照指纹 ${corpusFingerprint || '未记录'}。本次会话中上传或删除后，当前稿指纹未记录。`;
+    }
     const fingerprint = corpusFingerprint ? `语料指纹 ${corpusFingerprint}` : '语料指纹未记录';
     return `${composition}；${fingerprint}。这个指纹是服务端按整份语料的「内容」算的，不是文件的修改时间：内容一样它就不变，内容一变它就变。整份语料共用一个指纹，不是每本书各有一个。`;
 }
@@ -5394,6 +5495,7 @@ function buildMethodsParagraph(books) {
 
 // 导出数据表（CSV）：每个片段一行，四个指标并列，可直接用 Excel / R / SPSS 打开
 function exportTableData() {
+    if (currentTab === 'view-authorship') return exportAuthorshipTable();
     const books = getExportBooks();
     if (books.length === 0) {
         showError('当前没有可导出的分析数据。请先选择书籍或上传文本。');
@@ -5437,7 +5539,9 @@ function exportTableData() {
                 Array.isArray(words.keywords) ? words.keywords.join(' ') : '',
                 // 第五十九批新增：与「关键词」同序的对数似然比（空 = 这一行还是旧口径，
                 // 或者这一段一个特征词都没挑出来、关键词退回的是频次榜）
-                Array.isArray(words.keywordScores) ? words.keywordScores.join(' ') : ''
+                Array.isArray(words.keywordScores) && Array.isArray(words.keywords)
+                    && words.keywordScores.length === words.keywords.length
+                    && words.keywordScores.every(isFiniteNumber) ? words.keywordScores.join(' ') : ''
             ]);
         }
     });
@@ -5536,6 +5640,7 @@ function sortBuiltinByAuthorThenYear(names) {
 
 // 导出引用条目（BibTeX）：给报告、论文的参考文献用
 function exportCitation() {
+    if (currentTab === 'view-authorship') return exportAuthorshipCitation();
     const books = getExportBooks();
     if (books.length === 0) {
         showError('当前没有可导出的分析数据。请先选择书籍或上传文本。');
@@ -5855,6 +5960,28 @@ function statusBarOffscreen() {
 
 let galaxySimulation = null;
 let lastGalaxyTrigger = null;
+let lastGalaxyTriggerMeta = null;
+
+function findCurrentAnomalyTrigger(meta) {
+    if (!meta || meta.kind !== 'anomaly' || meta.metric !== currentMetric
+        || bookRevision(meta.book) !== meta.revision) return null;
+    return Array.from(document.querySelectorAll('[data-anomaly-book][data-anomaly-block]'))
+        .find(button => button.dataset.anomalyBook === meta.book
+            && Number(button.dataset.anomalyBlock) === meta.block
+            && button.offsetParent !== null && !button.disabled) || null;
+}
+
+function restoreGalaxyFocus() {
+    const trigger = lastGalaxyTrigger;
+    const replacement = trigger && trigger.isConnected && trigger.offsetParent !== null && !trigger.disabled
+        ? trigger : findCurrentAnomalyTrigger(lastGalaxyTriggerMeta);
+    if (replacement && typeof replacement.focus === 'function') {
+        replacement.focus();
+        return;
+    }
+    const activeTab = document.querySelector('.tab-navigation [role="tab"][aria-selected="true"]');
+    if (activeTab && typeof activeTab.focus === 'function') activeTab.focus();
+}
 
 // 上一次算出来的点位（片段 id → 坐标）。进入星系时，力导向原本每次都从「投影位置」
 // 重新起步、跑约 300 次迭代（约 5 秒）才稳定：切页签、换指标、换书、拖窗都要重看
@@ -6025,7 +6152,8 @@ function initStyleGalaxy() {
                     // 弹窗打开时按「书名 + 片段号」现取
                     preview: metricItem.preview,
                     wordCount: isFiniteNumber(d.wordCount) ? d.wordCount : metricItem.wordCount,
-                    keywords: metricItem.keywords
+                    keywords: metricItem.keywords,
+                    keywordScores: metricItem.keywordScores
                 });
             });
         }
@@ -6669,8 +6797,7 @@ function openGalaxyModal(d) {
     const modal = document.getElementById('galaxy-modal');
     if (!modal) return;
 
-    // 在途请求令牌：弹窗是复用的一个节点，连开两段时后开的必须赢；
-    // 关掉弹窗后在途响应也要作废（见 closeGalaxyModal）
+    galaxyModalCloseToken += 1;
     const excerptToken = ++galaxyExcerptToken;
 
     const titleEl = document.getElementById('modal-book-title');
@@ -6714,6 +6841,8 @@ function openGalaxyModal(d) {
         const staleNote = keywordContainer.parentElement
             ? keywordContainer.parentElement.querySelector('.keyword-note') : null;
         if (staleNote) staleNote.remove();
+        keywordContainer.querySelectorAll('details').forEach(el => el.remove());
+        keywordContainer.insertAdjacentHTML('beforeend', keywordEvidenceHtml(d));
         const hasScores = Array.isArray(d.keywords) && Array.isArray(d.keywordScores)
             && d.keywordScores.length > 0 && d.keywordScores.length === d.keywords.length;
         if (hasScores) {
@@ -6809,6 +6938,7 @@ function openGalaxyModal(d) {
     syncModalScrollLock();
     document.addEventListener('keydown', trapModalFocus);
     setTimeout(() => {
+        if (excerptToken !== galaxyExcerptToken || modal.getAttribute('aria-hidden') !== 'false') return;
         modal.classList.add('show');
         const closeButton = modal.querySelector('.galaxy-modal-close');
         if (closeButton) closeButton.focus();
@@ -6856,7 +6986,7 @@ function trapFocusWithin(modal, event) {
     // ——aria-modal="true" 就成了假话。实测场景：点开片段详情后，长摘录还在取的那一瞬间，
     // 底部「复制这段摘录」是可见但 disabled 的，而它正是最后一个可聚焦节点。
     const focusables = Array.from(
-        modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+        modal.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')
     ).filter(el => !el.hidden && el.offsetParent !== null && !el.disabled);
     if (focusables.length === 0) return;
 
@@ -6883,17 +7013,18 @@ function closeGalaxyModal() {
     const modal = document.getElementById('galaxy-modal');
     if (!modal) return;
 
+    const closeToken = ++galaxyModalCloseToken;
     galaxyExcerptToken += 1; // 关掉后，还在路上的长摘录响应全部作废
     modal.classList.remove('show');
     modal.setAttribute('aria-hidden', 'true');
     document.removeEventListener('keydown', trapModalFocus);
     setTimeout(() => {
+        if (closeToken !== galaxyModalCloseToken || modal.getAttribute('aria-hidden') !== 'true') return;
         modal.style.display = 'none';
         syncModalScrollLock();
-        if (lastGalaxyTrigger && typeof lastGalaxyTrigger.focus === 'function') {
-            lastGalaxyTrigger.focus();
-        }
+        restoreGalaxyFocus();
         lastGalaxyTrigger = null;
+        lastGalaxyTriggerMeta = null;
     }, 300);
 }
 
@@ -7879,6 +8010,51 @@ function authorshipSensitivityHtml(data) {
 // 顶上那个观察角度」上，而这一页两条都不成立：它算的是全部原文的虚词距离，
 // 跟选了哪几本、选了什么角度都没有关系。套模板会导出一份通篇说着无关信息的文件，
 // 而摘要是要贴进论文的。
+function readyAuthorshipExport() {
+    if (authorshipStatus === 'ready' && authorshipData) return authorshipData;
+    showError(authorshipMessage || '作者归属尚未生成，请等待计算完成后再导出。');
+    return null;
+}
+
+function exportAuthorshipTable() {
+    const data = readyAuthorshipExport();
+    if (!data) return;
+    const rows = [['记录类型', '书名', '比较或预测书目', '作者', '距离', '判对', '总数', '是否判对', '领先距离', '词表', '词表大小', '参与比较词数']];
+    const add = (type, fields) => rows.push([type, ...fields]);
+    data.distance.names.forEach((name, i) => data.distance.names.forEach((other, j) => {
+        if (j > i) add('两书距离', [name, other, '', data.distance.matrix[i][j], '', '', '', '', data.meta.vocabulary, data.meta.vocabSize, data.meta.comparableWords]);
+    }));
+    data.leaveOneOut.rows.forEach(row => add('留一书', [row.book, row.predictedBook, row.authorZh, '', '', '', row.correct, row.margin ?? '', data.meta.vocabulary, data.meta.vocabSize, data.meta.comparableWords]));
+    data.blockAttribution.perBook.forEach(row => add('逐书窗口汇总', [row.book, '', '', '', row.correct, row.total, '', '', data.meta.vocabulary, data.meta.vocabSize, data.meta.comparableWords]));
+    data.sensitivity.forEach(row => {
+        add('词表敏感性_留一书', ['', '', '', '', row.leaveOneOutCorrect, row.leaveOneOutTotal, '', '', row.label, row.vocabSize, row.comparableWords]);
+        add('词表敏感性_逐窗', ['', '', '', '', row.blockCorrect, row.blockTotal, '', '', row.label, row.vocabSize, row.comparableWords]);
+    });
+    const csv = rows.map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const note = '\r\n# 方法：Burrows’ Delta；本服务器原文验证任务，与顶部选书、指标、隐藏框选无关。\r\n# 逐窗记录仅为逐书汇总，不含逐窗原始判定。示例命中率不是普遍准确率。';
+    downloadBlob('\uFEFF' + csv + note, `文印_作者归属数据_${exportTimestamp()}.csv`, 'text/csv;charset=utf-8');
+    flashExportReceipt(document.getElementById('exportDataBtn'), '作者归属数据表已导出（.csv）。');
+}
+
+function exportAuthorshipCitation() {
+    const data = readyAuthorshipExport();
+    if (!data) return;
+    const now = new Date();
+    const escapeBib = value => String(value ?? '').replace(/\\/g, '\\textbackslash{}').replace(/[{}]/g, ' ').replace(/[%&#_]/g, ch => '\\' + ch).replace(/[\r\n]+/g, ' ');
+    const chunks = [
+        '% 作者归属：方法文献、实际参与作品与本次验证记录。示例命中率不等于普遍准确率。',
+        '@article{burrows2002delta,\n  author = {Burrows, John},\n  title = {{Delta}: a Measure of Stylistic Difference and a Guide to Likely Authorship},\n  journal = {Literary and Linguistic Computing},\n  year = {2002},\n  volume = {17},\n  number = {3},\n  pages = {267--287},\n  doi = {10.1093/llc/17.3.267}\n}'
+    ];
+    data.books.forEach(book => {
+        const src = getBuiltinBookSource(book.name);
+        if (src) chunks.push(`@book{${src.key},\n  author = {${src.author}},\n  title = {${src.title}},\n  year = {${src.year}},\n  note = {电子文本：Project Gutenberg eBook ${src.ebook}，发布于 ${src.released}},\n  url = {https://www.gutenberg.org/ebooks/${src.ebook}}\n}`);
+        else chunks.push(`% 参与作品：${escapeBib(book.name)}；作者与版本请自行核对补齐。`);
+    });
+    const note = `服务器原文的作者归属验证；书目：${data.books.map(book => book.name).join('、')}；词表：${data.meta.vocabulary}，${data.meta.vocabSize}词；片段${data.meta.blockSize}词，重叠${data.meta.overlap}词；不受顶部选书和指标控制；生成时间${now.toLocaleString('zh-CN')}`;
+    chunks.push(`@misc{wenyin-authorship-${exportTimestamp()},\n  title = {文印作者归属验证记录},\n  year = {${now.getFullYear()}},\n  howpublished = {Burrows' Delta},\n  note = {${escapeBib(note)}}\n}`);
+    downloadBlob(chunks.join('\n\n'), `文印_作者归属引用_${exportTimestamp()}.bib`, 'text/plain;charset=utf-8');
+}
+
 function exportAuthorshipSummary() {
     const data = authorshipData;
     if (authorshipStatus !== 'ready' || !data) {
@@ -7948,6 +8124,7 @@ function exportAuthorshipSummary() {
         + '这里每本都有数万词，四本又正好两两同作者，才判得这么干净；'
         + '片段层面的判定（逐窗）明显比整本更难，这个差距本身就是方法的可靠性边界。');
     lines.push('本摘要中的数字只是用词习惯方面的统计结果，请结合作品原文与史料判断，不宜单独当作作者身份的定论。');
+    lines.push('适用范围：这是服务器示例原文之间的验证任务，不是开放式身份鉴定；本组样本的命中率不代表对其他作品的普遍准确率。');
 
     downloadBlob(lines.join('\n'), `文印_作者归属摘要_${exportTimestamp()}.txt`, 'text/plain;charset=utf-8');
     flashExportReceipt(document.getElementById('exportSummaryBtn'), '摘要已导出（.txt），在浏览器的「下载」列表里。');
