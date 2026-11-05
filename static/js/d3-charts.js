@@ -1208,6 +1208,10 @@ async function proceedUpload(file, { replaceTarget = null } = {}) {
     // 只有在用户于覆盖弹窗里点过「替换」时才有：见 confirmOverwriteUpload 的注释。
     if (replaceTarget) formData.append('replace_target', replaceTarget);
 
+    // 上传成功之后、界面刷新之前也可能抛错（DOM 结构变了、浏览器扩展干扰…）。
+    // 那种情况服务端**已经算完并（可能）存好了**，不能在 catch 里说成「连不上服务」——
+    // 用户会重传一遍，白等一次。这个标记让 catch 能分清两种失败。
+    let uploadSucceeded = false;
     try {
         const resp = await fetch(`${API_BASE_URL}/api/analyze`, { method: 'POST', body: formData });
         const contentType = resp.headers.get('content-type') || '';
@@ -1218,6 +1222,7 @@ async function proceedUpload(file, { replaceTarget = null } = {}) {
             return;
         }
 
+        uploadSucceeded = true;
         if (!realData) realData = {};
         realData[result.book] = result.data; // 一律以服务端返回的 result.book 作为键
         uploadReports.set(result.data, result.analyses || {});
@@ -1279,9 +1284,14 @@ async function proceedUpload(file, { replaceTarget = null } = {}) {
         refreshAllActiveCharts();
         renderQuickPreviewIfIdle(); // 新书进来后，面板空闲时也该有内容可点
     } catch (e) {
-        console.error('上传分析失败:', e);
-        // 同 :1399——「请确认服务器已启动」是给部署者的话（第三十五批）。
-        setUploadStatus('上传失败：暂时无法连接到分析服务，请检查网络后稍后重试。', 'error');
+        if (uploadSucceeded) {
+            console.error('上传已完成，但页面刷新失败:', e);
+            setUploadStatus('上传分析已完成，但页面刷新时出错。刷新页面后即可看到这本书。', 'error');
+        } else {
+            console.error('上传分析失败:', e);
+            // 同 :1399——「请确认服务器已启动」是给部署者的话（第三十五批）。
+            setUploadStatus('上传失败：暂时无法连接到分析服务，请检查网络后稍后重试。', 'error');
+        }
     } finally {
         stopUploadTicker();
         setUploadBusy(false);
@@ -1328,7 +1338,21 @@ function sanitizeBookName(raw) {
     name = name.replace(/^[ _.]+/, '').replace(/[ _.]+$/, '');
     if (!name) return 'book';
     if (_BOOK_NAME_RESERVED_RE.test(name)) name = '_' + name;
-    return name.slice(0, 200);
+    let truncated = name.slice(0, 200);
+    // 服务端还会按 UTF-8 字节数封顶（230 字节）：一个汉字 3 字节，200 个汉字是 600 字节，
+    // 超过文件系统单段文件名 255 字节的上限。这里镜像同一条规则，覆盖确认算出的名字
+    // 才和真正落盘的名字一致。
+    if (typeof TextEncoder === 'function' && typeof TextDecoder === 'function') {
+        const bytes = new TextEncoder().encode(truncated);
+        if (bytes.length > 230) {
+            let end = 230;
+            // 停在半个汉字中间时往回退到该字符的起始字节（UTF-8 续字节以 10 开头）。
+            while (end > 0 && (bytes[end] & 0xC0) === 0x80) end -= 1;
+            truncated = new TextDecoder().decode(bytes.slice(0, end));
+        }
+    }
+    truncated = truncated.replace(/[ _.]+$/, '');
+    return truncated || 'book';
 }
 
 function rememberLibraryBooks(books) {
@@ -1845,6 +1869,9 @@ async function deleteLibraryBook(bookName) {
     setDeletingBookState(bookName, true);
     // 按住上传入口，但**不冒充「正在分析」**（第五十批）：见 setUploadBusy 上面的注释。
     holdUploadLock();
+    // 同 proceedUpload：删除已经成功、但随后的界面刷新抛错时，不能说成「删除失败」——
+    // 用户以为没删掉，会再点一次，得到「书架里没有这本书」。
+    let deleteSucceeded = false;
     try {
         const headers = {};
         const token = getDeleteToken(bookName);
@@ -1857,6 +1884,7 @@ async function deleteLibraryBook(bookName) {
             return;
         }
 
+        deleteSucceeded = true;
         if (realData) delete realData[bookName];
         corpusSnapshotChanged = true;
         selectedBooks.delete(bookName);
@@ -1915,8 +1943,13 @@ async function deleteLibraryBook(bookName) {
         // 删掉的如果是面板里正列着的那本书，那块内容必须跟着换（或换成打回态）
         renderQuickPreviewIfIdle();
     } catch (e) {
-        console.error('删除书库书籍失败:', e);
-        setUploadStatus('删除失败：无法连接当前分析服务。', 'error');
+        if (deleteSucceeded) {
+            console.error('删除已完成，但页面刷新失败:', e);
+            setUploadStatus('删除已完成，但页面刷新时出错。刷新页面后书架就会更新。', 'error');
+        } else {
+            console.error('删除书库书籍失败:', e);
+            setUploadStatus('删除失败：无法连接当前分析服务。', 'error');
+        }
     } finally {
         _deletingBooks.delete(bookName);
         setDeletingBookState(bookName, false);
@@ -5100,7 +5133,10 @@ function exportSummary() {
 // 「一句话解读」的纯文字版本。内容是页面内那段脚本渲染时存进 lastInsightLines 的，
 // 所以这里拿到的永远是屏幕上那几句（含框选口径说明那句），不会另算一套、也就不会打架。
 function buildInsightText() {
-    if (currentTab !== 'view-dashboard' || lastInsightContext !== researchKey(true)) return '';
+    // 不再要求「此刻正停在全书对比页」：结论一旦生成，就跟着**当前研究范围**生效。
+    // 原来的页签判断会让人切去看别的页、再导出摘要时丢掉屏幕上看过的结论，
+    // 而上下文比对本身已经足够——选书、观察角度、框选一变，lastInsightContext 就被清空。
+    if (lastInsightContext !== researchKey(true)) return '';
     const lines = Array.isArray(lastInsightLines) ? lastInsightLines.filter(Boolean) : [];
     return lines.join('\n');
 }
@@ -5148,7 +5184,9 @@ const ANOMALY_GLOBAL_NOTE = '上面这些片段的「偏离」只是统计意义
 // 导出物里也必须写出来，否则读的人只会以为这本书没有偏离片段。
 // 屏幕上是逐本一块，这里就是逐本一段，中间空一行隔开；只选一本书时输出与以前逐字节相同。
 function buildAnomalyText() {
-    if (currentTab !== 'view-dashboard' || lastAnomalyContext !== researchKey()) return '';
+    // 同 buildInsightText：页签只是「上次看的是哪个视图」，不是内容归属；
+    // 研究范围（选书 × 修订号 × 观察角度）没变，这份片段列表就仍然有效。
+    if (lastAnomalyContext !== researchKey()) return '';
     const reports = Array.isArray(lastAnomalyReports) ? lastAnomalyReports.filter(Boolean) : [];
     if (reports.length === 0) return '';
     const body = reports.map(anomalyTextForReport).filter(Boolean).join('\n\n');
@@ -5493,6 +5531,14 @@ function buildMethodsParagraph(books) {
     return parts.join('');
 }
 
+// 防 CSV 公式注入：Excel / Google Sheets 会把以 = + - @ 开头的单元格当公式执行，
+// 而书名来自上传的文件名——一个叫「=HYPERLINK(...)」的文件就能在别人的表格里发难。
+// 只钝化「不是数字」的单元格：-1.23 这类负数必须保持数值，前置单引号在表格里表示文本。
+function neutralizeCsvFormula(value) {
+    const text = String(value ?? '');
+    return /^[=+\-@\t\r]/.test(text) && Number.isNaN(Number(text)) ? `'${text}` : text;
+}
+
 // 导出数据表（CSV）：每个片段一行，四个指标并列，可直接用 Excel / R / SPSS 打开
 function exportTableData() {
     if (currentTab === 'view-authorship') return exportAuthorshipTable();
@@ -5547,8 +5593,8 @@ function exportTableData() {
     });
 
     const body = rows.map(row => row.map(cell => {
-        const text = String(cell ?? '');
-        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+        const text = neutralizeCsvFormula(cell);
+        return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     }).join(',')).join('\r\n');
 
     // 注释行：滑动窗口是重叠切分，相邻片段共享 9000 个词，
@@ -5621,6 +5667,17 @@ const BUILTIN_BOOK_SOURCES = {
 function getBuiltinBookSource(name) {
     if (typeof name !== 'string') return null;
     return BUILTIN_BOOK_SOURCES[name.trim().toLowerCase()] || null;
+}
+
+// BibTeX 字段转义：书名可能来自上传文件名，含 & % # _ { } \ 时会把条目结构打断
+// （轻则导入后字段被吞，重则整条解析失败）。静态的内置书名不含这些字符，
+// 转义后逐字节不变。
+function escapeBib(value) {
+    return String(value ?? '')
+        .replace(/\\/g, '\\textbackslash{}')
+        .replace(/[{}]/g, ' ')
+        .replace(/[%&#_]/g, ch => '\\' + ch)
+        .replace(/[\r\n]+/g, ' ');
 }
 
 // 把内置书按「作者、再按年份」排一遍（第四十六批）：「参考区间」那句现在要点名这 4 本，
@@ -5739,12 +5796,13 @@ function exportCitation() {
     // 丢掉除标题外的全部字段）；最后一行（第四十七批起是 urldate）后面不能有逗号。
     chunks.push([
         `@misc{${key},`,
-        `  title        = {文印·文学指纹分析记录：${books.map(name => `{${getBookDisplayName(name)}}`).join('、')}},`,
+        `  title        = {文印·文学指纹分析记录：${books.map(name => `{${escapeBib(getBookDisplayName(name))}}`).join('、')}},`,
         `  author       = {{文印（文学指纹分析工具）}},`,
         `  year         = {${now.getFullYear()}},`,
         `  month        = {${monthNames[now.getMonth()]}},`,
         `  howpublished = {在线交互式分析（Keim \\& Oelke 2007 指标口径）},`,
-        `  note         = {观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${dataFormatText}${localUrlNoteText}${unsharedUploadedNote()}${knownSources.length ? `；原著条目见本文件开头的 @book` : ''}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准},`,
+        // note 里的书名、URL 查询串都来自运行时，整段转义；静态中文不含特殊字符，输出不变。
+        `  note         = {${escapeBib(`观察角度：${getMetricLabel(currentMetric)}；分析片段数：${totalBlocks}；统计范围：${describeExportScope()}${sharedModel ? `；坐标模型：${sharedModel.modelId}` : ''}${dataFormatText}${localUrlNoteText}${unsharedUploadedNote()}${knownSources.length ? `；原著条目见本文件开头的 @book` : ''}；本条描述的是本文档生成时的一次在线分析记录，并非正式出版物，正式引用请以原著版本为准`)}},`,
         `  url          = {${buildStateUrl({ shareable: true })}}`,
         `  urldate      = {${urlDate}}`,
         '}',
@@ -6132,8 +6190,16 @@ function initStyleGalaxy() {
         const displayData = getMetricValues(bookName, currentMetric);
 
         if (positionData.length && displayData.length) {
+            // 按片段号配对，不按数组下标：两串数据里只要有一条被过滤或顺序不同，
+            // 下标配对就会把 A 片段的坐标配上 B 片段的数值——点还在，说的却是另一段原文。
+            const displayByBlock = new Map();
+            displayData.forEach((item) => {
+                if (item && typeof item === 'object' && item.block !== undefined) {
+                    displayByBlock.set(item.block, item);
+                }
+            });
             positionData.forEach((d, i) => {
-                const metricItem = displayData[i];
+                const metricItem = displayByBlock.get(d.block) || displayData[i];
                 if (!metricItem || !isFiniteNumber(d.value) || !isFiniteNumber(metricItem.value)) return;
                 // 没有第二个坐标就画不出位置，宁可少画一个点也不编一个
                 if (!isFiniteNumber(d.value_y)) {
@@ -7252,7 +7318,8 @@ function updateHUD(analysisData, metricLabel, totalCount) {
             <span class="hud-label">共同关键词:</span>
         </div>
         <div class="hud-tags">
-            ${analysisData.topKeywords.map(k => `<span class="hud-tag" lang="en">${k}</span>`).join('')}
+            ${(Array.isArray(analysisData.topKeywords) ? analysisData.topKeywords : [])
+                .map(k => `<span class="hud-tag" lang="en">${escapeHtml(String(k))}</span>`).join('')}
         </div>
         <div style="margin-top:10px; padding-top:5px; border-top:1px dashed rgba(46, 42, 36, 0.12); font-size:10px; color:#6b6254;">
             * 位置接近只说明高频小词的用法相近，不代表内容或水平相似。
@@ -8030,7 +8097,7 @@ function exportAuthorshipTable() {
         add('词表敏感性_留一书', ['', '', '', '', row.leaveOneOutCorrect, row.leaveOneOutTotal, '', '', row.label, row.vocabSize, row.comparableWords]);
         add('词表敏感性_逐窗', ['', '', '', '', row.blockCorrect, row.blockTotal, '', '', row.label, row.vocabSize, row.comparableWords]);
     });
-    const csv = rows.map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const csv = rows.map(row => row.map(value => `"${neutralizeCsvFormula(value).replace(/"/g, '""')}"`).join(',')).join('\r\n');
     const note = '\r\n# 方法：Burrows’ Delta；本服务器原文验证任务，与顶部选书、指标、隐藏框选无关。\r\n# 逐窗记录仅为逐书汇总，不含逐窗原始判定。示例命中率不是普遍准确率。';
     downloadBlob('\uFEFF' + csv + note, `文印_作者归属数据_${exportTimestamp()}.csv`, 'text/csv;charset=utf-8');
     flashExportReceipt(document.getElementById('exportDataBtn'), '作者归属数据表已导出（.csv）。');
@@ -8040,7 +8107,7 @@ function exportAuthorshipCitation() {
     const data = readyAuthorshipExport();
     if (!data) return;
     const now = new Date();
-    const escapeBib = value => String(value ?? '').replace(/\\/g, '\\textbackslash{}').replace(/[{}]/g, ' ').replace(/[%&#_]/g, ch => '\\' + ch).replace(/[\r\n]+/g, ' ');
+    // escapeBib 是模块级函数（见 getBuiltinBookSource 下方），两处引用导出口径一致。
     const chunks = [
         '% 作者归属：方法文献、实际参与作品与本次验证记录。示例命中率不等于普遍准确率。',
         '@article{burrows2002delta,\n  author = {Burrows, John},\n  title = {{Delta}: a Measure of Stylistic Difference and a Guide to Likely Authorship},\n  journal = {Literary and Linguistic Computing},\n  year = {2002},\n  volume = {17},\n  number = {3},\n  pages = {267--287},\n  doi = {10.1093/llc/17.3.267}\n}'

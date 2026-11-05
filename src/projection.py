@@ -13,8 +13,11 @@
 
 import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
+
+from src.atomic_io import write_json_atomic
 
 MODEL_VERSION = 1
 MODEL_PATH = Path(__file__).resolve().parents[1] / "data" / "processed" / "pca_model.json"
@@ -114,9 +117,7 @@ def build_model(matrix, vocabulary, fitted_on=None):
 def save_model(model, path=None):
     """写入模型文件（紧凑格式：模型里有几百个浮点数，缩进会让文件大一圈）。"""
     target = Path(path or MODEL_PATH)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "w", encoding="utf-8") as f:
-        json.dump(model, f, ensure_ascii=False)
+    write_json_atomic(target, model, indent=None)
     return target
 
 
@@ -130,8 +131,32 @@ def load_model(path=None):
             model = json.load(f)
     except Exception:
         return None
-    if not isinstance(model, dict) or "components" not in model or "mean" not in model:
+
+    # 损坏的模型必须在**加载时**被挡住，而不是等到请求路径上做矩阵乘法才抛错。
+    # version/mean/components/词表列数任何一项对不上，都按「没有共享模型」处理，
+    # 上传接口退回单书 PCA，界面明确标成「独立坐标 · 不可直接比较」。
+    if not isinstance(model, dict):
         return None
+    if "components" not in model or "mean" not in model:
+        return None
+    if model.get("version") not in (None, MODEL_VERSION):
+        return None
+    mean = model["mean"]
+    components = model["components"]
+    if not isinstance(mean, list) or not isinstance(components, list) or len(components) != 2:
+        return None
+    try:
+        mean_values = [float(value) for value in mean]
+        rows = [[float(value) for value in row] for row in components]
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in mean_values):
+        return None
+    if any(len(row) != len(mean_values) for row in rows):
+        return None
+    if any(not math.isfinite(value) for row in rows for value in row):
+        return None
+
     model.setdefault("modelId", compute_model_id(model))
     return model
 

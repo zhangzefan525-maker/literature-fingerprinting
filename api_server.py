@@ -17,17 +17,21 @@ import threading
 import time
 from pathlib import Path
 
+from src.atomic_io import write_json_atomic
 from src.data_loader import BLOCK_SIZE, OVERLAP, clean_text
 from src.analysis_utils import analyze_series
+from src.pipeline import SCHEMA_VERSION
 
 # 初始化Flask应用
 app = Flask(__name__, static_folder='static')
 
 # 前后端同源部署，默认不需要跨域。只放行本机开发用的地址，
 # 避免任何网站都能在访客浏览器里调用这里的接口。
+# 正则要**两端锚定**：flask-cors 对 origin 用 re.match（前缀匹配），
+# 不写结尾的 $ 时 http://localhost.evil.com 也会被当成 localhost 放行。
 CORS(app, resources={r"/api/*": {"origins": [
-    r"http://localhost(:\d+)?",
-    r"http://127\.0\.0\.1(:\d+)?",
+    r"^http://localhost(:\d+)?$",
+    r"^http://127\.0\.0\.1(:\d+)?$",
 ]}})
 
 # 反向代理跳数：站在 nginx 之类后面时，request.remote_addr 拿到的是代理自己的地址，
@@ -103,6 +107,10 @@ _demo_data_ready = False
 # 上次尝试「重算陈旧演示数据」时那份文件的指纹；同一份旧文件只尝试一次。
 _demo_repair_stamp = None
 
+# 目标文件缺失时的尝试指纹：((None), (原料文件,...,)) 形式见 _ensure_demo_data。
+# 生成一次要 1~3 分钟，失败后不能让**每个**请求都再卡一次。
+_demo_attempt_stamp = None
+
 # 当前管线写出的 all_books.json 结构版本（见 generate_data.py / src/pipeline.py）。
 # 只判断「文件在不在」是不够的：data/processed/ 不进版本库，旧克隆里那份是旧管线生成的，
 # 它会一直存在、也就永远不会被重算——线上就因此喂了一个月的旧数据（没有 chapters、
@@ -111,7 +119,10 @@ _demo_repair_stamp = None
 # 4（2026-10-15，第五十九批）：这一版**字段名没变、含义变了**（keywords 换成对数似然比
 # 特征词），比缺字段更阴——旧的 v3 数据读得动、界面也不报错，只是安静地显示旧口径。
 # 跟着 src/pipeline.py 的 SCHEMA_VERSION 一起升，旧数据才会被判成过期、自己重算一次。
-_DEMO_SCHEMA_VERSION = 4
+#
+# 直接引用 pipeline 的常量，不再手抄一份：两处各写一个 4 时，下一次升版号只要漏改
+# 这里，线上就会永远认为旧数据是新的（正是上面的老毛病重演一遍）。
+_DEMO_SCHEMA_VERSION = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +221,23 @@ _RESERVED_DEVICE_RE = re.compile(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$'
 
 
 def _is_local_host(host):
-    """按 Host 头判断是否为本地访问（决定书库语义 local-library / hosted-library）。"""
-    name = (host or "").split(":")[0].strip().lower()
+    """按 Host 头判断是否为本地访问（决定书库语义 local-library / hosted-library）。
+
+    IPv6 要用方括号写法（[::1]:5000）——直接 split(":") 会把它切成 "["，
+    本地 IPv6 访问就被误判成线上书库。
+    """
+    value = (host or "").strip().lower()
+    if value.startswith("["):
+        end = value.find("]")
+        if end < 0:
+            return False
+        name = value[1:end]
+    elif value.count(":") >= 2:
+        # 没加方括号但冒号不止一个：整个值就是 IPv6 字面量（Host: ::1）。
+        # 按第一个冒号切会得到空串，本地 IPv6 访问被误判成线上书库。
+        name = value
+    else:
+        name = value.split(":", 1)[0]
     return name in {"localhost", "127.0.0.1", "::1"}
 
 
@@ -248,6 +274,21 @@ def _chapter_of_block(metadata, block):
     return None
 
 
+# 文件名的字节上限。200 个**字符**在 ASCII 下是 200 字节，但一个汉字 3 字节，
+# 200 个汉字是 600 字节，超过 Linux/macOS 常见的单段文件名 255 字节上限——
+# 那时 os.replace 会抛 OSError，用户看到的是「上传失败」而不是「书名太长」。
+# 230 字节给「（我的）(2)」这类后缀与 .json 留出余量。
+_MAX_NAME_BYTES = 230
+
+
+def _truncate_utf8(text, limit):
+    """按 UTF-8 字节数截断，不切断半个汉字。"""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    return encoded[:limit].decode("utf-8", "ignore")
+
+
 def sanitize_book_name(raw):
     """把原始书名清洗成可安全落盘的字符串。
 
@@ -255,7 +296,7 @@ def sanitize_book_name(raw):
     - Windows/NTFS 禁用的特殊字符替换为 '_' 并合并连续下划线；
     - 去掉首尾的 '_' '.' 与空白；空则回退 'book'；
     - 命中 Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）加 '_' 前缀；
-    - 总长上限 200。
+    - 总长上限 200 字符，且不超过 230 个 UTF-8 字节。
     CJK、全角括号「（我的）」、半角空格与半角括号均保留（NTFS 合法且键可读）。
     """
     name = str(raw or "")
@@ -267,7 +308,8 @@ def sanitize_book_name(raw):
         return "book"
     if _RESERVED_DEVICE_RE.match(name):
         name = "_" + name
-    return name[:200]
+    name = _truncate_utf8(name[:200], _MAX_NAME_BYTES).rstrip(" _.")
+    return name or "book"
 
 
 def _builtin_keys():
@@ -311,14 +353,17 @@ def _resolve_final_name(base, visitor=None):
 
 
 def _save_library_book(name, book_data, visitor=None):
-    """把一本书的指纹数据写入这个访客自己的书架（JSON，UTF-8 无转义，保留可读）。"""
+    """把一本书的指纹数据写入这个访客自己的书架（JSON，UTF-8 无转义，保留可读）。
+
+    原子写：json.dump 写到一半崩溃/磁盘满时，旧文件仍然是完整的上一版，
+    不会变成半截 JSON——否则这本书从此读不出来，而用户以为它好好存着。
+    """
     shelf = _shelf_dir(visitor)
     # 目录只在这里（真的落盘时）建。读路径永远不建目录：否则一个伪造的编号
     # 就能让服务器凭空造出一堆空目录。
     shelf.mkdir(parents=True, exist_ok=True)
     path = shelf / f"{sanitize_book_name(name)}.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(book_data, f, ensure_ascii=False, indent=2)
+    write_json_atomic(path, book_data, indent=2)
 
 
 def _strip_internal(book_data):
@@ -501,31 +546,38 @@ def _load_corpus(visitor=None):
         if cached is not None:
             return cached
 
-        with open(target_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # 文件可能在「取指纹」和「打开」之间被替换/删除（数据自愈重算、部署），
+        # 也可能本身是半截 JSON（旧版本非原子写留下的）。这时不能让整个请求 500，
+        # 而是落到下面的「最新单书文件」后备路径。
+        try:
+            with open(target_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = None
 
-        # 合并本书架里勾选保存的书籍（不与内置键冲突、不覆盖内置；
-        # 单文件损坏只跳过，不影响其它书）
-        shelf = _shelf_dir(visitor)
-        if shelf.exists():
-            for lib_file in sorted(shelf.glob("*.json")):
-                if lib_file.stem in data:
-                    continue
-                try:
-                    with open(lib_file, "r", encoding="utf-8") as lf:
-                        payload = json.load(lf)
-                    if isinstance(payload, dict) and "metadata" in payload:
-                        data[lib_file.stem] = _strip_internal(payload)
-                except Exception:
-                    app.logger.warning("跳过无法读取的书库文件: %s", lib_file.name)
+        if data is not None:
+            # 合并本书架里勾选保存的书籍（不与内置键冲突、不覆盖内置；
+            # 单文件损坏只跳过，不影响其它书）
+            shelf = _shelf_dir(visitor)
+            if shelf.exists():
+                for lib_file in sorted(shelf.glob("*.json")):
+                    if lib_file.stem in data:
+                        continue
+                    try:
+                        with open(lib_file, "r", encoding="utf-8") as lf:
+                            payload = json.load(lf)
+                        if isinstance(payload, dict) and "metadata" in payload:
+                            data[lib_file.stem] = _strip_internal(payload)
+                    except Exception:
+                        app.logger.warning("跳过无法读取的书库文件: %s", lib_file.name)
 
-        message = f"成功加载数据文件: {target_file.name}"
-        if len(_corpus_cache) >= _CORPUS_CACHE_MAX:
-            # 粗粒度淘汰：满了就全清。最坏代价是某位访客多解析一遍 700 KB，
-            # 不值得为这点开销引入 LRU。
-            _corpus_cache.clear()
-        _corpus_cache[stamp] = (data, message)
-        return data, message
+            message = f"成功加载数据文件: {target_file.name}"
+            if len(_corpus_cache) >= _CORPUS_CACHE_MAX:
+                # 粗粒度淘汰：满了就全清。最坏代价是某位访客多解析一遍 700 KB，
+                # 不值得为这点开销引入 LRU。
+                _corpus_cache.clear()
+            _corpus_cache[stamp] = (data, message)
+            return data, message
 
     # 找不到汇总文件时，退回「最新的单书文件」（保持原有后备逻辑）
     processed_dir = target_file.parent
@@ -533,7 +585,17 @@ def _load_corpus(visitor=None):
         # 从新到旧扫，取第一本**看起来真是书**的。同一个目录里还躺着
         # pca_model.json（generate_data.py 写的投影模型），按修改时间取最新的那一个
         # 会把它当成一本书。判定沿用上面合并书架时那条：有 metadata 才算书。
-        data_files = sorted(processed_dir.glob("*.json"), key=os.path.getctime, reverse=True)
+        # 排序键要能吃下「文件在 glob 之后消失」：直接传 os.path.getctime
+        # 会让一次并发的重新生成把整个请求变成 FileNotFoundError。
+        def _ctime_or_oldest(path):
+            try:
+                return os.path.getctime(path)
+            except OSError:
+                return float("-inf")
+
+        data_files = sorted(
+            processed_dir.glob("*.json"), key=_ctime_or_oldest, reverse=True
+        )
         for latest in data_files:
             try:
                 with open(latest, "r", encoding="utf-8") as f:
@@ -555,19 +617,27 @@ def _load_corpus(visitor=None):
 # ---------------------------------------------------------------------------
 # 共享投影模型：上传的书也要落在与内置书相同的坐标系里，跨书比较才成立
 # ---------------------------------------------------------------------------
-_projection_model = {"loaded": False, "model": None}
+_projection_model = {"loaded": False, "model": None, "stamp": None}
 
 
 def _get_projection_model():
     """
     懒加载并常驻内存的共享投影模型。文件缺失时返回 None，
     此时上传的书会退回「单书自己拟合」，前端会标成「独立坐标 · 不可直接比较」。
+
+    每次调用都核对模型文件的指纹。以前 loaded 一旦置 True 就永不复查：
+    数据自愈中途重算出新模型后，进程仍拿着旧模型给上传的书定位，
+    坐标与刚生成的示例书落在不同基底上——界面不报错，只是点对不上。
     """
-    if not _projection_model["loaded"]:
-        from src.projection import load_model
-        _projection_model["model"] = load_model()
-        _projection_model["loaded"] = True
-    return _projection_model["model"]
+    from src.projection import MODEL_PATH, load_model
+
+    stamp = _file_stamp(MODEL_PATH)
+    if _projection_model["loaded"] and _projection_model.get("stamp") == stamp:
+        return _projection_model["model"]
+
+    model = load_model()
+    _projection_model.update(loaded=True, model=model, stamp=stamp)
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -636,12 +706,34 @@ def _demo_corpus_is_current(target):
     return False
 
 
+def _raw_sources_stamp(raw_dir):
+    """
+    data/raw 下所有 .txt 的 (文件名, 修改时间, 大小)。
+
+    用来回答「原料换过没有」：指纹没变，就没必要把一次失败的生成再跑一遍。
+    读不到（目录消失、权限）返回 None，调用方按「先别试」处理。
+    """
+    try:
+        paths = sorted(raw_dir.glob("*.txt"))
+    except OSError:
+        return None
+    entries = []
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        entries.append((path.name, stat.st_mtime_ns, stat.st_size))
+    return tuple(entries)
+
+
 def _ensure_demo_data():
     """若预处理的示例数据不存在、或还是旧管线留下的，则基于 data/raw/ 自动生成一次（保证全新克隆开箱即用）。"""
-    global _demo_data_ready, _demo_repair_stamp
+    global _demo_data_ready, _demo_repair_stamp, _demo_attempt_stamp
     if _demo_data_ready:
         return True
 
+    raw_dir = BASE_DIR / "data" / "raw"
     target = BASE_DIR / "data" / "processed" / "all_books.json"
     if target.exists():
         if _demo_corpus_is_current(target):
@@ -653,8 +745,17 @@ def _ensure_demo_data():
         if stamp is not None and stamp == _demo_repair_stamp:
             return False
         _demo_repair_stamp = stamp
+    else:
+        # 目标不存在时同样只尝试一次：以前的守卫只覆盖「文件在但过期」，
+        # 文件缺失 + 生成失败（raw 里有一本解不开的编码等）会让每个请求都等满一次生成。
+        # 按原料指纹判断是否值得再试——往 raw 里加了/换了文件，指纹就变了。
+        sources = _raw_sources_stamp(raw_dir)
+        if not sources:
+            return False
+        if _demo_attempt_stamp == (None, sources):
+            return False
+        _demo_attempt_stamp = (None, sources)
 
-    raw_dir = BASE_DIR / "data" / "raw"
     if not raw_dir.exists() or not list(raw_dir.glob("*.txt")):
         return False
 
@@ -951,8 +1052,15 @@ def _analysis_report(book_name, book_data, metric):
     pairs = []
     for item in series:
         value = item.get("value") if isinstance(item, dict) else None
-        if isinstance(value, (int, float)) and math.isfinite(float(value)):
-            pairs.append((item, float(value)))
+        if isinstance(value, (int, float)):
+            try:
+                value = float(value)
+            except (OverflowError, ValueError):
+                # 手改过的数据里可能有一个大得转不成浮点数的整数；
+                # 它本来就不是可分析的片段值，跳过即可，不能让整份报告 500。
+                continue
+            if math.isfinite(value):
+                pairs.append((item, value))
     if len(pairs) < 5:
         return {"status": "error", "message": "有效的片段太少，做不了异常分析。"}
 
@@ -1129,7 +1237,10 @@ def analyze_upload():
     # 要 2.07 秒、峰值内存 415 MB，而这么大的文本无论切不切都要被上限拒掉——先切后判
     # 等于白付这笔（线上是 2 GB 上下的机器、2 个 worker，415 MB 是实打实的风险）。
     # 顺序仍是「语言闸门 → 长度闸门」，理由见上面 detect_language 那一段。
-    word_count = len(raw_text.split())
+    # clean_text 已把所有空白折叠成单个半角空格并去掉首尾，所以「空格数 + 1」
+    # 与 len(raw_text.split()) 逐字等价，但**不创建几百万个临时字符串**——
+    # 20 MB 正文 split 一次要额外占几百 MB，而这里只是在决定要不要拒收。
+    word_count = raw_text.count(" ") + 1
     n_blocks = count_blocks(word_count, BLOCK_SIZE, OVERLAP)
 
     if n_blocks == 0:
@@ -1357,7 +1468,13 @@ def delete_library_book(book_name):
             app.logger.warning("读取删除令牌失败: %s", target.name)
 
         supplied = request.headers.get("X-Delete-Token", "")
-        if not stored_token or not secrets.compare_digest(str(stored_token), supplied):
+        stored_text = str(stored_token) if stored_token is not None else ""
+        # compare_digest 处理 str 时只接受 ASCII；请求头里塞一个 é 就会抛 TypeError，
+        # 把一个「令牌不对」变成 HTML 500。非 ASCII 的令牌本来就不可能匹配。
+        if (not stored_text
+                or not supplied.isascii()
+                or not stored_text.isascii()
+                or not secrets.compare_digest(stored_text, supplied)):
             if _is_local_host(request.host):
                 return jsonify({
                     "status": "error",
@@ -1422,6 +1539,10 @@ def claim_shelf():
         }), 403
 
     payload = request.get_json(silent=True) or {}
+    # JSON 合法但根不是对象（"abc"、123、["x"]）时，payload.get 会抛 AttributeError，
+    # 变成 500；按「没带编号」处理，走下面统一的那句 400。
+    if not isinstance(payload, dict):
+        payload = {}
     code = str(payload.get("code") or "").strip()
 
     if not _VISITOR_RE.match(code):

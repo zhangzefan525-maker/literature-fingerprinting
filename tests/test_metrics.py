@@ -9,6 +9,7 @@
 或：
     python -m unittest discover -s tests -v
 """
+import json
 import math
 import os
 import re
@@ -423,6 +424,36 @@ class TestModelPersistence(unittest.TestCase):
             path = Path(tmp) / "pca_model.json"
             path.write_text('{"version": 1}', encoding="utf-8")
             self.assertIsNone(load_model(path))
+
+    def test_structurally_invalid_models_are_rejected_at_load_time(self):
+        """
+        形状/版本/有限性任何一项不对，都要在**加载时**判成「没有共享模型」，
+        而不是等到请求路径上做矩阵乘法才抛错。四类坏法各验一次。
+        """
+        _, model = self._fit()
+        cases = {}
+
+        bad = json.loads(json.dumps(model))
+        bad["version"] = 99
+        cases["version"] = bad
+
+        bad = json.loads(json.dumps(model))
+        bad["components"] = bad["components"][:1]
+        cases["one-component"] = bad
+
+        bad = json.loads(json.dumps(model))
+        bad["components"][0] = bad["components"][0][:-1]
+        cases["length-mismatch"] = bad
+
+        bad = json.loads(json.dumps(model))
+        bad["mean"][0] = float("nan")
+        cases["non-finite"] = bad
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pca_model.json"
+            for label, payload in cases.items():
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                self.assertIsNone(load_model(path), label)
 
     def test_axis_labels_are_plain_language(self):
         _, model = self._fit()

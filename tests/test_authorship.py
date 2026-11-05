@@ -204,6 +204,50 @@ class SyntheticCorpusTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertFalse(analyze(tmp)["enough"])
 
+    def test_books_with_identical_usage_say_so_instead_of_returning_nan(self):
+        """
+        两本书功能词用法完全一样（例如同一份文本换了两个文件名）时，标准化后
+        一个可比较的词都不剩，以前每个距离都是 NaN——NaN 不是合法 JSON，
+        前端读到半截只会显示「连不上」。现在返回 enough=false 与一句人话。
+        """
+        text = " ".join(["the", "of", "and", "to", "a"] * 2000)
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "the adventures of tom sawyer", text)
+            self._write(tmp, "white fang", text)
+            result = analyze(tmp)
+        self.assertFalse(result["enough"])
+        self.assertIn("功能词", result["message"])
+        json.dumps(result, allow_nan=False)
+
+    def test_one_window_per_book_does_not_leak_nan_into_json(self):
+        """
+        每本只有一个窗口时，留一书那一折的参照只有一行：所有词的 sd 都是 0，
+        z 向量为空，Delta 是空数组的均值 = NaN。以前 distances / 聚类高度都是 NaN。
+        现在这一折直接跳过（total=0），响应仍可被 allow_nan=False 序列化。
+        """
+        words_a = ["the"] * 9000 + ["of"] * 400 + ["and"] * 300 + ["to"] * 200 + ["a"] * 100
+        words_b = ["the"] * 100 + ["of"] * 9000 + ["and"] * 300 + ["to"] * 300 + ["a"] * 300
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "the adventures of tom sawyer", " ".join(words_a))
+            self._write(tmp, "white fang", " ".join(words_b))
+            result = analyze(tmp)
+        self.assertTrue(result["enough"])
+        self.assertEqual(result["leaveOneOut"]["total"], 0)
+        self.assertEqual(result["blockAttribution"]["total"], 0)
+        json.dumps(result, allow_nan=False)
+
+    def test_undecodable_raw_file_is_skipped_not_fatal(self):
+        """raw 里混进一个读不出的文件时，另外几本好书仍然算得出来。"""
+        words_a = ["the"] * 9000 + ["of"] * 400 + ["and"] * 300 + ["to"] * 200 + ["a"] * 100
+        words_b = ["the"] * 100 + ["of"] * 9000 + ["and"] * 300 + ["to"] * 300 + ["a"] * 300
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "the adventures of tom sawyer", " ".join(words_a))
+            self._write(tmp, "white fang", " ".join(words_b))
+            (Path(tmp) / "broken.txt").write_bytes(b"\x00\x01\x02\x03")
+            result = analyze(tmp)
+        self.assertTrue(result["enough"])
+        self.assertNotIn("broken", result["distance"]["names"])
+
 
 class CorpusTopWordsTestCase(unittest.TestCase):
     def test_returns_requested_count_in_frequency_order(self):

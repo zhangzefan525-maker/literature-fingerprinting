@@ -98,6 +98,29 @@ class TestSanitizeBookName(unittest.TestCase):
     def test_capped_at_200(self):
         self.assertEqual(len(api_server.sanitize_book_name("x" * 300)), 200)
 
+    def test_cjk_name_fits_the_filesystem_byte_limit(self):
+        """200 个汉字不是 200 字节：中文书名按 600 字节会超出 255 字节的文件名上限。"""
+        name = api_server.sanitize_book_name("中" * 200)
+        self.assertLessEqual(len(f"{name}.json".encode("utf-8")), 255)
+        # 截断发生在完整字符边界上，不能留下半个汉字
+        self.assertEqual(name, name.encode("utf-8").decode("utf-8"))
+
+
+class TestIsLocalHost(unittest.TestCase):
+    """Host 头决定「本地书库 / 线上书库」语义，认错会把删除保护关掉。"""
+
+    def test_local_forms_are_recognized(self):
+        for host in ("localhost", "localhost:5000", "127.0.0.1", "127.0.0.1:8080",
+                     "::1", "[::1]", "[::1]:5000", "LOCALHOST:3000"):
+            with self.subTest(host=host):
+                self.assertTrue(api_server._is_local_host(host))
+
+    def test_lookalikes_and_remote_hosts_are_not_local(self):
+        for host in ("localhost.evil.com", "127.0.0.1.evil.com", "example.com",
+                     "evil.com:443", "[::2]:80", "::2", "", None, "[::1"):
+            with self.subTest(host=host):
+                self.assertFalse(api_server._is_local_host(host))
+
 
 class TestResolveFinalName(unittest.TestCase):
     """命名去重：书库替换 > 内置加后缀 > 原样。"""
@@ -355,6 +378,35 @@ class LibraryApiTestCase(unittest.TestCase):
         self.assertFalse((self.shelf / "实验（我的）.json").exists())
 
 
+class LibrarySaveAtomicityTestCase(unittest.TestCase):
+    """落盘失败时，书架上的上一版必须原样可读，且不留下半截文件。"""
+
+    def test_failed_write_keeps_previous_version_and_no_debris(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shelf = Path(tmp) / "shelf"
+            with mock.patch.object(api_server, "_shelf_dir", return_value=shelf):
+                api_server._save_library_book("Book", {"version": 1})
+                # 模拟写到一半磁盘满 / 进程崩溃：旧实现会先截断目标文件
+                with mock.patch("src.atomic_io.json.dump", side_effect=OSError("disk full")):
+                    with self.assertRaises(OSError):
+                        api_server._save_library_book("Book", {"version": 2})
+            target = shelf / "Book.json"
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8")), {"version": 1})
+            self.assertEqual([p.name for p in shelf.iterdir()], ["Book.json"])
+
+
+class CorsOriginTestCase(LibraryApiTestCase):
+    """CORS 只放行本机页面；形似的域名不能借浏览器读到别人的书架。"""
+
+    def test_lookalike_origin_gets_no_cors_approval(self):
+        resp = self.client.get("/api/books", headers={"Origin": "http://localhost.evil.com"})
+        self.assertNotIn("Access-Control-Allow-Origin", resp.headers)
+
+    def test_local_origin_is_approved(self):
+        resp = self.client.get("/api/books", headers={"Origin": "http://localhost:5000"})
+        self.assertEqual(resp.headers.get("Access-Control-Allow-Origin"), "http://localhost:5000")
+
+
 class VisitorIsolationTestCase(LibraryApiTestCase):
     """
     每人一个书架：别人存的书，你既看不见、也删不掉、更不会进到你自己的图里。
@@ -581,6 +633,15 @@ class ShelfClaimTestCase(LibraryApiTestCase):
         # 校验发生在拼路径之前：伪造值什么都建不出来
         self.assertFalse((root / "escaped").exists())
         self.assertEqual(self._shelf_dirs(), before)
+
+    def test_json_that_is_not_an_object_is_400_not_500(self):
+        """合法 JSON 的根是字符串/数字/数组时，不能因为 .get 抛 AttributeError 变 500。"""
+        for payload in ("abc", 123, ["x"]):
+            with self.subTest(payload=payload):
+                resp = self.client.post(self.CLAIM, json=payload, headers=self.HEADERS)
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn("格式不对", resp.get_json()["message"])
+        self.assertEqual(self.client.get("/api/books").get_json()["shelfCode"], TEST_VISITOR)
 
     def test_unknown_code_is_404_and_creates_nothing(self):
         before = self._shelf_dirs()
@@ -1011,6 +1072,21 @@ class ErrorMessageTestCase(LibraryApiTestCase):
         message = resp.get_json()["message"]
         self.assertIn("文本分析失败", message)
         self.assertNotIn("boom in tokenizer", message)
+
+
+class AnalysisReportRobustnessTestCase(unittest.TestCase):
+    """报告函数直接消费落盘数据，手改/旧版数据里的坏数值不能让接口 500。"""
+
+    def test_huge_integer_is_skipped_instead_of_raising(self):
+        series = [{"block": i, "value": (10 ** 400 if i == 0 else float(i + 1))}
+                  for i in range(7)]
+        book_data = {"sentenceLength": series}
+
+        report = api_server._analysis_report("book", book_data, "sentenceLength")
+
+        self.assertEqual(report["status"], "success")
+        # 大得转不成浮点数的那个片段被跳过，其余 6 个正常参与分析
+        self.assertEqual(report["totalBlocks"], 6)
 
 
 class UploadProjectionTestCase(unittest.TestCase):

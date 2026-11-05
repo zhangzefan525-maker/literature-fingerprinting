@@ -148,7 +148,10 @@ def fit_pca_projection(matrix):
     "auto" 恰好解析成 "full"，pin 住不改变任何数值；等以后加了书再漂就晚了。
     """
     data = np.asarray(matrix, dtype=float)
-    if data.ndim != 2 or data.shape[0] < 2 or not np.any(data.std(axis=0) > 0):
+    # 只产得出 2 维坐标：特征数不足 2 时 PCA 的 n_components=2 会直接抛错，
+    # 而形状守卫本来就负责把退化矩阵变成零模型，这里补上「列数」这一半。
+    if (data.ndim != 2 or data.shape[0] < 2 or data.shape[1] < 2
+            or not np.any(data.std(axis=0) > 0)):
         return _degenerate_model(data.shape[1] if data.ndim == 2 else 0)
 
     pca = PCA(n_components=2, svd_solver="full")
@@ -177,6 +180,10 @@ def project_blocks(matrix, model):
     data = np.asarray(matrix, dtype=float)
     mean = np.asarray(model["mean"], dtype=float)
     components = np.asarray(model["components"], dtype=float)
+    if data.ndim != 2 or mean.ndim != 1 or components.ndim != 2:
+        raise ValueError("投影模型与矩阵的形状不合法")
+    if data.shape[1] != mean.shape[0] or components.shape[1] != mean.shape[0]:
+        raise ValueError("投影模型的词表列数与矩阵不一致")
     return (data - mean) @ components.T
 
     

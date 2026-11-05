@@ -47,8 +47,18 @@ BUILTIN_AUTHORS = {
     'the adventures of huckleberry finn': ('Twain, Mark', '马克·吐温'),
 }
 
-# 逐窗归属时每隔几个窗口取一个。窗口步长 1000 词、宽 1 万词，取 10 个正好不重叠。
-BLOCK_STRIDE = 10
+# 逐窗归属时每隔几个窗口取一个。按「窗口宽 ÷ 步长」推出来，正好不重叠。
+# 不写死 10：滑窗参数一旦调整，写死的 10 会让相邻取样重新重叠，准确率虚高。
+BLOCK_STRIDE = max(1, BLOCK_SIZE // STEP)
+
+
+class InsufficientVariance(Exception):
+    """参照语料里没有任何一个功能词存在用法差异。
+
+    此时 z 标准化会得到空向量，Delta 是空数组的均值 = NaN。NaN 写进 JSON
+    不是合法 JSON（`json.dumps(..., allow_nan=False)` 会直接拒绝），
+    浏览器读到半截会显示「连不上」。所以在这里显式停下，由调用方给出人话。
+    """
 
 # 词表敏感性实验用到的几档规模。None = 项目默认的 NLTK 英语停用词表。
 SENSITIVITY_SIZES = (None, 50, 100, 200, 500)
@@ -91,8 +101,13 @@ def load_corpus_blocks(raw_dir, names=None):
         path = raw / (name + '.txt')
         if not path.exists():
             continue
-        text = load_clean_text(str(path))
-        blocks = get_blocks(text)
+        try:
+            text = load_clean_text(str(path))
+            blocks = get_blocks(text)
+        except (OSError, ValueError):
+            # 单本读不出（编码坏了、权限不对）只跳过它：authority 页签是只读汇总，
+            # 不能因为 raw 里混进一个坏文件就让整个接口 500，连累另外几本好书。
+            continue
         if not blocks:
             continue
         blocks_by_book[name] = blocks
@@ -179,6 +194,8 @@ def standardize(profiles, reference_blocks):
     mu_all = reference_blocks.mean(axis=0)
     sd_all = reference_blocks.std(axis=0)
     keep = sd_all > 0
+    if not bool(keep.any()):
+        raise InsufficientVariance("参照语料里没有用法有差异的功能词")
     mu, sd = mu_all[keep], sd_all[keep]
     z = {name: (profile[keep] - mu) / sd for name, profile in profiles.items()}
     return z, keep, mu, sd
@@ -186,6 +203,8 @@ def standardize(profiles, reference_blocks):
 
 def _delta(za, zb):
     """Burrows' Delta：两个 z 向量逐词差值的平均绝对值。"""
+    if np.asarray(za).size == 0 or np.asarray(zb).size == 0:
+        raise InsufficientVariance("没有可比较的功能词")
     return float(np.abs(za - zb).mean())
 
 
@@ -350,7 +369,12 @@ def leave_one_out(mats, names, stride=BLOCK_STRIDE):
             continue
         reference = np.vstack([mats[n] for n in train])
         profiles = {n: mats[n].mean(axis=0) for n in train + [held]}
-        z, _keep, _mu, _sd = standardize(profiles, reference)
+        try:
+            z, _keep, _mu, _sd = standardize(profiles, reference)
+        except InsufficientVariance:
+            # 剩下的参照书只有单个窗口时，每个词的 sd 都是 0，这一折评不了。
+            # 跳过这一折，而不是把 NaN 距离写进响应。
+            continue
 
         winner, win_d, ranked = _nearest(z[held], z, train)
         true_author, true_author_zh = author_of(held)
@@ -402,7 +426,11 @@ def block_attribution(mats, names, stride=BLOCK_STRIDE):
             continue
         reference = np.vstack([mats[n] for n in train])
         profiles = {n: mats[n].mean(axis=0) for n in train}
-        z_ref, keep, mu, sd = standardize(profiles, reference)
+        try:
+            z_ref, keep, mu, sd = standardize(profiles, reference)
+        except InsufficientVariance:
+            # 同 leave_one_out：这一本的参照系退化，跳过它。
+            continue
 
         windows = mats[held][::stride][:, keep]
         true_author = author_of(held)[0]
@@ -466,7 +494,12 @@ def sensitivity(blocks_by_book, names, sizes=SENSITIVITY_SIZES, stride=BLOCK_STR
         if len(included) < 2:
             continue
 
-        _matrix, _z, keep = delta_matrix(mats, included)
+        try:
+            _matrix, _z, keep = delta_matrix(mats, included)
+        except InsufficientVariance:
+            # 这一档词表下所有书的用法向量完全一样（或词表太小没有差异），
+            # 算出来的只有 NaN。跳过这一档，不塞一行假数据。
+            continue
         loo = leave_one_out(mats, included, stride)
         blocks = block_attribution(mats, included, stride)
 
@@ -514,7 +547,20 @@ def analyze(raw_dir, stride=BLOCK_STRIDE, sizes=SENSITIVITY_SIZES):
             'message': '语料里至少要有两本书、且分属两位以上作者，才算得出作者归属。',
         }
 
-    matrix, _z, keep = delta_matrix(mats, names)
+    try:
+        matrix, _z, keep = delta_matrix(mats, names)
+    except InsufficientVariance:
+        # 书目够、但功能词用法几乎没有差异（例如同一份文本换了两个文件名）：
+        # 标准化后一个可比较的词都不剩，距离矩阵全是 NaN。给出可执行的下一步，
+        # 而不是让前端拿到 NaN 后报「服务器连不上」。
+        return {
+            'enough': False,
+            'books': [],
+            'message': (
+                '这几本书的功能词用法几乎没有差异，找不到可用于比较的词，'
+                '算不出有意义的作者距离。请换一组篇幅更长、风格差异更明显的书再试。'
+            ),
+        }
     merges = average_linkage(names, matrix)
     loo = leave_one_out(mats, names, stride)
     blocks = block_attribution(mats, names, stride)

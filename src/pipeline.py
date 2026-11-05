@@ -10,9 +10,11 @@ data/processed/all_books.json 中的单本书完全一致。
 2. api_server.py     —— 用户上传文本后的即时分析 (POST /api/analyze)
 """
 
+from collections import Counter
+
 import nltk
 
-from src.data_loader import BLOCK_SIZE, OVERLAP, get_chapter_spans
+from src.data_loader import get_chapter_spans
 from src.metrics import (
     KEYWORD_MIN_COUNT,
     calc_sentence_length,
@@ -195,8 +197,28 @@ def build_book_data(blocks, keywords_n=3, text=None, projection=None,
                              or top_content_words(block_counter, keywords_n))
         keyword_scores_list.append([score for _word, score in distinctive])
 
-    # 功能词投影：有共享模型就复用，没有才自己拟合
-    matrix, vocabulary = function_word_matrix(blocks)
+    # 功能词投影：有共享模型就复用，没有才自己拟合。
+    # 复用共享模型时必须用**模型自己保存的词表**建矩阵：上传机与训练机的 NLTK
+    # 停用词数据可能不同（它不在 requirements 里），按本机词表另建会让列错位，
+    # 坐标静默落在另一个基底上。词表一致时矩阵与原来逐位相同。
+    model_vocabulary = None
+    if isinstance(projection, dict):
+        stored_vocabulary = projection.get("vocabulary")
+        if isinstance(stored_vocabulary, list) and stored_vocabulary:
+            model_vocabulary = [str(word) for word in stored_vocabulary]
+
+    matrix, vocabulary = function_word_matrix(blocks, vocabulary=model_vocabulary)
+    if matrix is not None and model_vocabulary is not None and vocabulary != model_vocabulary:
+        # CountVectorizer 按字典序输出列名；模型按自己的词表顺序存载荷。
+        # 正常情况下两者相同；手改/旧模型顺序不同时按模型顺序重排，保证列对齐。
+        try:
+            order = [vocabulary.index(word) for word in model_vocabulary]
+        except ValueError:
+            matrix, vocabulary = function_word_matrix(blocks)
+        else:
+            matrix = matrix[:, order]
+            vocabulary = model_vocabulary
+
     if matrix is None:
         coordinates = [{"x": 0.0, "y": 0.0} for _ in blocks]
         used_model = None
@@ -204,9 +226,17 @@ def build_book_data(blocks, keywords_n=3, text=None, projection=None,
     else:
         projection_mode = "shared" if projection is not None else "perBook"
         used_model = projection if projection is not None else fit_pca_projection(matrix)
+        try:
+            projected = project_blocks(matrix, used_model)
+        except (KeyError, TypeError, ValueError):
+            # 模型文件损坏、词表列数与载荷对不上：退回单书拟合，
+            # 而不是把一个 numpy 广播错误抛到用户面前（坐标会标成「不可比较」）。
+            used_model = fit_pca_projection(matrix)
+            projection_mode = "perBook"
+            projected = project_blocks(matrix, used_model)
         coordinates = [
             {"x": float(item[0]), "y": float(item[1])}
-            for item in project_blocks(matrix, used_model)
+            for item in projected
         ]
 
     book_data = {

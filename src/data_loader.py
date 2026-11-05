@@ -111,9 +111,26 @@ def clean_text(content):
 
 
 def load_clean_text(filepath):
-    """读取文件并清洗（清洗规则见 clean_text）。"""
-    with open(filepath, 'r', encoding='utf-8') as f:
-        return clean_text(f.read())
+    """读取文件并清洗（清洗规则见 clean_text）。
+
+    编码不假定 UTF-8：内置书是 UTF-8，但用户直接放进 data/raw/ 的文件可能是
+    GBK / cp1252（中文或西文 Windows 记事本的默认产物）。解不开时退回
+    decode_upload 的候选编码；实在解不出来才抛 ValueError，并带上文件名，
+    否则一次坏文件只会得到一句不知指向哪本书的 UnicodeDecodeError。
+    """
+    with open(filepath, 'rb') as f:
+        raw = f.read()
+    try:
+        text = raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        text, _encoding = decode_upload(raw)
+        if text is None:
+            raise ValueError(f"无法解码文本文件: {filepath}")
+    # 二进制文件常常也是「合法 UTF-8」；NUL 混进来时按读不出处理，
+    # 与上传路径（decode_upload）同一条判据，别把它当正文做出一堆 0。
+    if '\x00' in text:
+        raise ValueError(f"无法解码文本文件: {filepath}")
+    return clean_text(text)
 
 # ---------------------------------------------------------------
 # 语言闸门：本工具的四个指标都建立在英文分词与英文功能词表上，
@@ -136,14 +153,20 @@ _STOPWORD_CACHE = None
 
 
 def _english_stopwords():
-    """英文停用词表（nltk）。取不到（离线且没装语料）时返回空集合，闸门退化为只看非 ASCII。"""
+    """英文停用词表（nltk）。取不到（离线且没装语料）时返回空集合，闸门退化为只看非 ASCII。
+
+    失败**不缓存**：NLTK 语料可能在进程运行期间才装好（首次下载、运维补装）。
+    把空集合缓存下来，语言闸门就会从此永久跳过停用词这一条，长英文文本会被
+    0% 的命中率误判成非英文——而且重启之前不会自愈。
+    """
     global _STOPWORD_CACHE
-    if _STOPWORD_CACHE is None:
-        try:
-            from nltk.corpus import stopwords
-            _STOPWORD_CACHE = set(stopwords.words('english'))
-        except Exception:
-            _STOPWORD_CACHE = set()
+    if _STOPWORD_CACHE is not None:
+        return _STOPWORD_CACHE
+    try:
+        from nltk.corpus import stopwords
+        _STOPWORD_CACHE = set(stopwords.words('english'))
+    except Exception:
+        return set()
     return _STOPWORD_CACHE
 
 
@@ -185,7 +208,11 @@ def detect_language(text):
             stats,
         )
 
-    if len(tokens) >= _STOPWORD_MIN_TOKENS and hit_ratio < _STOPWORD_HIT_LIMIT:
+    # 停用词表取不到时（离线且没装语料）这一条**不能**参与判断：
+    # 命中率必然是 0，任何长英文文本都会被当成非英文拒掉。此时只保留非 ASCII 那一条。
+    if (stopwords_set
+            and len(tokens) >= _STOPWORD_MIN_TOKENS
+            and hit_ratio < _STOPWORD_HIT_LIMIT):
         return (
             False,
             f"这份文本看起来不是英文（英文常用词 the/of/and 之类只占 {hit_ratio:.0%}）。"
@@ -253,29 +280,40 @@ def decode_upload(raw):
             continue
         try:
             # 'utf-16' / 'utf-32' 自己认 BOM 并把它吃掉，不必再手写剥离
-            return raw.decode(encoding), encoding
+            text = raw.decode(encoding)
         except (UnicodeDecodeError, LookupError):
             # BOM 已经认死了编码，只是正文坏了（截断、字节数奇数、坏的代理对…）。
             # 不再往下试：gb18030 / cp1252 几乎能把任意字节「解得开」，那正是这次
             # 要修的毛病——一份坏文件会被解成乱码送进分析，报出一堆 0。当作读不出。
             return None, None
+        if '\x00' in text:
+            return None, None
+        return text, encoding
 
     try:
-        return raw.decode('utf-8-sig'), 'utf-8'
+        text = raw.decode('utf-8-sig')
     except (UnicodeDecodeError, LookupError):
-        pass
+        text = None
+    if text is not None and '\x00' not in text:
+        return text, 'utf-8'
 
+    # 没有 BOM 的 UTF-16LE 文本（`T\0h\0e\0`）在 UTF-8 眼里是一串合法字节，
+    # 上面这一步会「成功」解出一堆夹着 NUL 的乱码；gb18030 / cp1252 也一样解得开。
+    # NUL 不是纯文本该有的字符，出现就说明选错了编码——当作读不出，别送进分析
+    # 报一堆 0（那会让用户以为「这篇没有特征」）。
     best = None  # (非 ASCII 比例, 文本, 编码)
     for encoding in _FALLBACK_ENCODINGS:
         try:
-            text = raw.decode(encoding)
+            decoded = raw.decode(encoding)
         except (UnicodeDecodeError, LookupError):
             continue
-        ok, _reason, stats = detect_language(text[:_ENCODING_SNIFF_CHARS])
+        if '\x00' in decoded:
+            continue
+        ok, _reason, stats = detect_language(decoded[:_ENCODING_SNIFF_CHARS])
         if ok:
-            return text, encoding
+            return decoded, encoding
         if best is None or stats["nonAsciiRatio"] < best[0]:
-            best = (stats["nonAsciiRatio"], text, encoding)
+            best = (stats["nonAsciiRatio"], decoded, encoding)
     return (best[1], best[2]) if best else (None, None)
 
 
@@ -364,9 +402,15 @@ def _ordinal_key(raw):
 
 
 def _looks_like_heading(text, start):
-    """标题前应当是句子结束符或文本开头（排除正文中的偶然命中）。"""
-    prefix = text[:start].rstrip()
-    return not prefix or prefix[-1] in _HEADING_PRECEDING_CHARS
+    """标题前应当是句子结束符或文本开头（排除正文中的偶然命中）。
+
+    从命中位置往回跳过空白，而不是 `text[:start].rstrip()`：后者每命中一次
+    就复制一遍全书前缀，8000 个候选项时是 O(n²)，实测 0.7 秒全部花在这里。
+    """
+    index = start - 1
+    while index >= 0 and text[index].isspace():
+        index -= 1
+    return index < 0 or text[index] in _HEADING_PRECEDING_CHARS
 
 
 def _ordinal_number(key):
@@ -375,14 +419,23 @@ def _ordinal_number(key):
 
 
 def _raw_heading_hits(text):
-    """全文所有像章节标题的命中（含目录页），按出现顺序返回。"""
+    """全文所有像章节标题的命中（含目录页），按出现顺序返回。
+
+    wordStart 用**逐段累加**而不是每次都 len(text[:start].split())：
+    后者每命中一次就切一遍全书前缀，8000 个候选项时实测 0.7 秒（O(n²)）。
+    命中位置都在词边界上，逐段切分的计数相加与整段切分严格相等。
+    """
     hits = []
+    words_before = 0
+    consumed = 0
     for match in _CHAPTER_HEADING_RE.finditer(text):
+        words_before += len(text[consumed:match.start()].split())
+        consumed = match.start()
         hits.append({
             "title": " ".join(match.group(0).split()),
             "key": _ordinal_key(match.group(1)),
             "charStart": match.start(),
-            "wordStart": len(text[:match.start()].split()),
+            "wordStart": words_before,
         })
     return hits
 
@@ -392,15 +445,20 @@ def _raw_part_hits(text):
     全文所有像「部 / 卷」标题的命中，按出现顺序返回。
 
     部标题不产出章节，只用来判断紧跟其后的章节标题处在标题语境里（见 _part_before）。
+    wordStart 的算法同 _raw_heading_hits：逐段累加，避免 O(n²)。
     """
     hits = []
+    words_before = 0
+    consumed = 0
     for match in _PART_HEADING_RE.finditer(text):
+        words_before += len(text[consumed:match.start()].split())
+        consumed = match.start()
         if not _looks_like_heading(text, match.start()):
             continue
         hits.append({
             "title": " ".join(match.group(0).split()),
             "charStart": match.start(),
-            "wordStart": len(text[:match.start()].split()),
+            "wordStart": words_before,
         })
     return hits
 

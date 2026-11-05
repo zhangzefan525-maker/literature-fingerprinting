@@ -18,7 +18,9 @@ def _clean(values):
     for value in values or []:
         try:
             number = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # float(10**400) 抛的是 OverflowError，不是 ValueError；
+            # 手改/损坏的数据里出现这种整数时，跳过即可，别让整个分析 500。
             continue
         if math.isfinite(number):
             cleaned.append(number)

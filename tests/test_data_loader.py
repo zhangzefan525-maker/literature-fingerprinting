@@ -16,6 +16,7 @@
 import codecs
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,9 +25,10 @@ from nltk.tokenize import sent_tokenize
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.data_loader import (
+from src.data_loader import (  # noqa: E402
     BLOCK_SIZE,
     OVERLAP,
+    _raw_heading_hits,
     clean_text,
     count_blocks,
     decode_upload,
@@ -174,6 +176,32 @@ class TestDecodeUpload(unittest.TestCase):
         # 0x81 在 cp1252 里没定义，在 GBK 里是「还需要一个后续字节」的引导字节——单独一个两边都读不了
         self.assertEqual(decode_upload(b"\x81"), (None, None))
 
+    def test_bomless_utf16_is_rejected_instead_of_read_as_nul_text(self):
+        """
+        没有 BOM 的 UTF-16LE 是 `T\\0h\\0e\\0`：在 UTF-8、cp1252、gb18030 眼里
+        都是**合法字节**，会解出一串夹着 NUL 的乱码并通过语言闸门（词还是那几个词）。
+        以前它会被静默收下，指标全是 0。NUL 不是纯文本该有的字符，出现就当作读不出。
+        """
+        self.assertEqual(decode_upload(self.TEXT.encode("utf-16-le")), (None, None))
+
+
+class TestLoadCleanTextEncoding(unittest.TestCase):
+    """load_clean_text 不能假死地只认 UTF-8（data/raw 里可能有 GBK/cp1252 文件）。"""
+
+    def test_gbk_file_is_decoded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gbk.txt"
+            path.write_bytes("他说：“你好。”然后他离开了房间。".encode("gbk") * 20)
+            self.assertIn("你好", load_clean_text(str(path)))
+
+    def test_undecodable_file_raises_value_error_with_filename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "binary.txt"
+            path.write_bytes(b"\x00\x01\x02\x03")
+            with self.assertRaises(ValueError) as ctx:
+                load_clean_text(str(path))
+            self.assertIn("binary.txt", str(ctx.exception))
+
 
 class TestChapterSpans(unittest.TestCase):
     def test_prose_mention_of_chapter_is_not_a_heading(self):
@@ -196,6 +224,20 @@ class TestChapterSpans(unittest.TestCase):
         self.assertEqual(len(chapters), 2)
         self.assertIn("Chapter I", chapters[0]["title"])
         self.assertIn("Chapter II", chapters[1]["title"])
+
+    def test_heading_word_start_matches_naive_count(self):
+        """逐段累加的 wordStart 必须与「切一遍全书前缀」逐项相等（性能优化不能改数）。"""
+        text = (
+            "intro " * 500
+            + "CHAPTER I\n" + "alpha " * 300
+            + "CHAPTER II\n" + "omega " * 50
+        )
+        for hit in _raw_heading_hits(text):
+            self.assertEqual(
+                hit["wordStart"],
+                len(text[:hit["charStart"]].split()),
+                msg=hit["title"],
+            )
 
     def test_spans_are_monotonic(self):
         text = (

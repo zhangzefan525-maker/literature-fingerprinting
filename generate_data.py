@@ -9,7 +9,6 @@
    这是跨书坐标可比的前提——每本书各自拟合的话，坐标只在本书内部有意义。
 """
 
-import json
 import sys
 from pathlib import Path
 
@@ -22,10 +21,16 @@ try:
 except Exception:
     pass
 
+from src.atomic_io import write_json_atomic
 from src.data_loader import BLOCK_SIZE, OVERLAP, get_blocks, load_clean_text
 from src.metrics import function_word_matrix
 from src.pipeline import build_book_data
 from src.projection import MODEL_PATH, axis_extent, build_model, save_model
+
+# 生成脚本自己的输出文件名。data/raw 里若有一本同名的 .txt，处理它时会把输出写到
+# 自己的产物路径上——轻则下次运行把它当成一本书读回来，重则覆盖掉汇总文件或投影模型。
+# 大小写不敏感地排除（Windows/macOS 的文件系统本身就不区分大小写）。
+_RESERVED_OUTPUT_STEMS = {"all_books", "pca_model"}
 
 def process_all_books():
     """
@@ -51,6 +56,9 @@ def process_all_books():
     prepared = []
     for i, book_file in enumerate(book_files, 1):
         book_name = book_file.stem
+        if book_name.lower() in _RESERVED_OUTPUT_STEMS:
+            print(f"  跳过: {book_name} 与生成脚本自己的输出文件同名")
+            continue
         print(f"[{i}/{len(book_files)}] 正在读取: {book_name}")
 
         try:
@@ -136,6 +144,18 @@ def process_all_books():
         for book_data in all_data.values():
             book_data["metadata"]["projection"]["axisExtent"] = model["axisExtent"]
 
+    # 先写新文件、再清旧文件：反过来的话，中途崩溃会留下「旧的已删、新的没写」，
+    # 而单书文件正是 all_books.json 缺失时的后备。
+    # 每个文件都原子写：读者要么看到上一版完整内容，要么看到这一版，不会读到半截 JSON。
+    for book_name, book_data in all_data.items():
+        book_output_file = OUTPUT_DIR / f"{book_name}.json"
+        write_json_atomic(book_output_file, book_data, indent=2)
+        print(f"  ✓ {book_name} 处理完成，保存到 {book_output_file}")
+
+    # 保存所有数据
+    all_output_file = OUTPUT_DIR / "all_books.json"
+    write_json_atomic(all_output_file, all_data, indent=2)
+
     # 清掉不再对应的旧单书文件，避免上一版数据混在里面被误读
     keep = set(all_data) | {"all_books", "pca_model"}
     for stale in OUTPUT_DIR.glob("*.json"):
@@ -143,18 +163,7 @@ def process_all_books():
             stale.unlink()
             print(f"  清理过期文件: {stale.name}")
 
-    for book_name, book_data in all_data.items():
-        book_output_file = OUTPUT_DIR / f"{book_name}.json"
-        with open(book_output_file, "w", encoding="utf-8") as f:
-            json.dump(book_data, f, ensure_ascii=False, indent=2)
-        print(f"  ✓ {book_name} 处理完成，保存到 {book_output_file}")
-
-    # 保存所有数据
-    all_output_file = OUTPUT_DIR / "all_books.json"
-    with open(all_output_file, "w", encoding="utf-8") as f:
-        json.dump(all_data, f, ensure_ascii=False, indent=2)
-
-    print(f"\n✓ 所有数据处理完成！")
+    print("\n✓ 所有数据处理完成！")
     print(f"  总书籍数: {len(all_data)}")
     print(f"  完整数据保存到: {all_output_file}")
 
