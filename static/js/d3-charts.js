@@ -823,9 +823,30 @@ function scrollToSection(section) {
     });
 }
 
+// 作者验证是独立任务：它读取服务器上的固定原文，不消费前三个页签的选书、上传和指标状态。
+// 进入这一页时把无关控件从视觉与无障碍树中一起收起；离开时恢复原状，用户之前的选择仍保留。
+function syncTaskShell(tabId) {
+    const authorshipMode = tabId === 'view-authorship';
+    const container = document.getElementById('main-content');
+    if (container) container.classList.toggle('authorship-mode', authorshipMode);
+
+    const bookBar = document.getElementById('book-bar');
+    if (bookBar) bookBar.hidden = authorshipMode;
+    const uploadBar = document.getElementById('upload-bar');
+    if (uploadBar) uploadBar.hidden = authorshipMode;
+    const globalStatus = document.getElementById('global-status');
+    if (globalStatus) {
+        globalStatus.classList.toggle('task-hidden', authorshipMode);
+        if (authorshipMode) globalStatus.setAttribute('aria-hidden', 'true');
+        else globalStatus.removeAttribute('aria-hidden');
+    }
+    applyQuickStartVisibility();
+}
+
 // Tab 切换逻辑
 window.switchTab = function(tabId, options) {
     currentTab = tabId;
+    syncTaskShell(tabId);
     syncResearchContext();
 
     // 同步 tab/tabpanel 语义，让键盘和读屏用户知道当前视图
@@ -1105,14 +1126,16 @@ const QUICKSTART_HIDDEN_KEY = 'wenxin.quickstartHidden';
 function applyQuickStartVisibility() {
     const el = document.getElementById('quickstart');
     if (!el) return;
-    let hidden = false;
+    let dismissed = false;
     try {
-        hidden = window.localStorage.getItem(QUICKSTART_HIDDEN_KEY) === '1';
+        dismissed = window.localStorage.getItem(QUICKSTART_HIDDEN_KEY) === '1';
     } catch (e) {
-        hidden = false;
+        dismissed = false;
     }
+    const hidden = dismissed || currentTab === 'view-authorship';
     el.hidden = hidden;
-    setDemoEntryVisible(hidden);
+    // 作者验证只临时收起入口；离开后仍按用户是否主动关闭来决定由哪一个入口接班。
+    setDemoEntryVisible(currentTab !== 'view-authorship' && dismissed);
 }
 
 // 「载入对比示例」的常驻入口长在「基础趋势分析」页的标题行里，和快速开始条互斥：
@@ -3433,12 +3456,20 @@ function updateMetricHint() {
         functionWords: `「风格走向」量的是这本书惯用哪一类高频小词${getAxisWordsHint()}，并将这种习惯表示为图上的一个方向——不看内容，只看措辞习惯。两个点越接近，只说明这两个片段的用词习惯越相似，不等于整本书本身相似。`
     };
     const ctxText = getMetricContextLine(currentMetric);
-    el.innerHTML = `<span class="metric-hint-label">${escapeHtml(getMetricLabel(currentMetric))}：</span>${escapeHtml(hints[currentMetric] || '')}`;
+    const summary = document.createElement('div');
+    summary.className = 'metric-summary';
+    summary.innerHTML = `<span class="metric-hint-label">${escapeHtml(getMetricLabel(currentMetric))}：</span>${escapeHtml(hints[currentMetric] || '')}`;
+    el.replaceChildren(summary);
     if (ctxText) {
+        const details = document.createElement('details');
+        details.className = 'metric-context';
+        const toggle = document.createElement('summary');
+        toggle.textContent = '查看参考区间与比较口径';
         const line = document.createElement('div');
-        line.className = 'metric-context';
+        line.className = 'metric-context-body';
         line.textContent = ctxText;
-        el.appendChild(line);
+        details.append(toggle, line);
+        el.appendChild(details);
     }
 }
 
@@ -5842,15 +5873,20 @@ function setGlobalStatus(kind, message, { sticky = false, action = null, tag = n
     const el = document.getElementById('global-status');
     if (!el) return;
     if (_globalStatusTimer) { clearTimeout(_globalStatusTimer); _globalStatusTimer = null; }
+    const taskHidden = currentTab === 'view-authorship';
     if (!message) {
         el.hidden = true;
         el.textContent = '';
-        el.className = 'global-status';
+        el.className = `global-status${taskHidden ? ' task-hidden' : ''}`;
+        if (taskHidden) el.setAttribute('aria-hidden', 'true');
+        else el.removeAttribute('aria-hidden');
         if (el.dataset) delete el.dataset.statusTag;
         return;
     }
     el.hidden = false;
-    el.className = `global-status ${kind || ''}`.trim();
+    el.className = `global-status ${kind || ''}${taskHidden ? ' task-hidden' : ''}`.trim();
+    if (taskHidden) el.setAttribute('aria-hidden', 'true');
+    else el.removeAttribute('aria-hidden');
     el.textContent = message;
     if (el.dataset) {
         if (tag) el.dataset.statusTag = tag;
@@ -5942,11 +5978,13 @@ function showLoading(message) {
     setGlobalStatus('loading', `${message} ${LOADING_WAIT_HINT}`);
     const detailPanel = document.getElementById('detailPanel');
     if (!detailPanel) return;
+    // 完整的等待原因只在全局状态条说一次；局部区域只保留与版式同形的骨架，避免同一句
+    // 文案在一屏重复，也让用户知道这里将出现“片段详情”而不是第二条系统通知。
     detailPanel.innerHTML = `
-        <div class="state-card loading" aria-hidden="true">
-            <h3>◌ ${escapeHtml(message)}</h3>
-            <p>${escapeHtml(LOADING_WAIT_HINT)}</p>
-            <div class="state-spinner" aria-hidden="true"></div>
+        <div class="detail-loading-skeleton" aria-hidden="true">
+            <span class="skeleton-line skeleton-title"></span>
+            <span class="skeleton-line"></span>
+            <span class="skeleton-line skeleton-short"></span>
         </div>
     `;
 }
