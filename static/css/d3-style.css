@@ -2862,6 +2862,24 @@ button:hover {
 .metric-context summary:hover { color: var(--ink-100); }
 .metric-context-body { margin-top: 4px; }
 
+/* 图下长说明的两层折叠（第六十三批）。与 .metric-context 同一套交互语言：
+   常驻的那一句判断写在 <summary> 上，方法细节展开才出现。文案本身一个字没改，
+   只是从「一次全给」变成「先给会读错图的那句」。 */
+.note-disclosure > summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    color: var(--indigo-ink);
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.note-disclosure > summary:hover { color: var(--ink-100); }
+.galaxy-note .note-disclosure { margin-top: 6px; }
+.galaxy-note .note-disclosure-body { margin-top: 2px; }
+.note-disclosure-body { margin-bottom: 0; }
+
 /* 作者验证读取固定的服务器原文，是与作品分析并列的独立任务。切到这一页时，无关的
    作品状态不应继续占位或制造“这些选择会影响结果”的暗示。具体显隐由 JS 同步 hidden；
    这里处理仍可能带着旧状态内容的全局反馈条，并缩短独立任务页的顶部路径。 */

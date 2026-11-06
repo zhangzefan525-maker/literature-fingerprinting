@@ -708,14 +708,18 @@ function resolveGalaxyExtent(nodes, fixedExtent) {
 function renderGalaxyNote(comparability, extent, droppedBlocks) {
     const el = document.getElementById('galaxy-axis-note');
     if (!el) return;
-    const lines = [];
+    // 第六十三批：说明分两层。判据是「不展开会不会读错图」——
+    // 轴含义、⚠ 警告、缺数据必须常驻；「原点是平均水平」「点被推开过」这类方法细节
+    // 收进折叠。文案一个字没改，只是换了位置。
+    const primary = [];
+    const secondary = [];
     let warn = false;
 
     if (comparability.plotBooks.length === 0) {
         warn = true;
-        lines.push('⚠ 当前选中的书没有共同的坐标基准（多为旧版数据或不同模型生成的坐标），下面按「各书各自计算」的方式摆放：点与点之间的距离不可直接比较。重新上传一次 .txt 即可获得可比坐标。');
+        primary.push('⚠ 当前选中的书没有共同的坐标基准（多为旧版数据或不同模型生成的坐标），下面按「各书各自计算」的方式摆放：点与点之间的距离不可直接比较。重新上传一次 .txt 即可获得可比坐标。');
     } else {
-        (comparability.axisLabels || []).forEach(text => lines.push(text));
+        (comparability.axisLabels || []).forEach(text => primary.push(text));
 
         // 两个轴各自承担了多少差异，是解读这张图的前提，以前只出现在导出的 BibTeX 里。
         // 不说的话，读者会把「靠得近」当成整体风格接近，其实那几乎全是横向位置在说话
@@ -726,7 +730,7 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
         // 同一块面板里同样的两个数挨着印两遍。结论（横向为主）留着，数由轴标题去说。
         const ratios = (comparability.explainedVarianceRatio || []).slice(0, 2).filter(isFiniteNumber);
         if (ratios.length === 2) {
-            lines.push('横轴承担的差异远多于纵轴，所以「靠得近」主要说明横向位置接近；'
+            secondary.push('横轴承担的差异远多于纵轴，所以「靠得近」主要说明横向位置接近；'
                 + '坐标原点是内置语料的平均水平。');
         }
 
@@ -741,49 +745,58 @@ function renderGalaxyNote(comparability, extent, droppedBlocks) {
         // 而且会和同一个面板上的「各书各自计算」告警直接打架；outOfRange 时范围已经
         // 被扩展过去容纳超界的数据，点也不再挤在一角，说了反而误导。
         if (extent && !extent.outOfRange) {
-            lines.push('（空出的部分来自「与内置示例书共用坐标范围」，并非漏画。需要更细时可滚轮放大，坐标轴会随之重新标注。）');
+            secondary.push('（空出的部分来自「与内置示例书共用坐标范围」，并非漏画。需要更细时可滚轮放大，坐标轴会随之重新标注。）');
         }
 
         // 力导向的碰撞力会把点从真实坐标上推开一点才不重叠，读者有权知道位置是近似值
-        lines.push('（为避免点互相遮挡，点的位置做过轻微推开，因此图上位置是近似值。）');
+        secondary.push('（为避免点互相遮挡，点的位置做过轻微推开，因此图上位置是近似值。）');
 
         // 同色浅色区域的说明（第三十七批）。画面上多了一层编码，就得有一句话说它是什么，
         // 否则读者只会看到几块「不知道哪来的底色」。只在真的画了两本以上时才说：
         // 一本书的轮廓说不了「重叠」这件事，讲了反而让人去找一块并不存在的叠加区。
         if (comparability.plotBooks.length >= 2) {
-            lines.push('（同一本书的点被一块同色的浅色区域圈住；两块区域叠在一起，说明这两本书的风格区间有重叠。）');
+            secondary.push('（同一本书的点被一块同色的浅色区域圈住；两块区域叠在一起，说明这两本书的风格区间有重叠。）');
             // 记号只画在球心，不解释就没人认得（第三十八批）。只在两本以上时说：
             // 一本书不需要靠记号分辨，讲了反而多一句读者用不上的话。
-            lines.push('（球心上的纸色记号 — ｜ ＋ 也用于区分书籍：颜色不易分辨时，可对照上方图例辨认。）');
+            secondary.push('（球心上的纸色记号 — ｜ ＋ 也用于区分书籍：颜色不易分辨时，可对照上方图例辨认。）');
         }
         if (comparability.independentBooks.length > 0) {
             warn = true;
             const names = comparability.independentBooks.map(getBookDisplayName).join('、');
-            lines.push(`⚠ 《${names}》的坐标是旧版数据、没有共同基准，因此没有画进这张图；重新上传同名 .txt 即可获得可比坐标。`);
+            primary.push(`⚠ 《${names}》的坐标是旧版数据、没有共同基准，因此没有画进这张图；重新上传同名 .txt 即可获得可比坐标。`);
         }
         if (comparability.mixedModel) {
             warn = true;
-            lines.push('⚠ 选中的书来自不同的坐标模型，无法直接比较，本图未画入。');
+            primary.push('⚠ 选中的书来自不同的坐标模型，无法直接比较，本图未画入。');
         }
         if (extent && extent.outOfRange) {
             warn = true;
-            lines.push('⚠ 有片段的坐标超出了内置示例书的范围，图已自动扩展显示。');
+            primary.push('⚠ 有片段的坐标超出了内置示例书的范围，图已自动扩展显示。');
         }
         if (droppedBlocks > 0) {
-            lines.push(`（有 ${droppedBlocks} 个片段缺少坐标数据，未画入。）`);
+            primary.push(`（有 ${droppedBlocks} 个片段缺少坐标数据，未画入。）`);
         }
-        if (lines.length === 0) {
-            el.hidden = true;
-            el.innerHTML = '';
-            return;
-        }
+    }
+
+    if (primary.length === 0 && secondary.length === 0) {
+        el.hidden = true;
+        el.innerHTML = '';
+        return;
     }
 
     el.hidden = false;
     el.className = 'galaxy-note' + (warn ? ' galaxy-note-warn' : '');
-    el.innerHTML = lines
-        .map(text => `<span class="galaxy-note-line">${escapeHtml(text)}</span>`)
-        .join('');
+    const lineHtml = text => `<span class="galaxy-note-line">${escapeHtml(text)}</span>`;
+    let html = primary.map(lineHtml).join('');
+    if (secondary.length > 0) {
+        // 折叠标题是一句新写的指路语，不进 <summary> 之外的任何统计；正文仍是原文。
+        html += '<details class="note-disclosure">'
+            + '<summary>展开：坐标范围、点的位置与重叠区怎么读</summary>'
+            + '<div class="note-disclosure-body">'
+            + secondary.map(lineHtml).join('')
+            + '</div></details>';
+    }
+    el.innerHTML = html;
 }
 
 
@@ -4642,7 +4655,10 @@ function collectExportAxisNote() {
         }
         const scaleNote = document.getElementById('heatmap-scale-note');
         if (!scaleNote || scaleNote.hidden) return '';
-        return (scaleNote.textContent || '').trim().replace(/\s+/g, ' ');
+        // 整段现在包在 <details> 里，取正文而不是整块：整块会把折叠标题那句指路语
+        // 一起带进导出的图注，而那句话屏幕上只是「点这里」。
+        const scaleBody = scaleNote.querySelector('.note-disclosure-body') || scaleNote;
+        return (scaleBody.textContent || '').trim().replace(/\s+/g, ' ');
     }
     if (currentTab !== 'view-galaxy') return '';
     // 「大小 = …」那行在 #galaxy-guide 里，不在 SVG 里，导出只序列化 SVG，
@@ -4655,10 +4671,12 @@ function collectExportAxisNote() {
     const note = document.getElementById('galaxy-axis-note');
     if (note && !note.hidden) {
         // 横轴、纵轴在 DOM 里是两个子节点，直接取整块的 textContent 会把它们粘成
-        // 一句「…比例越高纵轴越靠上…」，读起来像缺了标点
-        const noteParts = note.children.length
-            ? Array.from(note.children).map(c => (c.textContent || '').trim()).filter(Boolean)
-            : [(note.textContent || '').trim()];
+        // 一句「…比例越高纵轴越靠上…」，读起来像缺了标点。
+        // 第六十三批起说明分两层（常驻 + 折叠），但导出物要的是同一份完整文字：
+        // 按 DOM 顺序取所有 .galaxy-note-line，折叠标题那句指路语不在其中。
+        const lines = Array.from(note.querySelectorAll('.galaxy-note-line'))
+            .map(c => (c.textContent || '').trim()).filter(Boolean);
+        const noteParts = lines.length ? lines : [(note.textContent || '').trim()];
         noteParts.forEach(text => { if (text) parts.push(text); });
     }
     // 拼的时候别在原句的句号后面再生一个分号：noteParts 里每句都自带标点，
