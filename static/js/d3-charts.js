@@ -2377,9 +2377,11 @@ async function loadRealData() {
             showNoDataMessage();
             return;
         }
-        // 第六十五批：不再报「成功加载 N 本书籍的数据」（用户要求删掉）。
-        // 数据到了、图出来了，本身就是成功的证据；这条 6 秒的绿条只是首屏顶上多一行字。
+        // 不再报「成功加载 N 本书籍的数据」：数据到了、图出来了，本身就是成功的证据。
+        // 但「正在加载数据…」这条得在这里收掉——它属于「留在原地，等下一次状态更新来替换」
+        // 的那一类，成功那条一删，它就永远挂在首屏顶上，比原来的绿条更碍事。
         // 失败、缺书、上传异常仍然走下面的 setGlobalStatus / announceOrNotice，一条都没少。
+        setGlobalStatus(null, '');
         updateMetricHint(); // 参考区间跟随当前已加载书集合
         renderAxisWordHints(); // 轴词说明也跟随已加载的书（用户可能还没切到星系页）
 
