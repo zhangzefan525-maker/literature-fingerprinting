@@ -3,6 +3,7 @@
 > 不用写代码，也能一眼看懂「不同作家的写作风格差在哪里」。
 
 [![tests](https://github.com/zhangzefan525-maker/literature-fingerprinting/actions/workflows/tests.yml/badge.svg)](https://github.com/zhangzefan525-maker/literature-fingerprinting/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## 🔬 技术总览（写给评审与研究者）
 

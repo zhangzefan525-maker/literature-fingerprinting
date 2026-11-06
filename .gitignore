@@ -10,6 +10,9 @@ build/
 .venv/
 venv/
 env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # --- 生成的指纹数据（运行 generate_data.py 可重新生成）---
 data/processed/*.json
@@ -24,6 +27,7 @@ data/library/
 .DS_Store
 Thumbs.db
 *.log
+*.bundle
 
 # --- 个人/课程资料（不提交到远程仓库）---
 *结课报告*.pdf

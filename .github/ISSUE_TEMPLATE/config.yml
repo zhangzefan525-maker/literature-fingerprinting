@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 先读 README
+    url: https://github.com/zhangzefan525-maker/literature-fingerprinting#readme
+    about: 怎么看图、这些指标是什么意思、已知的局限，README 里都写了

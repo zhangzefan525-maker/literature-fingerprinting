@@ -18,9 +18,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 只读权限就够：这个工作流只做 checkout + 装依赖 + 跑测试，
+# 不给 token 留写仓库的余地。
+permissions:
+  contents: read
+
 jobs:
   unittest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 

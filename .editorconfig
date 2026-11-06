@@ -1,0 +1,22 @@
+# 编辑器统一约定。仓库里的文件以 LF 存储；Windows 工作副本由 Git 的
+# core.autocrlf 负责转换，编辑器按这里写成 LF 不会产生额外差异。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{md,yml,yaml,json}]
+indent_size = 2
+
+# Markdown 行尾的两个空格是换行语义，不能被裁掉
+[*.md]
+trim_trailing_whitespace = false
+
+# Windows 批处理必须用 CRLF，否则 cmd 解析可能出错
+[*.bat]
+end_of_line = crlf
