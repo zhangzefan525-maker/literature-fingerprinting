@@ -443,6 +443,16 @@ body::before {
     font-size: 13px;
 }
 
+/* 控件行右端的一组（第六十五批）：「曲线平滑」与「载入对比示例」共用这个容器。
+   原来它们分居标题卡左右两侧；标题卡删掉后这一组整体挪到控件行右侧。
+   切到热力图时滑块整组 display:none，按钮还得留在右端——所以要有这层壳。 */
+.controls-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
 select, input {
     padding: 8px 14px;
     border-radius: 8px;

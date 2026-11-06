@@ -1151,8 +1151,8 @@ function applyQuickStartVisibility() {
     setDemoEntryVisible(currentTab !== 'view-authorship' && dismissed);
 }
 
-// 「载入对比示例」的常驻入口长在「基础趋势分析」页的标题行里，和快速开始条互斥：
-// 条子在的时候它多余，条子被 ✕ 收起之后它接班。
+// 「载入对比示例」的常驻入口长在「基础趋势分析」页的控件行右端（第六十五批从标题卡挪来），
+// 和快速开始条互斥：条子在的时候它多余，条子被 ✕ 收起之后它接班。
 // 没有这一条，✕ 就等于把这个功能整个从界面上删掉了——它记在本机，换页面、换天也不会回来。
 function setDemoEntryVisible(visible) {
     const entry = document.getElementById('demo-entry');
@@ -2377,11 +2377,9 @@ async function loadRealData() {
             showNoDataMessage();
             return;
         }
-        // 顶部状态条照旧报一句成功（6 秒后自己收起）。以前这里还往右侧面板里写一张
-        // 「成功」状态卡，一直挂到用户点某个格子为止；现在那块地方留给
-        // renderQuickPreviewIfIdle 的「先看这 3 段」（见本函数末尾）。
-        // 位置不能挪到下面：链接里点名的书丢了时，那句 notice 必须压过这句。
-        setGlobalStatus('success', `成功加载 ${availableBooks.length} 本书籍的数据`);
+        // 第六十五批：不再报「成功加载 N 本书籍的数据」（用户要求删掉）。
+        // 数据到了、图出来了，本身就是成功的证据；这条 6 秒的绿条只是首屏顶上多一行字。
+        // 失败、缺书、上传异常仍然走下面的 setGlobalStatus / announceOrNotice，一条都没少。
         updateMetricHint(); // 参考区间跟随当前已加载书集合
         renderAxisWordHints(); // 轴词说明也跟随已加载的书（用户可能还没切到星系页）
 
